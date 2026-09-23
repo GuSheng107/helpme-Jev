@@ -2,19 +2,19 @@ import { useEffect, useState } from 'react'
 import { UNAUTHORIZED_EVENT, ApiError, clearToken, getToken } from './api/client'
 import { fetchMe, logout, type UserSummary } from './api/auth'
 import ChangePasswordPage from './pages/ChangePasswordPage'
-import HomePage from './pages/HomePage'
+import ChatPage from './pages/ChatPage'
 import LoginPage from './pages/LoginPage'
 import SettingsPage from './pages/SettingsPage'
 
-type Page = 'home' | 'settings'
+type Page = 'chat' | 'settings'
 
 /**
- * P0/P1 阶段用轻量路由（状态机）；页面多了再引入路由库。
+ * 轻量路由（状态机）；页面多了再引入路由库。
  */
 export default function App() {
   const [user, setUser] = useState<UserSummary | null>(null)
   const [restoring, setRestoring] = useState(true)
-  const [page, setPage] = useState<Page>('home')
+  const [page, setPage] = useState<Page>('chat')
 
   // 冷启动：有 token 就尝试恢复会话
   useEffect(() => {
@@ -66,14 +66,13 @@ export default function App() {
   }
 
   if (page === 'settings') {
-    return <SettingsPage onLogout={handleLogout} />
+    return (
+      <SettingsPage
+        onLogout={handleLogout}
+        onBack={() => setPage('chat')}
+      />
+    )
   }
 
-  return (
-    <HomePage
-      user={user}
-      onLogout={handleLogout}
-      onOpenSettings={() => setPage('settings')}
-    />
-  )
+  return <ChatPage onLogout={handleLogout} onOpenSettings={() => setPage('settings')} />
 }

@@ -143,11 +143,14 @@ def call_systemone(
     endpoint_url: str,
     api_key: str,
     model: str,
-    state: str,
+    state: str | dict,
     questions: dict,
     timeout: int = TIMEOUT_SECONDS,
 ) -> JevResult:
-    """调用一次 System One。返回结构化结果，不抛异常。"""
+    """调用一次 System One。``state`` 可以是探测用的字符串，也可以是业务用的对象。
+
+    返回结构化结果，不抛异常。
+    """
     started = time.perf_counter()
     body = {"model": model, "state": state, "questions": questions}
     headers = {
@@ -261,6 +264,47 @@ def test_connection(
 
     result.detail = f"{result.detail}；探测题 {_KEY_NEGATIVE}={prob:.2f}"
     return result
+
+
+def call_with_fallback(
+    *,
+    endpoint_url: str,
+    api_key: str,
+    model: str,
+    state: dict,
+    questions: dict,
+    timeout: int = TIMEOUT_SECONDS,
+) -> JevResult:
+    """带 background / history 的请求若 4xx，去掉这两个字段再试一次。
+
+    未验证字段只能降级分析，不能打断分析（抄 Jarvis）。
+    """
+    result = call_systemone(
+        endpoint_url=endpoint_url,
+        api_key=api_key,
+        model=model,
+        state=state,
+        questions=questions,
+        timeout=timeout,
+    )
+    enriched = "background" in state or "history" in state
+    if result.ok or not enriched:
+        return result
+    if result.status_code is None or not 400 <= result.status_code < 500:
+        return result
+
+    plain = {key: value for key, value in state.items() if key not in ("background", "history")}
+    retried = call_systemone(
+        endpoint_url=endpoint_url,
+        api_key=api_key,
+        model=model,
+        state=plain,
+        questions=questions,
+        timeout=timeout,
+    )
+    if retried.ok:
+        retried.detail = f"{retried.detail}；已去掉 background/history 后重试成功"
+    return retried
 
 
 def run_smoke_test(

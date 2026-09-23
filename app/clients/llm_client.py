@@ -1,6 +1,4 @@
-"""OpenAI 兼容 LLM 客户端。
-
-P1 阶段只实现**连通性测试**；分析 / 起草 / 翻译等能力在 P4 补齐。
+"""OpenAI 兼容 LLM 客户端：连通测试与 JSON chat。
 
 约定：请求走 ``POST {endpoint_url}``（用户填完整 URL），
 ``Authorization: Bearer <key>``；**不做 provider 推断、不拼路径**。
@@ -8,6 +6,8 @@ P1 阶段只实现**连通性测试**；分析 / 起草 / 翻译等能力在 P4 
 
 from __future__ import annotations
 
+import json
+import time
 from dataclasses import dataclass, field
 
 import httpx
@@ -129,4 +129,114 @@ def test_connection(
         latency_ms=latency,
         detail=f"连通正常；模型 {data.get('model') or model}；用量 {usage.get('total_tokens', '—')} tokens",
         payload=data,
+    )
+
+
+def _message_text(data: dict) -> str:
+    """从 chat completion 里取出助手文本。兼容字符串与多段 content。"""
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    message = choices[0].get("message") if isinstance(choices[0], dict) else None
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = [
+            item.get("text", "")
+            for item in content
+            if isinstance(item, dict) and isinstance(item.get("text"), str)
+        ]
+        return "\n".join(part for part in parts if part).strip()
+    return ""
+
+
+def chat_json(
+    *,
+    endpoint_url: str,
+    api_key: str,
+    model: str,
+    messages: list[dict],
+    timeout: int = TIMEOUT_SECONDS,
+) -> UpstreamResult:
+    """一次 chat 调用，要求返回 JSON 对象。
+
+    ``response_format`` 不被支持（400）时去掉该字段重试一次。
+    成功时 ``payload`` 是解析后的 JSON 对象，不是原始响应。
+    """
+    started = time.perf_counter()
+    body: dict = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
+    }
+
+    def _post(payload: dict) -> httpx.Response:
+        with httpx.Client(timeout=timeout) as client:
+            return client.post(endpoint_url, json=payload, headers=_auth_headers(api_key))
+
+    try:
+        response = _post(body)
+        if response.status_code == 400 and "response_format" in body:
+            body.pop("response_format")
+            response = _post(body)
+    except httpx.TimeoutException:
+        return UpstreamResult(
+            ok=False,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            detail=f"连接超时（>{timeout}s）—— 请检查 URL 与网络",
+            error_code="LLM_UPSTREAM_ERROR",
+        )
+    except httpx.HTTPError as exc:
+        return UpstreamResult(
+            ok=False,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            detail=f"网络错误：{type(exc).__name__}",
+            error_code="LLM_UPSTREAM_ERROR",
+        )
+
+    latency = int((time.perf_counter() - started) * 1000)
+    if response.status_code >= 400:
+        return UpstreamResult(
+            ok=False,
+            status_code=response.status_code,
+            latency_ms=latency,
+            detail=_explain_status(response.status_code, response.text),
+            error_code="LLM_UPSTREAM_ERROR",
+        )
+
+    try:
+        data = response.json()
+    except ValueError:
+        return UpstreamResult(
+            ok=False,
+            status_code=response.status_code,
+            latency_ms=latency,
+            detail="返回内容不是 JSON —— 该端点可能不是 OpenAI 兼容接口",
+            error_code="PROTOCOL_MISMATCH",
+        )
+
+    text = _message_text(data if isinstance(data, dict) else {})
+    try:
+        parsed = json.loads(text) if text else None
+    except json.JSONDecodeError:
+        parsed = None
+    if not isinstance(parsed, dict):
+        return UpstreamResult(
+            ok=False,
+            status_code=response.status_code,
+            latency_ms=latency,
+            detail="模型没有返回 JSON 对象",
+            error_code="PROTOCOL_MISMATCH",
+        )
+
+    return UpstreamResult(
+        ok=True,
+        status_code=response.status_code,
+        latency_ms=latency,
+        detail="ok",
+        payload=parsed,
     )

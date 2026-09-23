@@ -16,6 +16,7 @@ import { DataCard, EmptyState, Notice, PageBody, PageHeader, PageShell, StatusTa
 
 interface Props {
   onLogout: () => void
+  onBack: () => void
 }
 
 interface FormState {
@@ -40,7 +41,7 @@ const BLANK: FormState = {
   context_window_tokens: 64000,
 }
 
-export default function SettingsPage({ onLogout }: Props) {
+export default function SettingsPage({ onLogout, onBack }: Props) {
   const [rows, setRows] = useState<ProviderView[]>([])
   const [loading, setLoading] = useState(true)
   const [form, setForm] = useState<FormState | null>(null)
@@ -127,7 +128,12 @@ export default function SettingsPage({ onLogout }: Props) {
     <PageShell>
       <header className="border-b border-border bg-surface">
         <div className="mx-auto flex h-[52px] max-w-5xl items-center justify-between px-5">
-          <span className="text-[16px] font-semibold leading-6 text-ink">系统设置</span>
+          <div className="flex items-center gap-3">
+            <button type="button" className="text-[13px] text-primary" onClick={onBack}>
+              返回
+            </button>
+            <span className="text-[16px] font-semibold leading-6 text-ink">系统设置</span>
+          </div>
           <Button size="sm" onClick={onLogout}>
             退出
           </Button>
