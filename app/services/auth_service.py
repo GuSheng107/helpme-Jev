@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..core.config import get_settings
@@ -118,7 +119,16 @@ class AuthService:
             is_active=True,
             email=email,
         )
-        self.users.add(db, user)
+        try:
+            self.users.add(db, user)
+        except IntegrityError as exc:
+            # check-then-insert 竞态：并发注册同名用户时会撞 users.username 唯一索引。
+            # 必须转成 409（而非让 IntegrityError 冒泡成 500）
+            db.rollback()
+            raise DomainError(
+                DomainErrorCode.CONFLICT, "用户名已被占用", status_code=409
+            ) from exc
+
         self.audit.add(
             db,
             action=AuditAction.REGISTERED.value,

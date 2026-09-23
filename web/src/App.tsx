@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { UNAUTHORIZED_EVENT, clearToken, getToken } from './api/client'
+import { UNAUTHORIZED_EVENT, ApiError, clearToken, getToken } from './api/client'
 import { fetchMe, logout, type UserSummary } from './api/auth'
 import ChangePasswordPage from './pages/ChangePasswordPage'
 import HomePage from './pages/HomePage'
@@ -20,7 +20,13 @@ export default function App() {
     }
     fetchMe()
       .then(setUser)
-      .catch(() => clearToken())
+      .catch((err) => {
+        // **只有 401（token 真的失效）才清除本地 token**。
+        // 网络抖动 / 后端未起 / 5xx 时保留 token，避免把用户无谓登出。
+        if (err instanceof ApiError && err.status === 401) {
+          clearToken()
+        }
+      })
       .finally(() => setRestoring(false))
   }, [])
 

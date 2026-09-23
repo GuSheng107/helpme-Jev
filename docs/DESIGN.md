@@ -867,6 +867,41 @@ Jarvis 的做法是"题目英文 + 聊天内容保留中文"，本方案**更进
 | 14 | 依赖度提醒 | **P6**：统计「候选直接采用率 vs 手动改写率」，**只展示不说教** |
 | 15 | token 存 localStorage 的 XSS 面 | 已在 §5 标注该取舍（自部署小圈子可接受；如需加固改 httpOnly cookie + CSRF） |
 
+---
+
+## 18. 第三方审核意见处理（2026-09-23）
+
+第三方 Agent 复核后提出 9 条，处理如下：
+
+### 已修（6 条）
+
+| # | 问题 | 修法 | 回归测试 |
+|---|---|---|---|
+| 1 | `scenario_id` 不校验存在性与归属 | `create_conversation` 校验：预设场景（owner=NULL）人人可用，他人场景 404 | `test_nonexistent_scenario_rejected`、`test_others_scenario_rejected` |
+| 2 | `next_seq` 竞态可能产出重复 seq | 加 **`(conversation_id, seq)` 唯一约束**（迁移 `2c8820b050ba`），并把 `IntegrityError` 转 **409** | —— |
+| 3 | 用户名 check-then-insert 竞态会 500 | `register` 捕获 `IntegrityError` → **409 CONFLICT** | —— |
+| 4 | `attachments` 无上限 | 限 **≤8 条**、**单条 ≤16KB**（超限 422） | `test_attachments_limits` |
+| 6 | `auth_sessions` 只增不清 | 启动时 `purge_stale_sessions()` 清过期与已撤销行 | —— |
+| 8 | 冷启动 `fetchMe` 失败一律登出 | **仅 401 才清 token**；网络抖动 / 5xx 保留 token | —— |
+
+### 已记文档（1 条）
+
+| # | 问题 | 处理 |
+|---|---|---|
+| 7 | 限流是**进程内存态** | **部署约束：必须单 worker**。多 worker 会各自计数、上限被放大 N 倍。<br>若将来要多 worker，需把限流移到 SQLite/Redis 等共享存储。<br>（本条第 5 项见下） |
+
+### 留档待办（1 条）
+
+| # | 问题 | 计划 |
+|---|---|---|
+| 5 | 会话列表 **N+1 count 且无分页** | 规模小时可接受；**做分页时改为聚合查询**（一次 group by 取代逐条 count） |
+
+### 待皇上定夺（1 条）
+
+| # | 问题 | 说明 |
+|---|---|---|
+| 9 | `default_admin_password` **有源码级默认值** | 不配 `.env` 时首启即用该密码建号（虽有强制改密兜底，但默认密码已在公开仓库中）。<br>更严的做法是**未显式配置时拒绝启动**。<br>取舍：**开箱即用 vs 安全默认** —— 待皇上定。 |
+
 ### 已定夺（皇上 2026-09-23）
 
 **保留纯粹手动触发，不做预热。**

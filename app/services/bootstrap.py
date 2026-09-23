@@ -94,6 +94,30 @@ def ensure_default_admin(db: Session) -> User | None:
     return admin
 
 
+def purge_stale_sessions(db: Session) -> int:
+    """清理**已过期**或**已撤销**的会话行。
+
+    否则 ``auth_sessions`` 只增不清，长期运行会无限膨胀
+    （审核意见第 6 条）。
+    """
+    from sqlalchemy import delete, or_
+
+    from ..core.time import utc_now
+    from ..repositories.models import AuthSession
+
+    moment = utc_now()
+    result = db.execute(
+        delete(AuthSession).where(
+            or_(AuthSession.expires_at <= moment, AuthSession.revoked_at.is_not(None))
+        )
+    )
+    db.commit()
+    purged = int(result.rowcount or 0)
+    if purged:
+        logger.info("已清理过期/撤销会话 %d 条", purged)
+    return purged
+
+
 def bootstrap() -> None:
     """应用启动时的引导流程。"""
     # APP_SECRET 必须在启动时就校验，避免运行到一半才炸
@@ -106,4 +130,5 @@ def bootstrap() -> None:
     verify_schema()
 
     with SessionLocal() as db:
+        purge_stale_sessions(db)
         ensure_default_admin(db)

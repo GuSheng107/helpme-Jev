@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 
 from fastapi import APIRouter, Depends, Query, Response
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..core.db import get_db
@@ -25,7 +26,7 @@ from ..domain.schemas.conversation import (
     MessageView,
 )
 from ..repositories.conversations_repo import ConversationRepository, MessageRepository
-from ..repositories.models import Conversation, Message, User
+from ..repositories.models import Conversation, Message, Scenario, User
 from .deps import require_active_user
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
@@ -100,6 +101,15 @@ def create_conversation(
     db: Session = Depends(get_db),
     user: User = Depends(require_active_user),
 ) -> ConversationView:
+    if payload.scenario_id is not None:
+        # 校验存在性 + 归属：预设场景（owner 为 NULL）人人可用，
+        # 用户自建场景只有本人能用 —— 否则可以指向他人或不存在的场景
+        scenario = db.get(Scenario, payload.scenario_id)
+        if scenario is None or (
+            scenario.owner_user_id is not None and scenario.owner_user_id != user.id
+        ):
+            raise DomainError(DomainErrorCode.NOT_FOUND, "场景不存在", status_code=404)
+
     row = Conversation(
         owner_user_id=user.id,
         scenario_id=payload.scenario_id,
@@ -195,6 +205,13 @@ def append_message(
         attachments=json.dumps(payload.attachments, ensure_ascii=False),
         source="manual",
     )
-    _messages.add(db, row)
-    db.commit()
+    try:
+        _messages.add(db, row)
+        db.commit()
+    except IntegrityError as exc:
+        # 并发 append 撞上 (conversation_id, seq) 唯一约束 —— 转成 409 而非 500
+        db.rollback()
+        raise DomainError(
+            DomainErrorCode.CONFLICT, "消息序号冲突，请重试", status_code=409
+        ) from exc
     return _message_view(row)

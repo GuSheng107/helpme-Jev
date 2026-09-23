@@ -237,3 +237,81 @@ def test_counterpart_key_frozen_after_creation(client: TestClient, db: Session) 
 
     assert renamed["counterpart_name"] == "小美"  # 显示名跟着改
     assert renamed["counterpart_key"] == original_key  # 对象标识保持不变
+
+
+# ------------------------------------------------------------------ 审核意见回归
+def test_nonexistent_scenario_rejected(client: TestClient, db: Session) -> None:
+    """指向不存在的场景应 404（审核意见第 1 条）。"""
+    token = _make_user(client, db, "scenuser")
+    resp = client.post(
+        "/api/conversations",
+        json={"title": "带场景", "scenario_id": 999999},
+        headers=_auth(token),
+    )
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "NOT_FOUND"
+
+
+def test_others_scenario_rejected(client: TestClient, db: Session) -> None:
+    """指向**他人**的场景应 404（预设场景 owner 为 NULL 时才人人可用）。"""
+    from app.domain.enums import ScenarioKind
+    from app.repositories.models import Scenario
+
+    owner = _make_user(client, db, "scen_owner")
+    other = _make_user(client, db, "scen_other")
+    assert owner and other  # token 仅为确保用户存在
+
+    # 直接建一条属于「别人的」场景
+    owner_user = UserRepository().by_username(db, "scen_owner")
+    assert owner_user is not None
+    scenario = Scenario(
+        owner_user_id=owner_user.id,
+        slug="private-scenario",
+        name="别人的场景",
+        kind=ScenarioKind.CUSTOM.value,
+        judge_questions="{}",
+        persona_questions="{}",
+        system_prompt="",
+    )
+    db.add(scenario)
+    db.commit()
+    db.refresh(scenario)
+
+    resp = client.post(
+        "/api/conversations",
+        json={"title": "借用他人场景", "scenario_id": scenario.id},
+        headers=_auth(other),
+    )
+    assert resp.status_code == 404
+
+
+def test_attachments_limits(client: TestClient, db: Session) -> None:
+    """附件条数与单条体积都应被限制（审核意见第 4 条）。"""
+    token = _make_user(client, db, "attachuser")
+    headers = _auth(token)
+    conv_id = client.post("/api/conversations", json={"title": "附件"}, headers=headers).json()["id"]
+
+    # 超过 8 条 → 422
+    too_many = client.post(
+        f"/api/conversations/{conv_id}/messages",
+        json={"role": "other", "content": "x", "attachments": [{"i": i} for i in range(9)]},
+        headers=headers,
+    )
+    assert too_many.status_code == 422
+
+    # 单条超过 16KB → 422
+    huge = client.post(
+        f"/api/conversations/{conv_id}/messages",
+        json={"role": "other", "content": "x", "attachments": [{"blob": "a" * 20000}]},
+        headers=headers,
+    )
+    assert huge.status_code == 422
+
+    # 正常范围内 → 201
+    ok = client.post(
+        f"/api/conversations/{conv_id}/messages",
+        json={"role": "other", "content": "x", "attachments": [{"kind": "image", "n": 1}]},
+        headers=headers,
+    )
+    assert ok.status_code == 201
+    assert ok.json()["attachments"] == [{"kind": "image", "n": 1}]

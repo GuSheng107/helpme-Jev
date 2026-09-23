@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.orm import relationship as orm_relationship
 
@@ -82,9 +82,15 @@ class Conversation(Base, TimestampMixin):
 
 
 class Message(Base, TimestampMixin):
-    """会话消息。``source`` 区分手工输入与导入。"""
+    """会话消息。``source`` 区分手工输入与导入。
+
+    ``(conversation_id, seq)`` 唯一 —— 防止并发 append 产出重复序号。
+    """
 
     __tablename__ = "messages"
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "seq", name="uq_messages_conversation_seq"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     conversation_id: Mapped[int] = mapped_column(

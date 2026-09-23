@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import json
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .auth import StrictModel
+
+# 附件上限：防止把任意大的 JSON 塞进 attachments
+MAX_ATTACHMENTS = 8
+MAX_ATTACHMENT_BYTES = 16 * 1024  # 单个附件 16KB
 
 
 class ConversationCreate(StrictModel):
@@ -37,7 +42,18 @@ class ConversationView(BaseModel):
 class MessageCreate(StrictModel):
     role: Literal["me", "other"]
     content: str = Field(default="", max_length=4000)
-    attachments: list[dict] = Field(default_factory=list)
+    attachments: list[dict] = Field(default_factory=list, max_length=MAX_ATTACHMENTS)
+
+    @field_validator("attachments")
+    @classmethod
+    def _limit_attachment_size(cls, value: list[dict]) -> list[dict]:
+        for item in value:
+            size = len(json.dumps(item, ensure_ascii=False).encode("utf-8"))
+            if size > MAX_ATTACHMENT_BYTES:
+                raise ValueError(
+                    f"单个附件不得超过 {MAX_ATTACHMENT_BYTES // 1024}KB（当前 {size // 1024}KB）"
+                )
+        return value
 
 
 class MessageView(BaseModel):
