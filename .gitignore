@@ -23,6 +23,8 @@ data/uploads/
 node_modules/
 web/dist/
 web/node_modules/
+web/tsconfig.tsbuildinfo
+*.tsbuildinfo
 
 # 编辑器
 .idea/
