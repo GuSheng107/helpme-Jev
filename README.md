@@ -49,7 +49,11 @@ python -c "import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decod
 uv run uvicorn app.main:app --reload --port 8790
 ```
 
-首次启动会自动建表并创建默认管理员（`admin` / 见 `.env.example`），**首次登录强制改密**。
+首次启动会自动迁移建表，并创建默认管理员 **`admin` / `helpme-jev-admin-2026!`**，
+**首次登录强制改密**（需 ≥10 位且含字母、数字、符号）。
+
+> 凭据可用 `.env` 中的 `DEFAULT_ADMIN_USERNAME` / `DEFAULT_ADMIN_PASSWORD` 覆盖，
+> 但**仅在库中一个用户都没有时生效** —— 想改已建好的账号密码，请登录后走改密流程。
 
 ## 目录结构
 
