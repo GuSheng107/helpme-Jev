@@ -1,0 +1,15 @@
+# 统一换行符，避免 Windows/Linux 混用导致的整文件 diff
+* text=auto eol=lf
+
+# 二进制文件不做换行转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.db binary
+*.sqlite3 binary
+*.apk binary
+
+# 锁文件不参与 diff 展开
+uv.lock linguist-generated=true
