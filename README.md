@@ -1,89 +1,262 @@
 # HelpMe JEV
 
-> **JEV 决策工作台** —— 以「聊天副驾」为第一个场景，向上提供**通用 JEV 决策能力**与**可自定义的细分场景**。
+<p align="center">
+  <strong>help me, JEV!</strong><br>
+  <sub>When a question is hard to answer, ask JEV.</sub><br>
+  <sub>遇到不会回答的问题怎么办？找 JEV。</sub>
+</p>
 
-**核心分工：JEV 出决策，LLM 做表达，用户拍板。**
+<p align="center">
+  A small, self-hosted helper for tricky conversations and everyday decisions.<br>
+  <strong>JEV makes the decision. An optional LLM helps with wording. You choose what happens next.</strong>
+</p>
 
-JEV（TypeSafe System One）只回答类型化问题（是非 / 分类 / 评分），**不生成文本**；
-自然语言表达交给用户自配的 LLM；系统提供决策与方案，**最终选择权永远在用户手里**。
+<p align="center">
+  <a href="https://github.com/GuSheng107/helpme-jev"><img src="https://img.shields.io/github/stars/GuSheng107/helpme-jev?style=flat-square" alt="GitHub stars"></a>
+  <a href="https://github.com/GuSheng107/helpme-jev/network/members"><img src="https://img.shields.io/github/forks/GuSheng107/helpme-jev?style=flat-square" alt="GitHub forks"></a>
+  <a href="https://github.com/GuSheng107/helpme-jev/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square" alt="AGPL-3.0"></a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.12%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+"></a>
+  <a href="https://react.dev/"><img src="https://img.shields.io/badge/react-19-61DAFB?style=flat-square&logo=react&logoColor=black" alt="React 19"></a>
+</p>
 
----
+<p align="center">
+  English · <a href="README.zh-CN.md">简体中文</a>
+</p>
 
-## 特性
+> [!NOTE]
+> HelpMe JEV is a self-hosted <code>0.1.0</code> project. It is meant to help you think, not to speak for you. Provider behavior depends on the JEV and LLM endpoints you configure.
 
-- **聊天副驾**：粘贴对方的话（或直接贴聊天截图）→ JEV 一次判断（意图 / 危险度 / 最佳动作 / 对方需要什么 / 情绪…）→
-  必要时由 LLM 追问补全信息 → 用户手动触发才生成候选回复 → JEV 排序 → 人工定夺
-- **场景体系**：恋爱 / 职场内置场景，自定义场景可复制预设后改题；人设按「对象 × 情境」分档
-- **通用决策工作台**：任意三题型自由提问
-  - `noul` —— 是非概率（bool 决策）
-  - `choice` —— 选项概率分布（给选项求置信度）
-  - `score` —— 评分刻度
-- **人设建模**：用 JEV 给「你」与「聊天对象」建模（大五人格 / 依恋类型 / 爱的五种语言 / 冲突风格 / DISC），
-  弱科学框架明示；低置信度不覆盖旧档案
-- **记忆治理**：LLM 自我复盘与总结（条目化 + 时序，变更不覆盖、可回溯可撤销）
-- **多模态**：输入框直接粘贴 / 上传图片（最多 9 张，缩略图 + 大图），原图交给多模态 LLM 读图；**系统不做 OCR**
-- **消息来源区分**：对方消息 / 自己写的 / 采用推荐 / 改写推荐，分得清、不评价
-- **翻译桥**：JEV 对非英文不友好 —— 原文非英文时先译英再送 JEV，枚举结果走本地映射
-- **输入润色**：聊天文本 / 自拟回复 / 决策题目，一键 LLM 润色并直接替换，可撤回
-- **日志与数据权利**：调用日志可按 traceId 拉全链路，原文 / 译文并排；数据一键导出；账号可注销
-- **全部自管**：只依赖 SQLite，**不接任何云端服务**，数据不出本机
+## Why this exists
 
-## 技术栈
+Some questions are small but strangely difficult:
 
-| 层 | 选型 |
-|---|---|
-| 后端 | Python 3.12+ / FastAPI / SQLAlchemy 2.x / SQLite（WAL）/ `uv` |
-| 前端 | React 19 + Vite + Tailwind 4（响应式，适配手机） |
-| 密码 | Argon2id |
-| 加密 | HKDF-SHA256 → AES-256-GCM（信封 `hmj1.<ver>.<nonce>.<cipher+tag>`，AAD 用途绑定） |
-| 认证 | 服务端 session + `Bearer` token（库中只存 SHA256）；**邀请码注册** |
+- “Is this message actually negative, or am I overthinking it?”
+- “Should I reply now, ask one more question, or leave it alone?”
+- “What is the safest next step at work?”
+- “Can I say this more clearly without changing the tone?”
 
-## 快速开始
+Paste the message, a screenshot, or the situation. HelpMe JEV turns it into a few concrete checks and possible next moves. You can review the inputs, edit drafts, keep the useful context, and stop before anything is sent.
 
-```bash
-# 1. 安装依赖
-uv sync
+> **JEV decides. LLM explains. You decide.**
 
-# 2. 生成 APP_SECRET（32 字节 CSPRNG 的 base64url，43 字符）
+JEV (TypeSafe System One) answers typed questions such as yes/no probability, option probability, and scores. It does not write the final message. An optional OpenAI-compatible LLM can translate, clarify, draft, or polish text when you ask it to.
+
+## What it can do
+
+| Area | What you get |
+| --- | --- |
+| Chat helper | Analyze intent, risk, emotion, needs, and possible next actions. |
+| Decision workbench | Ask <code>noul</code>, <code>choice</code>, or <code>score</code> questions without opening a chat. |
+| Scenarios | Built-in romance and workplace packs, plus editable copies for your own situations. |
+| People and context | Keep separate context for you and the other person; build lightweight persona notes with evidence and confidence. |
+| Memory | Let the LLM summarize useful context into dated entries; review, revert, or delete it. |
+| Images | Paste or upload PNG/JPEG/WEBP screenshots, up to 9 per message; a vision-capable LLM describes them. HelpMe JEV does not run OCR. |
+| Wording help | Polish a message, ask for clarification, generate candidate replies, then let JEV rank them. |
+| Data controls | SQLite storage, account export, account deletion, owner-level isolation, trace-linked call logs, and encrypted provider keys. |
+
+## The basic loop
+
+~~~mermaid
+flowchart LR
+    A["Paste a message<br/>or screenshot"] --> B["Add context<br/>if needed"]
+    B --> C["Translate to English<br/>when JEV needs it"]
+    C --> D["JEV answers<br/>typed questions"]
+    D --> E["Optional LLM<br/>clarifies or drafts"]
+    E --> F["JEV compares<br/>possible replies"]
+    F --> G["You edit, send,<br/>wait, or stop"]
+~~~
+
+Nothing is sent automatically. The final action stays with you.
+
+## Quick start
+
+### Requirements
+
+- Python 3.12 or newer
+- [uv](https://docs.astral.sh/uv/)
+- Node.js 20 or newer for the web development server/build
+- A JEV System One-compatible endpoint and an OpenAI-compatible chat endpoint when you want live analysis
+
+### 1. Clone and install
+
+~~~bash
+git clone https://github.com/GuSheng107/helpme-jev.git
+cd helpme-jev
+
+uv sync --locked
 cp .env.example .env
+~~~
+
+On PowerShell, use <code>Copy-Item .env.example .env</code> instead of <code>cp</code>.
+
+Generate a 32-byte secret and put the result in <code>.env</code> as <code>APP_SECRET</code>:
+
+~~~bash
 python -c "import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decode().rstrip('='))"
-# 把输出填进 .env 的 APP_SECRET=
+~~~
 
-# 3. 启动
+Keep <code>APP_SECRET</code> safe. Changing it makes existing encrypted provider keys unreadable.
+
+### 2. Start the backend
+
+~~~bash
 uv run uvicorn app.main:app --reload --port 8790
-```
+~~~
 
-首次启动会自动迁移建表，并创建默认管理员 **`admin` / `helpme-jev-admin-2026!`**，
-**首次登录强制改密**（需 ≥10 位且含字母、数字、符号）。
+On the first start, the application:
 
-> 凭据可用 `.env` 中的 `DEFAULT_ADMIN_USERNAME` / `DEFAULT_ADMIN_PASSWORD` 覆盖，
-> 但**仅在库中一个用户都没有时生效** —— 想改已建好的账号密码，请登录后走改密流程。
+1. runs the Alembic migrations;
+2. checks the expected database schema;
+3. creates the first admin user when the database is empty;
+4. seeds the built-in romance and workplace scenarios.
 
-## 目录结构
+The default admin values come from <code>DEFAULT_ADMIN_USERNAME</code> and <code>DEFAULT_ADMIN_PASSWORD</code> in <code>.env</code>. Change the password immediately; the first login requires a password change.
 
-```text
+Open the API health check at [http://127.0.0.1:8790/api/health](http://127.0.0.1:8790/api/health), or view the FastAPI schema at [http://127.0.0.1:8790/docs](http://127.0.0.1:8790/docs).
+
+### 3. Start the web app in development
+
+Keep the backend running, open another terminal, and run:
+
+~~~bash
+cd web
+npm ci
+npm run dev
+~~~
+
+Open [http://127.0.0.1:5173](http://127.0.0.1:5173). Vite proxies <code>/api</code> to the backend on port <code>8790</code>.
+
+### Single-port build
+
+To let FastAPI serve the built React app:
+
+~~~bash
+cd web
+npm ci
+npm run build
+cd ..
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8790
+~~~
+
+The backend serves <code>web/dist</code> when it exists. For a public deployment, put TLS and an access policy in front of the service, and do not expose the default admin credentials.
+
+## Configure JEV and LLM
+
+After signing in, open **Settings → Providers**.
+
+1. Add a provider with kind <code>jev</code>.
+   - Use the full endpoint URL for the System One-compatible API.
+   - Enter its API key and model name.
+   - Run the connection test and the JEV smoke test.
+2. Add a provider with kind <code>llm</code>.
+   - Use the full <code>POST</code> URL for an OpenAI-compatible chat endpoint; the app does not guess or append a provider path.
+   - Enter its API key and model name.
+   - Mark it as vision-capable if it should read screenshots.
+3. Choose the default provider of each kind.
+
+The LLM is used only where the workflow needs language work: translation, clarification, image description, reply drafts, and polishing. JEV remains the structured decision layer.
+
+## Environment variables
+
+Copy <code>.env.example</code> to <code>.env</code>. The file is ignored by Git.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| <code>APP_SECRET</code> | — | Required 32-byte base64url secret used to derive encryption keys. |
+| <code>DEFAULT_ADMIN_USERNAME</code> | <code>admin</code> | First admin username; only used when no user exists. |
+| <code>DEFAULT_ADMIN_PASSWORD</code> | See <code>.env.example</code> | First admin password; only used when no user exists. |
+| <code>PORT</code> | <code>8790</code> | Application port. |
+| <code>DATABASE_PATH</code> | <code>./data/helpme_jev.db</code> | SQLite database path. |
+| <code>RETENTION_DAYS</code> | <code>15</code> | Retention window for upstream call logs. |
+| <code>SESSION_TTL_HOURS</code> | <code>8</code> | Server session lifetime. |
+| <code>WEB_DIST_DIR</code> | <code>./web/dist</code> | Built frontend directory served by FastAPI. |
+
+Advanced context budgets are also available in <code>app/core/config.py</code>.
+
+## Project layout
+
+~~~text
 app/
-├── core/          # 配置、加密、DB、脱敏、限流、时间
-├── domain/        # 枚举、错误、Schema
-├── repositories/  # ORM 模型 + 数据访问
-├── services/      # 业务用例
-├── clients/       # JEV / LLM / 翻译桥 / 脱敏
-├── scenarios/     # 各场景题目集
-└── api/           # HTTP 接口
-web/               # 前端（React 19 + Vite）
-tests/             # pytest
-```
+├── api/            HTTP endpoints
+├── clients/        JEV, LLM, translation, and retry clients
+├── core/           configuration, database, security, logging, throttling
+├── domain/         enums, errors, and request/response schemas
+├── repositories/   SQLAlchemy models and data access
+├── scenarios/      built-in question packs
+└── services/       application use cases
 
-## 安全与隐私
+web/                React 19 + TypeScript + Vite frontend
+migrations/         Alembic migrations
+tests/              backend tests
+~~~
 
-- 用户配置的 apiKey **加密存储**（AES-256-GCM 信封），接口只进不出
-- 调用日志记录完整请求响应但**必经脱敏**，apiKey 绝不入库；调用日志 **15 天**滚动清除（聊天内容不按天清）
-- 查询全部带 `owner_user_id` 隔离；**admin 也不可查看他人聊天与日志**
-- 提供**数据导出**与**账号注销**
+## API map
 
-## 许可
+The interactive API reference is available at <code>/docs</code> when the backend is running.
+
+| Area | Prefix |
+| --- | --- |
+| Health | <code>GET /api/health</code> |
+| Authentication | <code>/api/auth</code> |
+| Account export/delete | <code>/api/account</code> |
+| Provider settings | <code>/api/providers</code> |
+| Scenarios | <code>/api/scenarios</code> |
+| Conversations and images | <code>/api/conversations</code> |
+| Chat analysis and memory | <code>/api/chat</code> |
+| Direct decisions | <code>/api/decide</code> |
+| Personas and imports | <code>/api/personas</code>, <code>/api/import</code>, <code>/api/materials</code> |
+| Trace-linked logs | <code>/api/logs</code> |
+
+## Privacy and security
+
+- Provider API keys are encrypted at rest with HKDF-SHA256 and AES-256-GCM; the UI receives a mask, never the key.
+- Passwords use Argon2id. Bearer tokens are handled as server sessions and stored in hashed form.
+- User-owned conversations, memories, personas, provider settings, and logs are isolated by owner. Admin does not automatically get access to another user's content.
+- Request logs pass through redaction. <code>Authorization</code>, cookies, and common token formats are removed before logging.
+- Call logs are purged after <code>RETENTION_DAYS</code> at startup. Conversations are not deleted just because call logs expire.
+- You can export your data or delete the account. Account deletion is intentionally irreversible.
+
+> [!WARNING]
+> “Self-hosted” does not mean “nothing leaves the machine.” If you configure a remote JEV or LLM endpoint, the text or images required for that operation are sent there. Read the provider's policy before using private conversations.
+
+## Development
+
+~~~bash
+# Backend
+uv run pytest -q
+
+# Frontend
+cd web
+npm run typecheck
+npm run build
+~~~
+
+The current baseline passes 105 backend tests, frontend type checking, and a production build.
+
+## Contributing
+
+Small, focused pull requests are welcome.
+
+1. Create a branch for your change.
+2. Keep secrets, local databases, and <code>web/dist</code> out of commits.
+3. Run the backend tests and frontend checks above.
+4. Use <code>git diff --check</code> before opening a pull request.
+5. Explain behavior changes and provider assumptions in the pull request.
+
+## Thanks
+
+Thanks to the [Linux.do community](https://linux.do/) for the early feedback, questions, and discussions that helped shape this project.
+
+This project is independent and is not affiliated with or endorsed by Linux.do.
+
+The bilingual README layout and self-hosting notes were shaped in part by the author's related project, [human-llm-gateway](https://github.com/GuSheng107/human-llm-gateway).
+
+## License
 
 [AGPL-3.0](LICENSE) © 2026 故笙
 
-本项目以 AGPL-3.0 授权：你可以自由使用、修改、分发，但**若以网络服务形式提供**，
-必须向使用者提供完整源代码。
+If you modify and offer this project as a network service, AGPL-3.0 requires you to provide the corresponding source code to its users.
+
+<p align="center">
+  Made for the moment when a message looks simple, but your brain has opened 17 tabs.
+</p>
