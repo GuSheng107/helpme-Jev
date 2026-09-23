@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import { ApiError } from '../api/client'
 import { changePassword, type UserSummary } from '../api/auth'
+import Button from '../components/Button'
+import Field from '../components/Field'
+import { Notice, PageShell } from '../components/layout'
 
 interface Props {
   user: UserSummary
@@ -8,7 +11,7 @@ interface Props {
   onDone: (user: UserSummary) => void
 }
 
-/** 密码规则：≥10 位，且同时含字母、数字与符号（与后端一致） */
+/** 密码规则：≥10 位，且同时含字母、数字与符号（与后端一致，输入即校验） */
 function validate(password: string): string | null {
   if (password.length < 10) return '密码至少 10 位'
   if (!/[A-Za-z]/.test(password)) return '需包含至少一个字母'
@@ -43,71 +46,73 @@ export default function ChangePasswordPage({ user, forced, onDone }: Props) {
   }
 
   return (
-    <div className="app-shell flex items-center justify-center bg-slate-50 px-4 py-10">
-      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h1 className="text-lg font-semibold text-slate-900">
-          {forced ? '首次登录，请修改密码' : '修改密码'}
-        </h1>
-        {forced && (
-          <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-700">
-            当前账号使用初始密码，出于安全考虑必须先修改后才能继续使用。
-          </p>
-        )}
-        <p className="mt-2 text-sm text-slate-500">账号：{user.username}</p>
+    <PageShell>
+      <div className="flex min-h-screen items-center justify-center px-5 py-8">
+        <div className="w-full max-w-[420px]">
+          <header className="mb-4">
+            <h1 className="text-[20px] font-semibold leading-7 text-ink">
+              {forced ? '首次登录，请修改密码' : '修改密码'}
+            </h1>
+            <p className="mt-1 text-[13px] leading-5 text-ink-muted">账号：{user.username}</p>
+          </header>
 
-        <form onSubmit={submit} className="mt-5 space-y-4">
-          <label className="block">
-            <span className="mb-1.5 block text-sm font-medium text-slate-700">当前密码</span>
-            <input
-              type="password"
-              value={oldPassword}
-              required
-              autoComplete="current-password"
-              onChange={(event) => setOldPassword(event.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2.5 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-            />
-          </label>
+          <div className="rounded-[8px] border border-border bg-surface p-4 shadow-[0_1px_3px_rgb(0_0_0/0.06)]">
+            {forced && (
+              <div className="mb-4">
+                <Notice tone="warning">
+                  当前账号使用初始密码，出于安全考虑必须先修改后才能继续使用。
+                </Notice>
+              </div>
+            )}
 
-          <label className="block">
-            <span className="mb-1.5 block text-sm font-medium text-slate-700">新密码</span>
-            <input
-              type="password"
-              value={newPassword}
-              required
-              autoComplete="new-password"
-              placeholder="至少 10 位，含字母、数字与符号"
-              onChange={(event) => setNewPassword(event.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2.5 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-            />
-            {policyError && <span className="mt-1 block text-xs text-red-600">{policyError}</span>}
-          </label>
+            <form onSubmit={submit} className="space-y-3">
+              <Field
+                label="当前密码"
+                type="password"
+                value={oldPassword}
+                onChange={(event) => setOldPassword(event.target.value)}
+                required
+                autoComplete="current-password"
+              />
 
-          <label className="block">
-            <span className="mb-1.5 block text-sm font-medium text-slate-700">确认新密码</span>
-            <input
-              type="password"
-              value={confirm}
-              required
-              autoComplete="new-password"
-              onChange={(event) => setConfirm(event.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2.5 outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100"
-            />
-            {mismatch && <span className="mt-1 block text-xs text-red-600">两次输入不一致</span>}
-          </label>
+              <Field
+                label="新密码"
+                type="password"
+                value={newPassword}
+                onChange={(event) => setNewPassword(event.target.value)}
+                required
+                autoComplete="new-password"
+                placeholder="至少 10 位，含字母、数字与符号"
+                error={policyError}
+              />
 
-          {error && (
-            <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>
-          )}
+              <Field
+                label="确认新密码"
+                type="password"
+                value={confirm}
+                onChange={(event) => setConfirm(event.target.value)}
+                required
+                autoComplete="new-password"
+                error={mismatch ? '两次输入不一致' : null}
+              />
 
-          <button
-            type="submit"
-            disabled={busy || Boolean(policyError) || mismatch}
-            className="w-full rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-brand-700 disabled:opacity-60"
-          >
-            {busy ? '提交中…' : '确认修改'}
-          </button>
-        </form>
+              {error && <Notice tone="danger">{error}</Notice>}
+
+              <div className="pt-1">
+                <Button
+                  type="submit"
+                  variant="primary"
+                  loading={busy}
+                  disabled={Boolean(policyError) || mismatch}
+                  disabledReason={policyError ?? (mismatch ? '两次输入不一致' : undefined)}
+                >
+                  确认修改
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
       </div>
-    </div>
+    </PageShell>
   )
 }
