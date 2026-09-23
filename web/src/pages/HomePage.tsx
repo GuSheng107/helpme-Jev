@@ -5,23 +5,27 @@ import { DataCard, PageBody, PageHeader, PageShell, StatusTag } from '../compone
 interface Props {
   user: UserSummary
   onLogout: () => void
+  onOpenSettings: () => void
 }
 
-/** P0 阶段的落地页：用于核对登录链路与权限是否按预期生效。
- *  聊天副驾 / 决策工作台 / 设置等页面自 P1 起陆续接入。 */
-export default function HomePage({ user, onLogout }: Props) {
+/** P0/P1 阶段的落地页：用于核对登录链路与权限是否按预期生效。
+ *  聊天副驾 / 决策工作台等页面自 P2 起陆续接入。 */
+export default function HomePage({ user, onLogout, onOpenSettings }: Props) {
   return (
     <PageShell>
       <header className="border-b border-border bg-surface">
         <div className="mx-auto flex h-[52px] max-w-5xl items-center justify-between px-5">
           <div className="flex items-center gap-2">
             <span className="text-[16px] font-semibold leading-6 text-ink">HelpMe JEV</span>
-            <StatusTag tone="info">P0 基座</StatusTag>
+            <StatusTag tone="info">P1 配置</StatusTag>
           </div>
-          <div className="flex items-center gap-3">
-            <span className="text-[13px] text-ink-secondary">
+          <div className="flex items-center gap-2">
+            <span className="hidden text-[13px] text-ink-secondary sm:inline">
               {user.display_name || user.username}
             </span>
+            <Button size="sm" onClick={onOpenSettings}>
+              设置
+            </Button>
             <Button size="sm" onClick={onLogout}>
               退出
             </Button>
