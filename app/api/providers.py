@@ -1,25 +1,90 @@
-"""提供方配置接口。
+"""提供方配置接口：CRUD + 连通性 / 冒烟测试。
 
-P0 阶段只落「列表」端点：它是**强制改密闸门**的可测入口
-（非白名单的受保护端点）。完整 CRUD 与连通性测试见 P1。
+安全要点：``apiKey`` **只进不出** —— 解密只为生成掩码，明文不出本模块。
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
 from ..core.db import get_db
-from ..repositories.models import User
+from ..domain.schemas.provider import (
+    ConnectionTestResult,
+    ProviderCreate,
+    ProviderUpdate,
+    ProviderView,
+)
+from ..repositories.models import ProviderConfig, User
+from ..services.provider_service import ProviderService, to_view
 from .deps import require_active_user
 
 router = APIRouter(prefix="/api/providers", tags=["providers"])
 
+_service = ProviderService()
 
-@router.get("")
+
+def _view(row: ProviderConfig) -> ProviderView:
+    """转响应：解密仅为取掩码，明文随即丢弃。"""
+    plaintext = _service.decrypt_key(row)
+    return ProviderView(**to_view(row, plaintext))
+
+
+@router.get("", response_model=list[ProviderView])
 def list_providers(
-    _db: Session = Depends(get_db),
+    kind: str | None = Query(default=None, pattern="^(jev|llm)$"),
+    db: Session = Depends(get_db),
     user: User = Depends(require_active_user),
-) -> dict[str, object]:
-    """列出当前用户的 JEV / LLM 配置（apiKey **只回掩码**，绝不回明文）。"""
-    return {"items": [], "owner": user.username}
+) -> list[ProviderView]:
+    rows = _service.list_for_user(db, owner_user_id=user.id, kind=kind)
+    return [_view(row) for row in rows]
+
+
+@router.post("", response_model=ProviderView, status_code=201)
+def create_provider(
+    payload: ProviderCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_active_user),
+) -> ProviderView:
+    row = _service.create(db, owner_user_id=user.id, payload=payload)
+    return _view(row)
+
+
+@router.patch("/{provider_id}", response_model=ProviderView)
+def update_provider(
+    provider_id: int,
+    payload: ProviderUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_active_user),
+) -> ProviderView:
+    row = _service.update(
+        db, owner_user_id=user.id, provider_id=provider_id, payload=payload
+    )
+    return _view(row)
+
+
+@router.delete("/{provider_id}", status_code=204)
+def delete_provider(
+    provider_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_active_user),
+) -> Response:
+    _service.delete(db, owner_user_id=user.id, provider_id=provider_id)
+    return Response(status_code=204)
+
+
+@router.post("/{provider_id}/test", response_model=ConnectionTestResult)
+def test_provider(
+    provider_id: int,
+    with_smoke: bool = Query(default=True, description="JEV 是否顺带跑冒烟测试"),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_active_user),
+) -> ConnectionTestResult:
+    """连通性测试。
+
+    - ``kind=llm``：发一个最小 chat 请求验证 URL / Key / 模型
+    - ``kind=jev``：先验协议连通，再跑 5 组标准用例得出**健康度**
+    """
+    return _service.test_connection(
+        db, owner_user_id=user.id, provider_id=provider_id, with_smoke=with_smoke
+    )
