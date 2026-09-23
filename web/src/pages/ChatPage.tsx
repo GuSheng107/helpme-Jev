@@ -3,12 +3,17 @@ import { ApiError } from '../api/client'
 import {
   analyze,
   appendMessage,
+  clarify,
+  draftReplies,
+  evaluateReply,
+  polish,
   createConversation,
   listConversations,
   listMessages,
   reflect,
   revertReflection,
   type AnalyzeResult,
+  type Candidate,
   type ChatMessage,
   type Conversation,
   type Reflection,
@@ -34,6 +39,10 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
   const [relationship, setRelationship] = useState('女朋友')
   const [result, setResult] = useState<AnalyzeResult | null>(null)
   const [reflection, setReflection] = useState<Reflection | null>(null)
+  const [step, setStep] = useState('')
+  const [candidates, setCandidates] = useState<Candidate[]>([])
+  const [questions, setQuestions] = useState<string[]>([])
+  const [previousDraft, setPreviousDraft] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [listOpen, setListOpen] = useState(false)
@@ -126,8 +135,12 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
     if (currentId === null) return
     setBusy(true)
     setError(null)
+    setStep('正在分析')
+    setCandidates([])
     try {
-      setResult(await analyze(currentId))
+      const judged = await analyze(currentId)
+      setResult(judged)
+      setStep('')
       void review(currentId)
     } catch (err) {
       if (err instanceof ApiError && (err.code === 'JEV_NOT_CONFIGURED' || err.code === 'LLM_NOT_CONFIGURED')) {
@@ -135,6 +148,66 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
       } else {
         setError(err instanceof ApiError ? err.message : '分析失败')
       }
+    } finally {
+      setBusy(false)
+      setStep('')
+    }
+  }
+
+  async function makeCandidates() {
+    if (currentId === null || !result) return
+    setBusy(true)
+    setError(null)
+    setStep('正在生成候选')
+    try {
+      const drafted = await draftReplies(currentId, result)
+      setCandidates(drafted.candidates)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '候选未生成')
+    } finally {
+      setBusy(false)
+      setStep('')
+    }
+  }
+
+  async function askMore() {
+    if (currentId === null) return
+    setBusy(true)
+    setError(null)
+    try {
+      const asked = await clarify(currentId)
+      setQuestions(asked.questions)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '追问未生成')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function polishDraft() {
+    if (!draft.trim()) return
+    setBusy(true)
+    setError(null)
+    try {
+      setPreviousDraft(draft)
+      const polished = await polish(draft, role === 'me' ? 'reply' : 'chat')
+      setDraft(polished.text)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '润色未完成')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function checkMine() {
+    if (currentId === null || !draft.trim()) return
+    setBusy(true)
+    setError(null)
+    try {
+      const verdict = await evaluateReply(currentId, draft.trim())
+      setCandidates([{ text: draft.trim(), percent: verdict.percent }])
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '评估未完成')
     } finally {
       setBusy(false)
     }
@@ -233,7 +306,40 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
             <EmptyState title="请选择聊天" description="在左侧新建或打开已有聊天。手机端点击左上角「聊天」。" />
           ) : (
             <>
+              {step && <p className="px-4 pt-3 text-[13px] text-ink-muted">{step}</p>}
               {result && <DecisionPanel result={result} />}
+              {questions.length > 0 && (
+                <div className="mx-4 mt-3 rounded-[8px] border border-border bg-surface px-3 py-2">
+                  <p className="text-[13px] text-ink-secondary">还想确认几件事，也可以跳过</p>
+                  <ul className="mt-1">
+                    {questions.map((item) => (
+                      <li key={item} className="text-[14px] leading-[22px] text-ink">{item}</li>
+                    ))}
+                  </ul>
+                  <button type="button" className="mt-1 text-[13px] text-primary" onClick={() => setQuestions([])}>
+                    跳过，直接看结果
+                  </button>
+                </div>
+              )}
+              {candidates.length > 0 && (
+                <ul className="mx-4 mt-3 space-y-2">
+                  {candidates.map((item) => (
+                    <li key={item.text}>
+                      <button
+                        type="button"
+                        className="w-full rounded-[8px] border border-border bg-surface px-3 py-2 text-left"
+                        onClick={() => {
+                          setRole('me')
+                          setDraft(item.text)
+                        }}
+                      >
+                        <span className="text-[14px] leading-[22px] text-ink">{item.text}</span>
+                        <span className="mt-1 block text-[12px] text-ink-muted">匹配度 {item.percent}%</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
               <div className="flex-1 space-y-2 overflow-y-auto px-4 py-3">
                 {messages.length === 0 && (
                   <EmptyState title="暂无内容" description="在下方粘贴对方的话，发送者选「对方」，然后保存。" />
@@ -280,7 +386,37 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
                   className="w-full resize-none rounded-[6px] border border-border px-3 py-2 text-ink outline-none"
                 />
                 {reflection && <MemoryNote reflection={reflection} onUndo={() => void undoReview()} />}
-                <div className="mt-2 flex items-center justify-end gap-2">
+                {previousDraft !== null && (
+                  <button
+                    type="button"
+                    className="mt-1 text-[13px] text-primary"
+                    onClick={() => {
+                      setDraft(previousDraft)
+                      setPreviousDraft(null)
+                    }}
+                  >
+                    撤回润色
+                  </button>
+                )}
+                <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
+                  <Button size="sm" loading={busy} disabled={!draft.trim()} disabledReason="请先输入内容" onClick={() => void polishDraft()}>
+                    润色
+                  </Button>
+                  {result && !result.context_sufficient && (
+                    <Button size="sm" loading={busy} onClick={() => void askMore()}>
+                      继续问
+                    </Button>
+                  )}
+                  {result && (
+                    <Button size="sm" loading={busy} onClick={() => void makeCandidates()}>
+                      生成候选
+                    </Button>
+                  )}
+                  {role === 'me' && (
+                    <Button size="sm" loading={busy} disabled={!draft.trim()} disabledReason="请先写回复" onClick={() => void checkMine()}>
+                      评估这句
+                    </Button>
+                  )}
                   <Button size="sm" loading={busy} disabled={!draft.trim()} disabledReason="请先输入内容" onClick={() => void send()}>
                     保存
                   </Button>

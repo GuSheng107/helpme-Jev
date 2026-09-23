@@ -7,11 +7,19 @@ from sqlalchemy.orm import Session
 
 from ..core.db import get_db
 from ..domain.errors import DomainError, DomainErrorCode
-from ..domain.schemas.analyze import AnalyzeView, ConversationRef
+from ..domain.schemas.analyze import (
+    AnalyzeView,
+    ClarifyRequest,
+    ConversationRef,
+    EvaluateRequest,
+    PolishRequest,
+    ReplyRequest,
+)
 from ..repositories.conversations_repo import ConversationRepository
 from ..repositories.models import User
 from ..services.analyze_service import AnalyzeService
 from ..services.memory_service import MemoryService
+from ..services.reply_service import ReplyService
 from .deps import require_active_user
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -21,6 +29,7 @@ _SUBJECT_LABEL = {"me": "我", "other": "对方", "relation": "关系"}
 _conversations = ConversationRepository()
 _analyze = AnalyzeService()
 _memory = MemoryService()
+_reply = ReplyService()
 
 
 @router.get("/memories")
@@ -125,6 +134,59 @@ def revert_reflect(
 ) -> dict:
     row = _memory.revert(db, owner_user_id=user.id, reflection_id=reflection_id)
     return _reflection_view(row)
+
+
+@router.post("/reply")
+def reply(
+    payload: ReplyRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_active_user),
+) -> dict:
+    conversation = _conversation_or_404(
+        db, owner_user_id=user.id, conversation_id=payload.conversation_id
+    )
+    return _reply.draft(
+        db,
+        owner_user_id=user.id,
+        conversation=conversation,
+        decision=payload.decision,
+        trace_id="",
+    )
+
+
+@router.post("/evaluate")
+def evaluate(
+    payload: EvaluateRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_active_user),
+) -> dict:
+    conversation = _conversation_or_404(
+        db, owner_user_id=user.id, conversation_id=payload.conversation_id
+    )
+    return _reply.evaluate(
+        db, owner_user_id=user.id, conversation=conversation, text=payload.text
+    )
+
+
+@router.post("/clarify")
+def clarify(
+    payload: ClarifyRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_active_user),
+) -> dict:
+    conversation = _conversation_or_404(
+        db, owner_user_id=user.id, conversation_id=payload.conversation_id
+    )
+    return _reply.clarify(db, owner_user_id=user.id, conversation=conversation)
+
+
+@router.post("/polish")
+def polish(
+    payload: PolishRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_active_user),
+) -> dict:
+    return _reply.polish(db, owner_user_id=user.id, text=payload.text, kind=payload.kind)
 
 
 def _reflection_view(row) -> dict:

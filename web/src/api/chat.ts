@@ -106,8 +106,38 @@ export function appendMessage(conversationId: number, role: 'me' | 'other', cont
   return api.post<ChatMessage>(`/api/conversations/${conversationId}/messages`, { role, content })
 }
 
+export interface Candidate {
+  text: string
+  percent: number
+}
+
 export function analyze(conversationId: number) {
   return api.post<AnalyzeResult>('/api/chat/analyze', { conversation_id: conversationId })
+}
+
+export function draftReplies(conversationId: number, decision: AnalyzeResult) {
+  const picked = Object.fromEntries(
+    [...decision.panel, ...decision.more].map((item) => [item.key, { text: item.text }]),
+  )
+  return api.post<{ candidates: Candidate[] }>('/api/chat/reply', {
+    conversation_id: conversationId,
+    decision: picked,
+  })
+}
+
+export function evaluateReply(conversationId: number, text: string) {
+  return api.post<{ percent: number; verdict: string }>('/api/chat/evaluate', {
+    conversation_id: conversationId,
+    text,
+  })
+}
+
+export function clarify(conversationId: number) {
+  return api.post<{ questions: string[] }>('/api/chat/clarify', { conversation_id: conversationId })
+}
+
+export function polish(text: string, kind: 'chat' | 'reply' | 'question') {
+  return api.post<{ text: string }>('/api/chat/polish', { text, kind })
 }
 
 export function reflect(conversationId: number) {

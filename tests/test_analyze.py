@@ -68,17 +68,36 @@ class _Router:
     def post(self, url, json=None, headers=None):  # noqa: A002
         self.calls.append({"url": url, "json": json, "headers": headers})
         if "systemone" in url:
-            body = self.jev_body if self.jev_body is not None else _jev_answers()
+            questions = (json or {}).get("questions") or {}
+            if "best_reply" in questions:
+                body = {
+                    "model": "jev-1.13.0",
+                    "answers": {
+                        "best_reply": {
+                            "choice": "reply_b",
+                            "probabilities": {"reply_a": 0.2, "reply_b": 0.5, "reply_c": 0.3},
+                        }
+                    },
+                }
+            else:
+                body = self.jev_body if self.jev_body is not None else _jev_answers()
             return _FakeResponse(self.jev_status, body)
         text = json["messages"][1]["content"]
-        incoming = json_loads(text)
-        lines = [
-            {"id": item["id"], "text": "Nothing much. [short sentence; dismissive]"}
-            for item in incoming["lines"]
-        ]
+        if text.startswith("{"):
+            incoming = json_loads(text)
+            if "lines" in incoming:
+                lines = [
+                    {"id": item["id"], "text": "Nothing much. [short sentence; dismissive]"}
+                    for item in incoming["lines"]
+                ]
+                content = {"lines": lines}
+            else:
+                content = {"replies": ["我在。", "怎么了？", "想说就说。"]}
+        else:
+            content = {"text": text + "。", "questions": ["上次是因为什么？"]}
         return _FakeResponse(
             200,
-            {"choices": [{"message": {"content": json_dumps({"lines": lines})}}]},
+            {"choices": [{"message": {"content": json_dumps(content)}}]},
         )
 
 
@@ -298,3 +317,54 @@ def test_analyze_upstream_failure_does_not_crash(
     assert resp.status_code == 502
     assert resp.json()["error"]["code"] == "JEV_UPSTREAM_ERROR"
     assert resp.json()["error"]["retryable"] is True
+
+
+def test_reply_returns_native_text_and_chinese_percent(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token = _make_user(client, db, "replyuser")
+    headers = _auth(token)
+    _configure(client, headers)
+    conv_id = _conversation(client, headers)
+    client.post(
+        f"/api/conversations/{conv_id}/messages",
+        json={"role": "other", "content": "没怎么。"},
+        headers=headers,
+    )
+    _patch(monkeypatch, _Router())
+    replied = client.post(
+        "/api/chat/reply",
+        headers=headers,
+        json={
+            "conversation_id": conv_id,
+            "decision": {"best_action": {"text": "先承认你听出来了"}},
+        },
+    )
+    assert replied.status_code == 200, replied.text
+    body = replied.json()
+    assert [item["text"] for item in body["candidates"]] == ["怎么了？", "想说就说。", "我在。"]
+    assert body["candidates"][0]["percent"] == 50
+    assert "Nothing much" not in replied.text
+
+
+def test_polish_replaces_and_clarify_asks(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token = _make_user(client, db, "polishuser")
+    headers = _auth(token)
+    _configure(client, headers)
+    conv_id = _conversation(client, headers)
+    client.post(
+        f"/api/conversations/{conv_id}/messages",
+        json={"role": "other", "content": "没怎么。"},
+        headers=headers,
+    )
+    _patch(monkeypatch, _Router())
+    polished = client.post(
+        "/api/chat/polish", headers=headers, json={"text": "在吗", "kind": "reply"}
+    )
+    assert polished.status_code == 200, polished.text
+    assert polished.json()["text"] == "在吗。"
+    asked = client.post("/api/chat/clarify", headers=headers, json={"conversation_id": conv_id})
+    assert asked.status_code == 200, asked.text
+    assert asked.json()["questions"] == ["上次是因为什么？"]

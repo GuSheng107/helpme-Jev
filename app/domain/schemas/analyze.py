@@ -11,6 +11,25 @@ class ConversationRef(StrictModel):
     conversation_id: int = Field(ge=1)
 
 
+class ReplyRequest(StrictModel):
+    conversation_id: int = Field(ge=1)
+    decision: dict = Field(default_factory=dict)
+
+
+class EvaluateRequest(StrictModel):
+    conversation_id: int = Field(ge=1)
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class ClarifyRequest(StrictModel):
+    conversation_id: int = Field(ge=1)
+
+
+class PolishRequest(StrictModel):
+    text: str = Field(min_length=1, max_length=4000)
+    kind: str = Field(default="chat", pattern="^(chat|reply|question)$")
+
+
 class AnalyzeView(BaseModel):
     panel: list[dict] = Field(default_factory=list)
     more: list[dict] = Field(default_factory=list)
