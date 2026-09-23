@@ -103,7 +103,7 @@ export default function DecisionPanel({ result }: { result: AnalyzeResult }) {
       >
         <span className="flex items-center gap-2">
           <StatusTag tone={danger?.tone === 'success' || danger?.tone === 'warning' || danger?.tone === 'danger' ? danger.tone : 'info'}>
-            危险 {danger?.text ?? '—'}
+            风险 {danger?.text ?? '—'}
           </StatusTag>
           <span className="truncate text-[13px] text-ink-secondary">{action?.text ?? ''}</span>
         </span>
@@ -112,12 +112,13 @@ export default function DecisionPanel({ result }: { result: AnalyzeResult }) {
 
       <div className={`${open ? 'block' : 'hidden'} space-y-3 px-4 pb-4 lg:block lg:pt-4`}>
         {result.high_danger && (
-          <Notice tone="danger">
-            这已超出文字回复能解决的范围，建议当面或电话沟通。
-          </Notice>
+          <Notice tone="danger">此事不适合用文字处理，建议当面或电话沟通。</Notice>
         )}
         {!result.context_sufficient && (
-          <Notice tone="warning">信息还不够，这次判断可能不稳。追问会在后面的阶段补上。</Notice>
+          <Notice tone="warning">上下文较少，本次判断仅供参考。</Notice>
+        )}
+        {result.context_truncated && (
+          <Notice tone="info">记录较多，较早的条目本次未纳入。</Notice>
         )}
         <div className="space-y-3">
           {result.panel.map((item) => (
@@ -126,7 +127,7 @@ export default function DecisionPanel({ result }: { result: AnalyzeResult }) {
         </div>
         {result.more.length > 0 && (
           <details className="text-[13px]">
-            <summary className="cursor-pointer text-ink-muted">更多判断</summary>
+            <summary className="cursor-pointer text-ink-muted">其他</summary>
             <div className="mt-2 space-y-2">
               {result.more.map((item) => (
                 <Row key={item.key} item={item} />
@@ -134,11 +135,7 @@ export default function DecisionPanel({ result }: { result: AnalyzeResult }) {
             </div>
           </details>
         )}
-        {result.trace_id && (
-          <p className="mono text-[12px] leading-5 text-ink-muted">
-            {result.model || 'jev'} · {result.latency_ms}ms · {result.trace_id}
-          </p>
-        )}
+
       </div>
     </section>
   )

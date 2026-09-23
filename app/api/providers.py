@@ -16,7 +16,7 @@ from ..domain.schemas.provider import (
     ProviderView,
 )
 from ..repositories.models import ProviderConfig, User
-from ..services.provider_service import ProviderService, to_view
+from ..services.provider_service import ProviderService, mask_envelope, to_view
 from .deps import require_active_user
 
 router = APIRouter(prefix="/api/providers", tags=["providers"])
@@ -24,10 +24,13 @@ router = APIRouter(prefix="/api/providers", tags=["providers"])
 _service = ProviderService()
 
 
-def _view(row: ProviderConfig) -> ProviderView:
-    """转响应：解密仅为取掩码，明文随即丢弃。"""
-    plaintext = _service.decrypt_key(row)
-    return ProviderView(**to_view(row, plaintext))
+def _view(row: ProviderConfig, *, reveal: bool) -> ProviderView:
+    """列表只回固定掩码。单条写操作才解密，且明文只用于生成掩码。"""
+    masked = _service.decrypt_key(row) if reveal else None
+    view = to_view(row, masked)
+    if not reveal:
+        view["api_key_masked"] = mask_envelope(row.api_key_enc)
+    return ProviderView(**view)
 
 
 @router.get("", response_model=list[ProviderView])
@@ -37,7 +40,7 @@ def list_providers(
     user: User = Depends(require_active_user),
 ) -> list[ProviderView]:
     rows = _service.list_for_user(db, owner_user_id=user.id, kind=kind)
-    return [_view(row) for row in rows]
+    return [_view(row, reveal=False) for row in rows]
 
 
 @router.post("", response_model=ProviderView, status_code=201)
@@ -47,7 +50,7 @@ def create_provider(
     user: User = Depends(require_active_user),
 ) -> ProviderView:
     row = _service.create(db, owner_user_id=user.id, payload=payload)
-    return _view(row)
+    return _view(row, reveal=True)
 
 
 @router.patch("/{provider_id}", response_model=ProviderView)
@@ -60,7 +63,7 @@ def update_provider(
     row = _service.update(
         db, owner_user_id=user.id, provider_id=provider_id, payload=payload
     )
-    return _view(row)
+    return _view(row, reveal=True)
 
 
 @router.delete("/{provider_id}", status_code=204)

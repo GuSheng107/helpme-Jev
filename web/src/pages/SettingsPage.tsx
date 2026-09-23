@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ApiError } from '../api/client'
 import {
+  forgetMemory,
+  listMemories,
+  listReflections,
+  revertReflection,
+  type MemoryItem,
+  type Reflection,
+} from '../api/chat'
+import {
   createProvider,
   deleteProvider,
   listProviders,
@@ -49,10 +57,19 @@ export default function SettingsPage({ onLogout, onBack }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [testing, setTesting] = useState<number | null>(null)
   const [results, setResults] = useState<Record<number, ConnectionTestResult>>({})
+  const [memories, setMemories] = useState<MemoryItem[]>([])
+  const [reflections, setReflections] = useState<Reflection[]>([])
 
   const reload = useCallback(async () => {
     try {
-      setRows(await listProviders())
+      const [providers, noted, history] = await Promise.all([
+        listProviders(),
+        listMemories(),
+        listReflections(),
+      ])
+      setRows(providers)
+      setMemories(noted.items)
+      setReflections(history)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '加载失败')
     } finally {
@@ -101,6 +118,25 @@ export default function SettingsPage({ onLogout, onBack }: Props) {
     }
   }
 
+  async function undoReflection(id: number) {
+    try {
+      await revertReflection(id)
+      await reload()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '撤销失败')
+    }
+  }
+
+  async function dropMemory(id: number) {
+    try {
+      await forgetMemory(id)
+      setMemories((current) => current.filter((item) => item.id !== id))
+      setReflections(await listReflections())
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '删除失败')
+    }
+  }
+
   async function runTest(row: ProviderView) {
     setTesting(row.id)
     setError(null)
@@ -108,14 +144,14 @@ export default function SettingsPage({ onLogout, onBack }: Props) {
       const result = await testProvider(row.id, row.kind === 'jev')
       setResults((prev) => ({ ...prev, [row.id]: result }))
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : '测试失败')
+      setError(err instanceof ApiError ? err.message : '连接失败')
     } finally {
       setTesting(null)
     }
   }
 
   async function remove(row: ProviderView) {
-    if (!window.confirm(`确认删除配置「${row.name}」？该操作不可撤销。`)) return
+    if (!window.confirm(`删除「${row.name}」？删除后需要重新填写。`)) return
     try {
       await deleteProvider(row.id)
       await reload()
@@ -132,7 +168,7 @@ export default function SettingsPage({ onLogout, onBack }: Props) {
             <button type="button" className="text-[13px] text-primary" onClick={onBack}>
               返回
             </button>
-            <span className="text-[16px] font-semibold leading-6 text-ink">系统设置</span>
+            <span className="text-[16px] font-semibold leading-6 text-ink">设置</span>
           </div>
           <Button size="sm" onClick={onLogout}>
             退出
@@ -142,11 +178,11 @@ export default function SettingsPage({ onLogout, onBack }: Props) {
 
       <PageBody>
         <PageHeader
-          title="提供方配置"
-          description="JEV 与 LLM 均为自配端点（完整 URL + Key + 模型），系统不做任何 provider 预设。"
+          title="连接"
+          description="判断和生成文本各需填写地址、密钥与模型。"
           actions={
             <Button variant="primary" onClick={() => setForm({ ...BLANK })}>
-              新增配置
+              添加
             </Button>
           }
         />
@@ -159,7 +195,7 @@ export default function SettingsPage({ onLogout, onBack }: Props) {
 
         {form && (
           <div className="mb-4">
-            <DataCard title={form.id === null ? '新增配置' : `编辑配置 #${form.id}`}>
+            <DataCard title={form.id === null ? '添加连接' : '修改连接'}>
               <form onSubmit={submit} className="space-y-3">
                 <div className="grid gap-3 sm:grid-cols-2">
                   <label className="block">
@@ -172,21 +208,21 @@ export default function SettingsPage({ onLogout, onBack }: Props) {
                       onChange={(e) => setForm({ ...form, kind: e.target.value as ProviderKind })}
                       className="h-9 w-full rounded-[6px] border border-border bg-surface px-3 disabled:bg-surface-muted"
                     >
-                      <option value="jev">JEV（System One 决策模型）</option>
-                      <option value="llm">LLM（OpenAI 兼容）</option>
+                      <option value="jev">判断</option>
+                      <option value="llm">写句子</option>
                     </select>
                   </label>
                   <Field
                     label="名称"
                     value={form.name}
                     onChange={(e) => setForm({ ...form, name: e.target.value })}
-                    placeholder="便于自己辨认，如「主 JEV」"
+                    placeholder="便于识别的名称"
                     required
                   />
                 </div>
 
                 <Field
-                  label="完整端点 URL"
+                  label="地址"
                   value={form.endpoint_url}
                   onChange={(e) => setForm({ ...form, endpoint_url: e.target.value })}
                   placeholder={
@@ -195,39 +231,40 @@ export default function SettingsPage({ onLogout, onBack }: Props) {
                       : 'https://api.example.com/v1/chat/completions'
                   }
                   required
-                  hint="系统不做路径拼接，请填完整地址"
+                  hint="请填写完整地址"
                 />
 
                 <div className="grid gap-3 sm:grid-cols-2">
                   <Field
-                    label="模型"
+                    label="模型名"
                     value={form.model}
                     onChange={(e) => setForm({ ...form, model: e.target.value })}
                     placeholder={form.kind === 'jev' ? 'jev-latest' : 'gpt-4o-mini'}
+
                     required
-                    hint={form.kind === 'jev' ? '建议钉住版本 ID（别名会漂）' : undefined}
+                    hint={form.kind === 'jev' ? '建议填写具体版本，jev-latest 会随官方更新变化' : undefined}
                   />
                   <Field
-                    label="API Key"
+                    label="密钥"
                     type="password"
                     value={form.api_key}
                     onChange={(e) => setForm({ ...form, api_key: e.target.value })}
                     required={form.id === null}
-                    placeholder={form.id === null ? '粘贴 Key' : '留空表示保持原值'}
-                    hint={form.id === null ? '加密存储，接口只回掩码' : '留空即保持原密钥不变'}
+                    placeholder={form.id === null ? '粘贴密钥' : '留空则保持不变'}
+                    hint={form.id === null ? '仅保存在本机，保存后不再显示全文' : '留空则保持原密钥'}
                   />
                 </div>
 
                 {form.kind === 'llm' && (
                   <div className="grid gap-3 sm:grid-cols-2">
                     <Field
-                      label="上下文窗口（token）"
+                      label="上下文长度"
                       type="number"
                       value={String(form.context_window_tokens)}
                       onChange={(e) =>
                         setForm({ ...form, context_window_tokens: Number(e.target.value) || 64000 })
                       }
-                      hint="按你模型的实际窗口填，默认 64K"
+                      hint="按该模型的上下文长度填写，不确定可保持默认"
                     />
                     <label className="flex items-center gap-2 pt-6 text-[13px] text-ink-secondary">
                       <input
@@ -235,7 +272,7 @@ export default function SettingsPage({ onLogout, onBack }: Props) {
                         checked={form.supports_vision}
                         onChange={(e) => setForm({ ...form, supports_vision: e.target.checked })}
                       />
-                      支持图片（多模态）
+                      支持图片
                     </label>
                   </div>
                 )}
@@ -253,16 +290,72 @@ export default function SettingsPage({ onLogout, onBack }: Props) {
           </div>
         )}
 
-        <DataCard title="已配置的提供方">
+        <div className="mb-4">
+          <DataCard title="已记录">
+            {memories.length === 0 ? (
+              <EmptyState title="暂无记录" description="判断完成后，相关事实会自动记录在这里。" />
+            ) : (
+              <ul className="divide-y divide-border-subtle">
+                {memories.map((item) => (
+                  <li key={item.id} className="flex items-start justify-between gap-3 py-2.5 first:pt-0 last:pb-0">
+                    <div>
+                      <p className="text-[14px] leading-[22px] text-ink">{item.content}</p>
+                      <p className="mt-0.5 text-[13px] leading-5 text-ink-muted">
+                        {item.subject}
+                        {item.counterpart_key ? ` · ${item.counterpart_key}` : ''} · {item.category}
+                      </p>
+                    </div>
+                    <Button size="sm" onClick={() => void dropMemory(item.id)}>
+                      删除
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </DataCard>
+        </div>
+
+        {reflections.some((item) => !item.reverted_at && item.changes.some((change) => change.content)) && (
+          <div className="mb-4">
+            <DataCard title="最近变更">
+              <ul className="space-y-3">
+                {reflections
+                  .filter((item) => !item.reverted_at)
+                  .map((item, index) => {
+                    const lines = item.changes.filter((change) => change.content && !change.skipped)
+                    if (lines.length === 0) return null
+                    return (
+                      <li key={item.id} className="flex items-start justify-between gap-3">
+                        <ul>
+                          {lines.map((change, line) => (
+                            <li key={line} className="text-[14px] leading-[22px] text-ink">
+                              {change.content}
+                            </li>
+                          ))}
+                        </ul>
+                        {index === 0 && (
+                          <Button size="sm" onClick={() => void undoReflection(item.id)}>
+                            撤销
+                          </Button>
+                        )}
+                      </li>
+                    )
+                  })}
+              </ul>
+            </DataCard>
+          </div>
+        )}
+
+        <DataCard title="已添加">
           {loading ? (
             <p className="py-6 text-center text-[13px] text-ink-muted">加载中…</p>
           ) : rows.length === 0 ? (
             <EmptyState
-              title="还没有任何配置"
-              description="添加一个 JEV 端点用于决策，再添加一个 LLM 端点用于生成文本。两者都需自备 URL 与 Key。"
+              title="尚未添加连接"
+              description="请先添加「判断」，再添加「写句子」。地址与密钥由你自行提供。"
               action={
                 <Button variant="primary" onClick={() => setForm({ ...BLANK })}>
-                  新增配置
+                  添加
                 </Button>
               }
             />
@@ -277,7 +370,7 @@ export default function SettingsPage({ onLogout, onBack }: Props) {
                         <div className="flex items-center gap-2">
                           <span className="text-[14px] font-medium text-ink">{row.name}</span>
                           <StatusTag tone={row.kind === 'jev' ? 'primary' : 'info'}>
-                            {row.kind === 'jev' ? 'JEV' : 'LLM'}
+                            {row.kind === 'jev' ? '判断' : '写句子'}
                           </StatusTag>
                           {row.is_default && <StatusTag tone="success">默认</StatusTag>}
                         </div>
@@ -285,7 +378,7 @@ export default function SettingsPage({ onLogout, onBack }: Props) {
                           {row.endpoint_url}
                         </p>
                         <p className="mono mt-0.5 text-[13px] text-ink-muted">
-                          模型 {row.model} · Key {row.api_key_masked}
+                          {row.model} · {row.api_key_masked}
                           {row.kind === 'llm' && ` · 窗口 ${row.context_window_tokens}`}
                         </p>
                       </div>
@@ -295,7 +388,7 @@ export default function SettingsPage({ onLogout, onBack }: Props) {
                           loading={testing === row.id}
                           onClick={() => void runTest(row)}
                         >
-                          测试连通
+                          测试连接
                         </Button>
                         <Button
                           size="sm"
@@ -324,14 +417,14 @@ export default function SettingsPage({ onLogout, onBack }: Props) {
                       <div className="mt-3 rounded-[6px] bg-surface-muted p-3">
                         <div className="flex flex-wrap items-center gap-2">
                           <StatusTag tone={result.ok ? 'success' : 'danger'}>
-                            {result.ok ? '测试通过' : '测试失败'}
+                            {result.ok ? '连接成功' : '连接失败'}
                           </StatusTag>
                           <span className="text-[13px] text-ink-secondary">
                             耗时 {result.latency_ms} ms
                           </span>
                           {result.model_reported && (
                             <span className="mono text-[13px] text-ink-muted">
-                              作答模型 {result.model_reported}
+                              {result.model_reported}
                             </span>
                           )}
                         </div>
@@ -342,7 +435,7 @@ export default function SettingsPage({ onLogout, onBack }: Props) {
                         {result.smoke && (
                           <div className="mt-3">
                             <div className="flex items-center gap-2">
-                              <span className="text-[13px] text-ink-secondary">健康度</span>
+                              <span className="text-[13px] text-ink-secondary">准确率</span>
                               <span
                                 className={`mono text-[14px] font-medium ${
                                   result.smoke.health >= 80 ? 'text-success' : 'text-warning'

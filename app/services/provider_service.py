@@ -32,6 +32,12 @@ def mask_api_key(plaintext: str) -> str:
     return f"{plaintext[:4]}••••{plaintext[-4:]}"
 
 
+def mask_envelope(envelope: str) -> str:
+    """从信封前缀生成固定掩码，列表接口不必逐条解密。"""
+    del envelope
+    return "••••••••"
+
+
 class ProviderService:
     def __init__(self) -> None:
         self.repo = ProviderRepository()

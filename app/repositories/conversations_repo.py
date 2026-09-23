@@ -108,6 +108,11 @@ class MessageRepository:
 
 
 class SummaryRepository:
+    def add(self, db: Session, row: SessionSummary) -> SessionSummary:
+        db.add(row)
+        db.flush()
+        return row
+
     def latest(self, db: Session, *, conversation_id: int) -> SessionSummary | None:
         stmt = (
             select(SessionSummary)

@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 
 import httpx
 
+from .retry import post_with_backoff
+
 TIMEOUT_SECONDS = 45
 
 # 冒烟用例里的固定题目 key（与业务题目解耦，只用于体检）
@@ -152,7 +154,8 @@ def call_systemone(
     返回结构化结果，不抛异常。
     """
     started = time.perf_counter()
-    body = {"model": model, "state": state, "questions": questions}
+    # 字段顺序对齐官方示例：state、model、questions
+    body = {"state": state, "model": model, "questions": questions}
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -160,7 +163,7 @@ def call_systemone(
 
     try:
         with httpx.Client(timeout=timeout) as client:
-            response = client.post(endpoint_url, json=body, headers=headers)
+            response = post_with_backoff(client, endpoint_url, json=body, headers=headers)
     except httpx.TimeoutException:
         return JevResult(
             ok=False,

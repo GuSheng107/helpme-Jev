@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from .auth import StrictModel
+
+
+class ConversationRef(StrictModel):
+    conversation_id: int = Field(ge=1)
+
 
 class AnalyzeView(BaseModel):
     panel: list[dict] = Field(default_factory=list)
@@ -14,3 +20,5 @@ class AnalyzeView(BaseModel):
     model: str = ""
     latency_ms: int = 0
     message_count: int = 0
+    memory_count: int = 0
+    context_truncated: bool = False

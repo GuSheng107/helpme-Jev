@@ -13,7 +13,7 @@ from ..clients import jev_client
 from ..clients.translation import annotate
 from ..domain.errors import DomainError, DomainErrorCode
 from ..repositories.conversations_repo import MessageRepository
-from ..repositories.models import Conversation, Message
+from ..repositories.models import Conversation
 from ..scenarios.questions_romance import (
     HIGH_DANGER_LEVEL,
     INTENSITY_LABELS,
@@ -22,6 +22,8 @@ from ..scenarios.questions_romance import (
     label_of,
     romance_questions,
 )
+from .context_service import dropped_count, ensure_summary, render_background
+from .memory_service import MemoryService
 from .provider_service import ProviderService
 
 # 送进 JEV 的消息条数（DESIGN.md §9.2）
@@ -29,6 +31,7 @@ RECENT_MESSAGE_LIMIT = 10
 
 _messages = MessageRepository()
 _providers = ProviderService()
+_memory = MemoryService()
 
 
 def _as_float(value: object) -> float | None:
@@ -52,17 +55,21 @@ def build_state(
     messages: list[dict],
     *,
     relationship: str,
+    background: str = "",
 ) -> dict:
-    """装配 JEV state。P2 不带 background / history。"""
+    """装配 JEV state。background 为空时省略，避免空字段干扰判断。"""
     tail = messages[-RECENT_MESSAGE_LIMIT:]
     latest_from = tail[-1]["from"] if tail else "other"
-    return {
+    state: dict = {
         "chat": {
             "relationship": relationship or "未说明",
             "messages": tail,
             "latest_from": latest_from,
         }
     }
+    if background:
+        state["background"] = background
+    return state
 
 
 def present_answers(answers: dict) -> dict:
@@ -164,7 +171,7 @@ class AnalyzeService:
         if not rows:
             raise DomainError(
                 DomainErrorCode.VALIDATION_FAILED,
-                "还没有消息。先粘贴对方的话，再判断。",
+                "暂无内容，请先保存对方发来的话。",
                 status_code=422,
             )
 
@@ -179,16 +186,44 @@ class AnalyzeService:
             lines=originals,
         )
         if translated is not None and not translated.ok:
+            self._write_logs(
+                db,
+                owner_user_id=owner_user_id,
+                trace_id=trace_id,
+                llm=llm,
+                jev=jev,
+                originals=originals,
+                annotated=annotated,
+                translated=translated,
+                state={},
+                result=None,
+            )
+            db.commit()
             raise DomainError(
                 DomainErrorCode.LLM_UPSTREAM_ERROR,
-                f"翻译失败：{translated.detail}",
+                "内容转换失败，请重试。",
                 status_code=502,
             )
 
         jev_messages = [
             {"from": row.role, "text": annotated[str(row.seq)]} for row in rows
         ]
-        state = build_state(jev_messages, relationship=conversation.relationship)
+        memories = _memory.list_active(
+            db,
+            owner_user_id=owner_user_id,
+            counterpart_key=conversation.counterpart_key,
+        )
+        summary = ensure_summary(
+            db,
+            conversation_id=conversation.id,
+            endpoint_url=llm.endpoint_url,
+            api_key=_providers.decrypt_key(llm),
+            model=llm.model,
+        )
+        background = render_background(memories, summary=summary)
+        state = build_state(
+            jev_messages, relationship=conversation.relationship, background=background
+        )
         result = jev_client.call_with_fallback(
             endpoint_url=jev.endpoint_url,
             api_key=_providers.decrypt_key(jev),
@@ -196,14 +231,6 @@ class AnalyzeService:
             state=state,
             questions=romance_questions(),
         )
-        if not result.ok:
-            code = (
-                DomainErrorCode.PROTOCOL_MISMATCH
-                if result.error_code == "PROTOCOL_MISMATCH"
-                else DomainErrorCode.JEV_UPSTREAM_ERROR
-            )
-            raise DomainError(code, result.detail or "JEV 调用失败", status_code=502)
-
         self._write_logs(
             db,
             owner_user_id=owner_user_id,
@@ -215,15 +242,24 @@ class AnalyzeService:
             translated=translated,
             state=state,
             result=result,
-            rows=rows,
         )
         db.commit()
+
+        if not result.ok:
+            code = (
+                DomainErrorCode.PROTOCOL_MISMATCH
+                if result.error_code == "PROTOCOL_MISMATCH"
+                else DomainErrorCode.JEV_UPSTREAM_ERROR
+            )
+            raise DomainError(code, "分析未完成，请重试。", status_code=502)
 
         view = present_answers(result.answers)
         view["trace_id"] = trace_id
         view["model"] = result.model_reported
         view["latency_ms"] = result.latency_ms
         view["message_count"] = len(rows)
+        view["memory_count"] = len(memories)
+        view["context_truncated"] = dropped_count(memories, summary=summary) > 0
         return view
 
     def _require_provider(self, db: Session, *, owner_user_id: int, kind: str):
@@ -240,7 +276,7 @@ class AnalyzeService:
             name = "JEV" if kind == "jev" else "LLM"
             raise DomainError(
                 code,
-                f"还没有配置 {name}。去设置里填完整 URL、Key 和模型。",
+                "尚未配置连接，请前往设置填写地址与密钥。",
                 status_code=409,
             )
         return chosen
@@ -258,7 +294,6 @@ class AnalyzeService:
         translated,
         state: dict,
         result,
-        rows: list[Message],
     ) -> None:
         """中英并排写进调用日志，方便以后分清是翻译错还是判断错。"""
         from ..core.logging import sanitize_log_value
@@ -284,22 +319,22 @@ class AnalyzeService:
                     error="" if translated.ok else translated.detail,
                 )
             )
-        db.add(
-            CallLog(
-                owner_user_id=owner_user_id,
-                trace_id=trace_id,
-                kind="jev",
-                phase="analyze",
-                endpoint_url=jev.endpoint_url,
-                model=result.model_reported or jev.model,
-                request_body=_dump(sanitize_log_value({"state": state, "lines": pairs})),
-                response_body=_dump(sanitize_log_value({"answers": result.answers})),
-                status_code=result.status_code,
-                latency_ms=result.latency_ms,
-                error="" if result.ok else result.detail,
+        if result is not None:
+            db.add(
+                CallLog(
+                    owner_user_id=owner_user_id,
+                    trace_id=trace_id,
+                    kind="jev",
+                    phase="analyze",
+                    endpoint_url=jev.endpoint_url,
+                    model=result.model_reported or jev.model,
+                    request_body=_dump(sanitize_log_value({"state": state, "lines": pairs})),
+                    response_body=_dump(sanitize_log_value({"answers": result.answers})),
+                    status_code=result.status_code,
+                    latency_ms=result.latency_ms,
+                    error="" if result.ok else result.detail,
+                )
             )
-        )
-        del rows
 
 
 def _dump(value: object) -> str:

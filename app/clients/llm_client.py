@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 
 import httpx
 
+from .retry import post_with_backoff
+
 TIMEOUT_SECONDS = 60
 # 连通测试只花极少的 token
 PROBE_MAX_TOKENS = 1
@@ -75,7 +77,9 @@ def test_connection(
 
     try:
         with httpx.Client(timeout=timeout) as client:
-            response = client.post(endpoint_url, json=body, headers=_auth_headers(api_key))
+            response = post_with_backoff(
+                client, endpoint_url, json=body, headers=_auth_headers(api_key)
+            )
     except httpx.TimeoutException:
         return UpstreamResult(
             ok=False,
@@ -176,7 +180,9 @@ def chat_json(
 
     def _post(payload: dict) -> httpx.Response:
         with httpx.Client(timeout=timeout) as client:
-            return client.post(endpoint_url, json=payload, headers=_auth_headers(api_key))
+            return post_with_backoff(
+                client, endpoint_url, json=payload, headers=_auth_headers(api_key)
+            )
 
     try:
         response = _post(body)

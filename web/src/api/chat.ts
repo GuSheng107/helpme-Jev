@@ -47,6 +47,43 @@ export interface AnalyzeResult {
   model: string
   latency_ms: number
   message_count: number
+  memory_count: number
+  context_truncated: boolean
+}
+
+export interface MemoryChange {
+  op: string
+  subject?: string
+  category?: string
+  content?: string
+  skipped?: string
+}
+
+export interface Reflection {
+  id: number
+  changes: MemoryChange[]
+  reverted_at: string | null
+}
+
+export interface MemoryItem {
+  id: number
+  subject: string
+  category: string
+  content: string
+  counterpart_key: string
+  created_at: string
+}
+
+export function listMemories() {
+  return api.get<{ total: number; items: MemoryItem[] }>('/api/chat/memories')
+}
+
+export function forgetMemory(id: number) {
+  return api.delete<void>(`/api/chat/memories/${id}`)
+}
+
+export function listReflections() {
+  return api.get<Reflection[]>('/api/chat/reflections')
 }
 
 export function listConversations() {
@@ -71,4 +108,12 @@ export function appendMessage(conversationId: number, role: 'me' | 'other', cont
 
 export function analyze(conversationId: number) {
   return api.post<AnalyzeResult>('/api/chat/analyze', { conversation_id: conversationId })
+}
+
+export function reflect(conversationId: number) {
+  return api.post<Reflection>('/api/chat/reflect', { conversation_id: conversationId })
+}
+
+export function revertReflection(id: number) {
+  return api.post<Reflection>(`/api/chat/reflect/${id}/revert`)
 }

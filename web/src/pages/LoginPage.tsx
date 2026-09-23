@@ -59,10 +59,10 @@ export default function LoginPage({ onAuthenticated }: Props) {
       <div className="flex min-h-screen items-center justify-center px-5 py-8">
         <div className="w-full max-w-[380px]">
           <header className="mb-5 text-center">
-            <h1 className="text-[20px] font-semibold leading-7 text-ink">HelpMe JEV</h1>
-            <p className="mt-1 text-[13px] leading-5 text-ink-muted">
-              JEV 出决策 · LLM 做表达 · 你拍板
-            </p>
+            <p className="text-[13px] leading-5 text-ink-muted">帮帮我 Jev！</p>
+            <h1 className="mt-1 text-[20px] font-semibold leading-7 text-ink">
+              遇到不会回答的问题怎么办，马上召唤 Jev 来帮你
+            </h1>
           </header>
 
           <div className="rounded-[8px] border border-border bg-surface p-4 shadow-[0_1px_3px_rgb(0_0_0/0.06)]">

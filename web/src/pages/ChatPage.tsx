@@ -6,9 +6,12 @@ import {
   createConversation,
   listConversations,
   listMessages,
+  reflect,
+  revertReflection,
   type AnalyzeResult,
   type ChatMessage,
   type Conversation,
+  type Reflection,
 } from '../api/chat'
 import Button from '../components/Button'
 import DecisionPanel from '../components/DecisionPanel'
@@ -30,6 +33,7 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
   const [name, setName] = useState('')
   const [relationship, setRelationship] = useState('女朋友')
   const [result, setResult] = useState<AnalyzeResult | null>(null)
+  const [reflection, setReflection] = useState<Reflection | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [listOpen, setListOpen] = useState(false)
@@ -42,7 +46,7 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
 
   useEffect(() => {
     void reloadList().catch((err: unknown) => {
-      setError(err instanceof ApiError ? err.message : '会话加载失败')
+      setError(err instanceof ApiError ? err.message : '聊天列表加载失败')
     })
   }, [reloadList])
 
@@ -53,7 +57,7 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
     }
     void listMessages(currentId)
       .then(setMessages)
-      .catch((err: unknown) => setError(err instanceof ApiError ? err.message : '消息加载失败'))
+      .catch((err: unknown) => setError(err instanceof ApiError ? err.message : '内容加载失败'))
   }, [currentId])
 
   async function create() {
@@ -72,6 +76,7 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
       setName('')
       setListOpen(false)
       setResult(null)
+      setReflection(null)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '创建失败')
     } finally {
@@ -88,7 +93,30 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
       setMessages((prev) => [...prev, message])
       setDraft('')
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : '发送失败')
+      setError(err instanceof ApiError ? err.message : '保存失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function review(conversationId: number) {
+    try {
+      const noted = await reflect(conversationId)
+      const kept = noted.changes.some((item) => item.content && !item.skipped && item.op !== 'NOOP')
+      if (kept) setReflection(noted)
+    } catch {
+      /* 记不住不影响这次判断 */
+    }
+  }
+
+  async function undoReview() {
+    if (!reflection) return
+    setBusy(true)
+    setError(null)
+    try {
+      setReflection(await revertReflection(reflection.id))
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '撤销失败')
     } finally {
       setBusy(false)
     }
@@ -100,11 +128,12 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
     setError(null)
     try {
       setResult(await analyze(currentId))
+      void review(currentId)
     } catch (err) {
       if (err instanceof ApiError && (err.code === 'JEV_NOT_CONFIGURED' || err.code === 'LLM_NOT_CONFIGURED')) {
         setError(`${err.message}`)
       } else {
-        setError(err instanceof ApiError ? err.message : '判断失败')
+        setError(err instanceof ApiError ? err.message : '分析失败')
       }
     } finally {
       setBusy(false)
@@ -118,7 +147,7 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
           className={`${listOpen ? 'block' : 'hidden'} border-b border-border bg-surface lg:block lg:w-60 lg:shrink-0 lg:border-b-0 lg:border-r`}
         >
           <div className="flex items-center justify-between px-4 py-3">
-            <span className="text-[14px] font-semibold text-ink">会话</span>
+            <span className="text-[14px] font-semibold text-ink">聊天</span>
             <Button size="sm" onClick={() => setCreating((value) => !value)}>
               新建
             </Button>
@@ -137,7 +166,7 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
             </div>
           )}
           {conversations.length === 0 && !creating ? (
-            <EmptyState title="还没有会话" description="新建一个，再粘贴对方刚发来的话。" />
+            <EmptyState title="暂无聊天" description="新建一位对象，再粘贴对方发来的内容。" />
           ) : (
             <ul>
               {conversations.map((item) => (
@@ -150,6 +179,7 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
                     onClick={() => {
                       setCurrentId(item.id)
                       setResult(null)
+                      setReflection(null)
                       setListOpen(false)
                     }}
                   >
@@ -170,10 +200,10 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
                 className="text-[13px] text-primary lg:hidden"
                 onClick={() => setListOpen((value) => !value)}
               >
-                会话
+                聊天
               </button>
               <span className="truncate text-[16px] font-semibold text-ink">
-                {current ? current.counterpart_name || current.title : '聊天副驾'}
+                {current ? current.counterpart_name || current.title : 'HelpMe'}
               </span>
             </div>
             <div className="flex items-center gap-2">
@@ -190,7 +220,7 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
             <div className="px-4 pt-3">
               <Notice tone="danger">
                 {error}
-                {(error.includes('配置') || error.includes('设置')) && (
+                {(error.includes('设置') || error.includes('接上')) && (
                   <button type="button" className="ml-2 underline" onClick={onOpenSettings}>
                     去设置
                   </button>
@@ -200,13 +230,13 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
           )}
 
           {current === null ? (
-            <EmptyState title="先选一个会话" description="左侧新建或点开已有会话。手机上点左上角「会话」。" />
+            <EmptyState title="请选择聊天" description="在左侧新建或打开已有聊天。手机端点击左上角「聊天」。" />
           ) : (
             <>
               {result && <DecisionPanel result={result} />}
               <div className="flex-1 space-y-2 overflow-y-auto px-4 py-3">
                 {messages.length === 0 && (
-                  <EmptyState title="还没有消息" description="把对方刚发的话贴到下面，角色选「对方」。" />
+                  <EmptyState title="暂无内容" description="在下方粘贴对方的话，发送者选「对方」，然后保存。" />
                 )}
                 {messages.map((message) => (
                   <div
@@ -246,22 +276,23 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
                   value={draft}
                   onChange={(event) => setDraft(event.target.value)}
                   rows={2}
-                  placeholder="粘贴对方的话"
+                  placeholder="粘贴对方发来的内容"
                   className="w-full resize-none rounded-[6px] border border-border px-3 py-2 text-ink outline-none"
                 />
+                {reflection && <MemoryNote reflection={reflection} onUndo={() => void undoReview()} />}
                 <div className="mt-2 flex items-center justify-end gap-2">
-                  <Button size="sm" loading={busy} disabled={!draft.trim()} disabledReason="先写点内容" onClick={() => void send()}>
-                    记入
+                  <Button size="sm" loading={busy} disabled={!draft.trim()} disabledReason="请先输入内容" onClick={() => void send()}>
+                    保存
                   </Button>
                   <Button
                     variant="primary"
                     size="sm"
                     loading={busy}
                     disabled={messages.length === 0}
-                    disabledReason="先记入至少一条消息"
+                    disabledReason="请先保存至少一条内容"
                     onClick={() => void judge()}
                   >
-                    判断
+                    分析
                   </Button>
                 </div>
               </div>
@@ -270,5 +301,30 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
         </section>
       </div>
     </PageShell>
+  )
+}
+
+function MemoryNote({ reflection, onUndo }: { reflection: Reflection; onUndo: () => void }) {
+  const kept = reflection.changes.filter((item) => item.content && !item.skipped && item.op !== 'NOOP')
+  if (reflection.reverted_at) {
+    return <p className="mt-2 text-[13px] leading-5 text-ink-muted">已撤回刚才的记录</p>
+  }
+  if (kept.length === 0) {
+    return <p className="mt-2 text-[13px] leading-5 text-ink-muted">本次没有新的记录</p>
+  }
+  return (
+    <div className="mt-2 rounded-[6px] bg-surface-muted px-3 py-2">
+      <p className="text-[13px] text-ink-secondary">已记录</p>
+      <ul className="mt-1 space-y-0.5">
+        {kept.map((item, index) => (
+          <li key={index} className="text-[13px] leading-5 text-ink">
+            {item.content}
+          </li>
+        ))}
+      </ul>
+      <button type="button" className="mt-1 text-[13px] text-primary" onClick={onUndo}>
+        撤销
+      </button>
+    </div>
   )
 }
