@@ -1,0 +1,38 @@
+@import 'tailwindcss';
+
+/* 主题变量（浅色优先，跟随系统暗色） */
+@theme {
+  --color-brand-50: oklch(0.97 0.02 265);
+  --color-brand-100: oklch(0.94 0.04 265);
+  --color-brand-500: oklch(0.62 0.18 265);
+  --color-brand-600: oklch(0.56 0.19 265);
+  --color-brand-700: oklch(0.48 0.18 265);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei',
+    Roboto, 'Helvetica Neue', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background-color: #f7f8fa;
+  color: #1f2328;
+}
+
+/* 移动端：软键盘弹出时不遮挡输入框 */
+@supports (height: 100dvh) {
+  .app-shell {
+    min-height: 100dvh;
+  }
+}
+
+input,
+textarea {
+  font-size: 16px; /* iOS 上 < 16px 会触发自动放大 */
+}

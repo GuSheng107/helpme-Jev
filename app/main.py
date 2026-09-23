@@ -5,11 +5,14 @@ from __future__ import annotations
 import logging
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
-from .api import account, auth, providers
+from .api import account, auth, conversations, providers
+from .core.config import get_settings
 from .domain.errors import DomainError, DomainErrorCode
 from .services.bootstrap import bootstrap
 
@@ -78,3 +81,14 @@ def health() -> dict[str, object]:
 app.include_router(auth.router)
 app.include_router(account.router)
 app.include_router(providers.router)
+app.include_router(conversations.router)
+
+# ---------------------------------------------------------------- 静态托管
+# 生产模式下由后端托管前端构建产物（单端口部署）。
+# 必须放在所有 API 路由**之后**，否则 mount("/") 会抢走 /api。
+_dist = Path(get_settings().web_dist_dir)
+if _dist.is_dir():
+    app.mount("/", StaticFiles(directory=str(_dist), html=True), name="web")
+    logger.info("已托管前端产物：%s", _dist.resolve())
+else:
+    logger.info("未发现前端产物（%s），仅提供 API", _dist)
