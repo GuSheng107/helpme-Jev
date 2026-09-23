@@ -5,6 +5,7 @@ import {
   appendMessage,
   clarify,
   draftReplies,
+  explainDecision,
   evaluateReply,
   polish,
   createConversation,
@@ -43,6 +44,7 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
   const [candidates, setCandidates] = useState<Candidate[]>([])
   const [questions, setQuestions] = useState<string[]>([])
   const [previousDraft, setPreviousDraft] = useState<string | null>(null)
+  const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [listOpen, setListOpen] = useState(false)
@@ -154,8 +156,22 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
     }
   }
 
-  async function makeCandidates() {
+  async function explain() {
     if (currentId === null || !result) return
+    setBusy(true)
+    setError(null)
+    try {
+      const explained = await explainDecision(currentId, result)
+      setReason(explained.reason)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '说明未生成')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function makeCandidates() {
+    if (currentId === null || !result || result.high_danger) return
     setBusy(true)
     setError(null)
     setStep('正在生成候选')
@@ -308,6 +324,19 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
             <>
               {step && <p className="px-4 pt-3 text-[13px] text-ink-muted">{step}</p>}
               {result && <DecisionPanel result={result} />}
+              {result && (
+                <div className="mx-4 mt-3">
+                  <button type="button" className="text-[13px] text-primary" onClick={() => void explain()}>
+                    为什么这么判
+                  </button>
+                  {reason && (
+                    <p className="mt-1 text-[13px] leading-[22px] text-ink-secondary">
+                      {reason}
+                      <span className="text-ink-muted">（由语言模型解读，仅供参考）</span>
+                    </p>
+                  )}
+                </div>
+              )}
               {questions.length > 0 && (
                 <div className="mx-4 mt-3 rounded-[8px] border border-border bg-surface px-3 py-2">
                   <p className="text-[13px] text-ink-secondary">还想确认几件事，也可以跳过</p>
@@ -407,7 +436,7 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
                       继续问
                     </Button>
                   )}
-                  {result && (
+                  {result && !result.high_danger && (
                     <Button size="sm" loading={busy} onClick={() => void makeCandidates()}>
                       生成候选
                     </Button>

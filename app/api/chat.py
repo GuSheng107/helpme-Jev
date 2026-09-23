@@ -12,6 +12,7 @@ from ..domain.schemas.analyze import (
     ClarifyRequest,
     ConversationRef,
     EvaluateRequest,
+    ExplainRequest,
     PolishRequest,
     ReplyRequest,
 )
@@ -178,6 +179,20 @@ def clarify(
         db, owner_user_id=user.id, conversation_id=payload.conversation_id
     )
     return _reply.clarify(db, owner_user_id=user.id, conversation=conversation)
+
+
+@router.post("/explain")
+def explain(
+    payload: ExplainRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_active_user),
+) -> dict:
+    conversation = _conversation_or_404(
+        db, owner_user_id=user.id, conversation_id=payload.conversation_id
+    )
+    return _reply.explain(
+        db, owner_user_id=user.id, conversation=conversation, decision=payload.decision
+    )
 
 
 @router.post("/polish")

@@ -114,6 +114,7 @@ export default function DecisionPanel({ result }: { result: AnalyzeResult }) {
         {result.high_danger && (
           <Notice tone="danger">此事不适合用文字处理，建议当面或电话沟通。</Notice>
         )}
+        <p className="text-[13px] text-ink-secondary">信息充足度 {result.sufficiency_percent}%</p>
         {!result.context_sufficient && (
           <Notice tone="warning">上下文较少，本次判断仅供参考。</Notice>
         )}

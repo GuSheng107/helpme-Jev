@@ -43,6 +43,7 @@ export interface AnalyzeResult {
   more: JudgeItem[]
   high_danger: boolean
   context_sufficient: boolean
+  sufficiency_percent: number
   trace_id: string
   model: string
   latency_ms: number
@@ -134,6 +135,16 @@ export function evaluateReply(conversationId: number, text: string) {
 
 export function clarify(conversationId: number) {
   return api.post<{ questions: string[] }>('/api/chat/clarify', { conversation_id: conversationId })
+}
+
+export function explainDecision(conversationId: number, decision: AnalyzeResult) {
+  const picked = Object.fromEntries(
+    [...decision.panel, ...decision.more].map((item) => [item.key, { text: item.text, value: item.value }]),
+  )
+  return api.post<{ reason: string }>('/api/chat/explain', {
+    conversation_id: conversationId,
+    decision: picked,
+  })
 }
 
 export function polish(text: string, kind: 'chat' | 'reply' | 'question') {

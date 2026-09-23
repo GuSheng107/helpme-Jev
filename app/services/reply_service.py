@@ -29,6 +29,10 @@ _CLARIFY_PROMPT = """The judgment lacks context. Ask the user 1 to 3 short quest
 Return JSON: {"questions":["..."]}
 Do not give reply advice."""
 
+_EXPLAIN_PROMPT = """Explain in 2 Chinese sentences why the judgment reached this decision, using only the given decision and messages.
+Return JSON: {"reason":"..."}
+Do not suggest a reply. This is an interpretation, not a new decision."""
+
 _POLISH_PROMPTS = {
     "chat": "Polish the pasted chat line in the same language. Fix typos and ambiguity, keep the tone. Return JSON: {\"text\":\"...\"}",
     "reply": "Polish this reply in the same language. Keep the meaning, make it sound like the sender. Return JSON: {\"text\":\"...\"}",
@@ -71,6 +75,12 @@ class ReplyService:
         )
         if not rows:
             raise DomainError(DomainErrorCode.VALIDATION_FAILED, "暂无内容", status_code=422)
+        if _high_danger(decision):
+            raise DomainError(
+                DomainErrorCode.VALIDATION_FAILED,
+                "此事不适合用文字处理，建议当面或电话沟通。",
+                status_code=422,
+            )
         llm = _analyze._require_provider(db, owner_user_id=owner_user_id, kind="llm")
         jev = _analyze._require_provider(db, owner_user_id=owner_user_id, kind="jev")
         payload = {
@@ -193,6 +203,34 @@ class ReplyService:
         cleaned = [str(item).strip() for item in questions if str(item).strip()][:3]
         return {"questions": cleaned}
 
+    def explain(self, db: Session, *, owner_user_id: int, conversation: Conversation, decision: dict) -> dict:
+        rows = _messages.list_by_conversation(
+            db, conversation_id=conversation.id, limit=RECENT_MESSAGE_LIMIT
+        )
+        llm = _analyze._require_provider(db, owner_user_id=owner_user_id, kind="llm")
+        result = chat_json(
+            endpoint_url=llm.endpoint_url,
+            api_key=_providers.decrypt_key(llm),
+            model=llm.model,
+            messages=[
+                {"role": "system", "content": _EXPLAIN_PROMPT},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "decision": decision,
+                            "messages": [{"from": row.role, "text": row.content} for row in rows],
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+        )
+        reason = str(result.payload.get("reason") or "").strip() if result.ok else ""
+        if not reason:
+            raise DomainError(DomainErrorCode.LLM_UPSTREAM_ERROR, "说明未生成，请重试。", status_code=502)
+        return {"reason": reason}
+
     def polish(self, db: Session, *, owner_user_id: int, text: str, kind: str) -> dict:
         llm = _analyze._require_provider(db, owner_user_id=owner_user_id, kind="llm")
         result = chat_json(
@@ -233,6 +271,16 @@ def _three(raw: object) -> list[str] | None:
     if len(texts) < 3:
         return None
     return texts[:3]
+
+
+def _high_danger(decision: dict) -> bool:
+    item = decision.get("danger_level") if isinstance(decision, dict) else None
+    if not isinstance(item, dict):
+        return False
+    try:
+        return float(item.get("value") or 0) >= 8
+    except (TypeError, ValueError):
+        return False
 
 
 def _text(decision: dict, key: str) -> str:

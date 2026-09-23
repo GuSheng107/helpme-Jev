@@ -153,6 +153,7 @@ def present_answers(answers: dict) -> dict:
         "more": [item for item in items if item["key"] not in PANEL_KEYS],
         "high_danger": (danger.get("value") or 0) >= HIGH_DANGER_LEVEL,
         "context_sufficient": sufficient.get("value") != "false",
+        "sufficiency_percent": round((sufficient.get("probability") or 0) * 100),
     }
 
 

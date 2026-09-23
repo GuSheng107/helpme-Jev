@@ -82,7 +82,13 @@ class _Router:
             else:
                 body = self.jev_body if self.jev_body is not None else _jev_answers()
             return _FakeResponse(self.jev_status, body)
+        system = json["messages"][0]["content"]
         text = json["messages"][1]["content"]
+        if "why the judgment" in system:
+            return _FakeResponse(
+                200,
+                {"choices": [{"message": {"content": json_dumps({"reason": "对方在确认你是否在意。"})}}]},
+            )
         if text.startswith("{"):
             incoming = json_loads(text)
             if "lines" in incoming:
@@ -198,6 +204,7 @@ def test_present_answers_uses_local_labels_and_high_danger() -> None:
     assert danger["tone"] == "warning"
     assert view["high_danger"] is False
     assert view["context_sufficient"] is True
+    assert view["sufficiency_percent"] == 90
 
     hot = dict(_jev_answers()["answers"])
     hot["danger_level"] = {"score": 8.6}
@@ -368,3 +375,34 @@ def test_polish_replaces_and_clarify_asks(
     asked = client.post("/api/chat/clarify", headers=headers, json={"conversation_id": conv_id})
     assert asked.status_code == 200, asked.text
     assert asked.json()["questions"] == ["上次是因为什么？"]
+
+
+def test_high_danger_refuses_candidates(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token = _make_user(client, db, "dangeruser")
+    headers = _auth(token)
+    _configure(client, headers)
+    conv_id = _conversation(client, headers)
+    client.post(
+        f"/api/conversations/{conv_id}/messages",
+        json={"role": "other", "content": "别烦我。"},
+        headers=headers,
+    )
+    _patch(monkeypatch, _Router())
+    refused = client.post(
+        "/api/chat/reply",
+        headers=headers,
+        json={
+            "conversation_id": conv_id,
+            "decision": {"danger_level": {"value": 9, "text": "9/9"}},
+        },
+    )
+    assert refused.status_code == 422
+    explained = client.post(
+        "/api/chat/explain",
+        headers=headers,
+        json={"conversation_id": conv_id, "decision": {"true_intent": {"text": "想确认你在不在意"}}},
+    )
+    assert explained.status_code == 200, explained.text
+    assert explained.json()["reason"] == "对方在确认你是否在意。"
