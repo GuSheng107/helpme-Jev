@@ -11,7 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import account, auth, chat, conversations, providers
+from .api import account, auth, chat, conversations, personas, providers, scenarios
 from .core.config import get_settings
 from .domain.errors import DomainError, DomainErrorCode
 from .services.bootstrap import bootstrap
@@ -81,8 +81,10 @@ def health() -> dict[str, object]:
 app.include_router(auth.router)
 app.include_router(account.router)
 app.include_router(providers.router)
+app.include_router(scenarios.router)
 app.include_router(conversations.router)
 app.include_router(chat.router)
+app.include_router(personas.router)
 
 # ---------------------------------------------------------------- 静态托管
 # 生产模式下由后端托管前端构建产物（单端口部署）。

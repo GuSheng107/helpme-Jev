@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from sqlalchemy import inspect
+from sqlalchemy import inspect, select
 from sqlalchemy.orm import Session
 
 from ..core.config import get_settings
@@ -118,6 +118,53 @@ def purge_stale_sessions(db: Session) -> int:
     return purged
 
 
+def ensure_builtin_scenarios(db: Session) -> None:
+    """内置场景（恋爱 / 职场）播种：题目快照来自代码，幂等。
+
+    题目的**唯一来源是代码**（scenarios/ 包），场景行只是身份 + 快照；
+    判断 / 建模时按 ``kind`` 回代码取题，快照仅供导出与后续自定义编辑。
+    """
+    import json
+
+    from ..repositories.models import Scenario
+    from ..scenarios.packs import all_packs
+    from ..scenarios.persona_questions import persona_questions_for
+
+    names = {
+        "romance": ("恋爱助手", "亲密关系沟通：意图、需求、情绪与危险度。"),
+        "workplace": ("职场助手", "职场沟通：同事 / 上下级 / 客户的意图、利害与最佳动作。"),
+    }
+    for pack in all_packs().values():
+        name, description = names.get(pack.kind, (pack.kind, ""))
+        judge = json.dumps(pack.questions(), ensure_ascii=False)
+        persona = json.dumps(persona_questions_for(pack.kind, "other"), ensure_ascii=False)
+        row = (
+            db.scalars(
+                select(Scenario).where(
+                    Scenario.owner_user_id.is_(None), Scenario.slug == pack.kind
+                )
+            ).first()
+        )
+        if row is None:
+            db.add(
+                Scenario(
+                    owner_user_id=None,
+                    slug=pack.kind,
+                    name=name,
+                    kind=pack.kind,
+                    description=description,
+                    judge_questions=judge,
+                    persona_questions=persona,
+                    is_builtin=True,
+                )
+            )
+        elif row.judge_questions != judge:
+            # 代码里的题目改了 → 刷新快照（内置场景只读，不会丢用户编辑）
+            row.judge_questions = judge
+            row.persona_questions = persona
+    db.commit()
+
+
 def bootstrap() -> None:
     """应用启动时的引导流程。"""
     # APP_SECRET 必须在启动时就校验，避免运行到一半才炸
@@ -132,3 +179,4 @@ def bootstrap() -> None:
     with SessionLocal() as db:
         purge_stale_sessions(db)
         ensure_default_admin(db)
+        ensure_builtin_scenarios(db)

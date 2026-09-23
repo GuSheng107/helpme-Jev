@@ -1,4 +1,7 @@
-"""候选回复：母语起草，注释翻译后交给 Jev 排序，分数只以中文返回。"""
+"""候选回复：母语起草，注释翻译后交给 Jev 排序，分数只以中文返回。
+
+恋爱与职场共用一条链路；起草提示词、利害题 key、拦截文案按场景包区分。
+"""
 
 from __future__ import annotations
 
@@ -13,17 +16,37 @@ from ..domain.errors import DomainError, DomainErrorCode
 from ..repositories.conversations_repo import MessageRepository
 from ..repositories.models import Conversation
 from ..scenarios.builders import choice
+from ..scenarios.packs import JudgePack
 from .analyze_service import RECENT_MESSAGE_LIMIT, AnalyzeService
 from .provider_service import ProviderService
+from .scenario_service import pack_of
 
 _messages = MessageRepository()
 _providers = ProviderService()
 _analyze = AnalyzeService()
 
-_DRAFT_PROMPT = """Write exactly 3 reply candidates in the user's language (Chinese unless the chat is English).
-They must follow the given decision. Do not decide a different action.
-Return JSON: {"replies":["...","...","..."]}
-Each reply is one or two sentences, distinct in tone, no explanation, no English translation."""
+_DRAFT_PROMPTS: dict[str, str] = {
+    "romance": (
+        "Write exactly 3 reply candidates in the user's language (Chinese unless the chat is English). "
+        "They must follow the given decision. Do not decide a different action. "
+        "Sound like a caring partner, not a customer-service agent. "
+        "Return JSON: {\"replies\":[\"...\",\"...\",\"...\"]}\n"
+        "Each reply is one or two sentences, distinct in tone, no explanation, no English translation."
+    ),
+    "workplace": (
+        "Write exactly 3 reply candidates in the user's language (Chinese unless the chat is English). "
+        "They must follow the given decision. Do not decide a different action. "
+        "Keep a professional register: concrete, honest, no fluff, no over-apologizing, "
+        "no promises that were not decided. "
+        "Return JSON: {\"replies\":[\"...\",\"...\",\"...\"]}\n"
+        "Each reply is one or two sentences, distinct in tone, no explanation, no English translation."
+    ),
+}
+
+_HIGH_RISK_MESSAGES: dict[str, str] = {
+    "romance": "此事不适合用文字处理，建议当面或电话沟通。",
+    "workplace": "这件事利害不小，建议先电话或当面对齐，再落成文字。",
+}
 
 _CLARIFY_PROMPT = """The judgment lacks context. Ask the user 1 to 3 short questions in Chinese that would fill the gap.
 Return JSON: {"questions":["..."]}
@@ -75,21 +98,23 @@ class ReplyService:
         )
         if not rows:
             raise DomainError(DomainErrorCode.VALIDATION_FAILED, "暂无内容", status_code=422)
-        if _high_danger(decision):
+        pack = pack_of(db, conversation)
+        if _high_risk(decision, pack):
             raise DomainError(
                 DomainErrorCode.VALIDATION_FAILED,
-                "此事不适合用文字处理，建议当面或电话沟通。",
+                _HIGH_RISK_MESSAGES.get(pack.kind, _HIGH_RISK_MESSAGES["romance"]),
                 status_code=422,
             )
         llm = _analyze._require_provider(db, owner_user_id=owner_user_id, kind="llm")
         jev = _analyze._require_provider(db, owner_user_id=owner_user_id, kind="jev")
         payload = {
             "relationship": conversation.relationship,
+            "scenario": pack.kind,
             "decision": {
                 "intent": _text(decision, "true_intent"),
                 "action": _text(decision, "best_action"),
-                "needs": _text(decision, "she_needs"),
-                "danger": _text(decision, "danger_level"),
+                "needs": _text(decision, pack.needs_key),
+                "risk": _text(decision, pack.risk_key),
             },
             "messages": [{"from": row.role, "text": row.content} for row in rows],
         }
@@ -98,7 +123,7 @@ class ReplyService:
             api_key=_providers.decrypt_key(llm),
             model=llm.model,
             messages=[
-                {"role": "system", "content": _DRAFT_PROMPT},
+                {"role": "system", "content": _DRAFT_PROMPTS.get(pack.kind, _DRAFT_PROMPTS["romance"])},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ],
         )
@@ -273,12 +298,12 @@ def _three(raw: object) -> list[str] | None:
     return texts[:3]
 
 
-def _high_danger(decision: dict) -> bool:
-    item = decision.get("danger_level") if isinstance(decision, dict) else None
+def _high_risk(decision: dict, pack: JudgePack) -> bool:
+    item = decision.get(pack.risk_key) if isinstance(decision, dict) else None
     if not isinstance(item, dict):
         return False
     try:
-        return float(item.get("value") or 0) >= 8
+        return float(item.get("value") or 0) >= pack.risk_threshold
     except (TypeError, ValueError):
         return False
 

@@ -1,23 +1,28 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError } from '../api/client'
 import {
   analyze,
   appendMessage,
   clarify,
+  defaultLlmSupportsVision,
   draftReplies,
   explainDecision,
   evaluateReply,
+  fetchMaterialFile,
   polish,
   createConversation,
   listConversations,
   listMessages,
+  listScenarios,
   reflect,
   revertReflection,
+  uploadImage,
   type AnalyzeResult,
   type Candidate,
   type ChatMessage,
   type Conversation,
   type Reflection,
+  type Scenario,
 } from '../api/chat'
 import Button from '../components/Button'
 import DecisionPanel from '../components/DecisionPanel'
@@ -26,10 +31,27 @@ import { EmptyState, Notice, PageShell } from '../components/layout'
 
 interface Props {
   onOpenSettings: () => void
+  onOpenPersonas: () => void
   onLogout: () => void
 }
 
-export default function ChatPage({ onOpenSettings, onLogout }: Props) {
+/** 我方消息的来源徽标：manual 不标（默认就是自己写的），标出来的是特殊的 */
+const SOURCE_BADGES: Partial<Record<ChatMessage['source'], string>> = {
+  candidate: '采用推荐',
+  rewrite: '改写推荐',
+  import: '导入',
+}
+
+/** 输入框里一张待发送的图（已上传，objectURL 供预览） */
+interface PendingImage {
+  materialId: number
+  url: string
+}
+
+/** 一条消息最多带的图片数 */
+const MAX_IMAGES = 9
+
+export default function ChatPage({ onOpenSettings, onOpenPersonas, onLogout }: Props) {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [currentId, setCurrentId] = useState<number | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -37,17 +59,25 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
   const [role, setRole] = useState<'other' | 'me'>('other')
   const [creating, setCreating] = useState(false)
   const [name, setName] = useState('')
-  const [relationship, setRelationship] = useState('女朋友')
+  const [relationship, setRelationship] = useState('')
+  const [scenarios, setScenarios] = useState<Scenario[]>([])
+  const [scenarioId, setScenarioId] = useState<number | null>(null)
   const [result, setResult] = useState<AnalyzeResult | null>(null)
   const [reflection, setReflection] = useState<Reflection | null>(null)
   const [step, setStep] = useState('')
   const [candidates, setCandidates] = useState<Candidate[]>([])
   const [questions, setQuestions] = useState<string[]>([])
   const [previousDraft, setPreviousDraft] = useState<string | null>(null)
+  const [pickedText, setPickedText] = useState<string | null>(null)
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [listOpen, setListOpen] = useState(false)
+  const [images, setImages] = useState<PendingImage[]>([])
+  const [uploading, setUploading] = useState(false)
+  const [visionReady, setVisionReady] = useState<boolean | null>(null)
+  const [lightbox, setLightbox] = useState<string | null>(null)
+  const fileInput = useRef<HTMLInputElement>(null)
 
   const current = conversations.find((item) => item.id === currentId) ?? null
 
@@ -59,6 +89,13 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
     void reloadList().catch((err: unknown) => {
       setError(err instanceof ApiError ? err.message : '聊天列表加载失败')
     })
+    listScenarios()
+      .then((rows) => {
+        setScenarios(rows)
+        setScenarioId(rows[0]?.id ?? null)
+      })
+      .catch(() => undefined)
+    void defaultLlmSupportsVision().then(setVisionReady)
   }, [reloadList])
 
   useEffect(() => {
@@ -66,6 +103,10 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
       setMessages([])
       return
     }
+    setImages((prev) => {
+      prev.forEach((item) => URL.revokeObjectURL(item.url))
+      return []
+    })
     void listMessages(currentId)
       .then(setMessages)
       .catch((err: unknown) => setError(err instanceof ApiError ? err.message : '内容加载失败'))
@@ -80,6 +121,7 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
         title: `和${name.trim()}的聊天`,
         counterpart_name: name.trim(),
         relationship: relationship.trim(),
+        scenario_id: scenarioId,
       })
       await reloadList()
       setCurrentId(created.id)
@@ -95,14 +137,78 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
     }
   }
 
+  async function addImages(files: File[]) {
+    if (currentId === null) return
+    const images_ = files.filter((file) => file.type.startsWith('image/'))
+    if (images_.length === 0) return
+    if (visionReady === false) {
+      setError('当前默认语言模型不支持看图。可在设置里换用支持视觉的模型后再贴图。')
+      return
+    }
+    const room = MAX_IMAGES - images.length
+    if (room <= 0) {
+      setError(`一条消息最多带 ${MAX_IMAGES} 张图`)
+      return
+    }
+    const accepted = images_.slice(0, room)
+    if (accepted.length < images_.length) setError(`一条消息最多带 ${MAX_IMAGES} 张图，多余的已忽略`)
+    setUploading(true)
+    setError(null)
+    try {
+      for (const file of accepted) {
+        const saved = await uploadImage(currentId, file)
+        setImages((prev) => [...prev, { materialId: saved.id, url: URL.createObjectURL(file) }])
+      }
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '图片上传未完成')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  function onPaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
+    const files = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null)
+    if (files.length === 0) return
+    event.preventDefault()
+    void addImages(files)
+  }
+
+  function removeImage(materialId: number) {
+    setImages((prev) => {
+      const target = prev.find((item) => item.materialId === materialId)
+      if (target) URL.revokeObjectURL(target.url)
+      return prev.filter((item) => item.materialId !== materialId)
+    })
+  }
+
   async function send() {
-    if (currentId === null || !draft.trim()) return
+    if (currentId === null || (!draft.trim() && images.length === 0)) return
     setBusy(true)
     setError(null)
     try {
-      const message = await appendMessage(currentId, role, draft.trim())
+      const source =
+        role === 'me' && pickedText !== null
+          ? draft.trim() === pickedText
+            ? 'candidate'
+            : 'rewrite'
+          : 'manual'
+      const message = await appendMessage(
+        currentId,
+        role,
+        draft.trim(),
+        source,
+        images.map((item) => item.materialId),
+      )
+      setPickedText(null)
       setMessages((prev) => [...prev, message])
       setDraft('')
+      setImages((prev) => {
+        prev.forEach((item) => URL.revokeObjectURL(item.url))
+        return []
+      })
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '保存失败')
     } finally {
@@ -244,8 +350,22 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
           {creating && (
             <div className="space-y-2 px-4 pb-3">
               <Field label="对方" value={name} onChange={(event) => setName(event.target.value)} />
+              <div>
+                <span className="mb-1 block text-[12px] text-ink-muted">场景</span>
+                <select
+                  className="w-full rounded-[6px] border border-border px-2 py-1.5 text-[14px] text-ink"
+                  value={scenarioId ?? ''}
+                  onChange={(event) =>
+                    setScenarioId(event.target.value === '' ? null : Number(event.target.value))
+                  }
+                >
+                  {scenarios.map((item) => (
+                    <option key={item.id} value={item.id}>{item.name}</option>
+                  ))}
+                </select>
+              </div>
               <Field
-                label="关系"
+                label="关系（可选，如 同事 / 恋人 / 客户）"
                 value={relationship}
                 onChange={(event) => setRelationship(event.target.value)}
               />
@@ -269,10 +389,16 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
                       setCurrentId(item.id)
                       setResult(null)
                       setReflection(null)
+                      setPickedText(null)
                       setListOpen(false)
                     }}
                   >
-                    <span className="block truncate">{item.counterpart_name || item.title}</span>
+                    <span className="flex items-center gap-1.5">
+                      <span className="truncate">{item.counterpart_name || item.title}</span>
+                      {item.scenario_kind === 'workplace' && (
+                        <span className="shrink-0 rounded-[4px] bg-surface-muted px-1 text-[11px] text-ink-muted">职场</span>
+                      )}
+                    </span>
                     <span className="block truncate text-[12px] text-ink-muted">{item.relationship}</span>
                   </button>
                 </li>
@@ -296,6 +422,9 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
               </span>
             </div>
             <div className="flex items-center gap-2">
+              <Button size="sm" onClick={onOpenPersonas}>
+                人设
+              </Button>
               <Button size="sm" onClick={onOpenSettings}>
                 设置
               </Button>
@@ -323,7 +452,7 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
           ) : (
             <>
               {step && <p className="px-4 pt-3 text-[13px] text-ink-muted">{step}</p>}
-              {result && <DecisionPanel result={result} />}
+              {result && <DecisionPanel result={result} scenarioKind={current?.scenario_kind ?? 'romance'} />}
               {result && (
                 <div className="mx-4 mt-3">
                   <button type="button" className="text-[13px] text-primary" onClick={() => void explain()}>
@@ -360,6 +489,7 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
                         onClick={() => {
                           setRole('me')
                           setDraft(item.text)
+                          setPickedText(item.text)
                         }}
                       >
                         <span className="text-[14px] leading-[22px] text-ink">{item.text}</span>
@@ -373,29 +503,55 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
                 {messages.length === 0 && (
                   <EmptyState title="暂无内容" description="在下方粘贴对方的话，发送者选「对方」，然后保存。" />
                 )}
-                {messages.map((message) => (
-                  <div
-                    key={message.id}
-                    className={`flex ${message.role === 'me' ? 'justify-end' : 'justify-start'}`}
-                  >
-                    <p
-                      className={`max-w-[80%] whitespace-pre-wrap break-words rounded-[12px] px-3 py-2 text-[14px] leading-[22px] ${
-                        message.role === 'me'
-                          ? 'bg-primary-soft text-ink'
-                          : 'border border-border bg-surface text-ink'
-                      }`}
+                {messages.map((message) => {
+                  const badge = message.role === 'me' ? SOURCE_BADGES[message.source] : undefined
+                  const imageAttachments = (message.attachments ?? []).filter(
+                    (item) => item.type === 'image',
+                  )
+                  return (
+                    <div
+                      key={message.id}
+                      className={`flex flex-col ${message.role === 'me' ? 'items-end' : 'items-start'}`}
                     >
-                      {message.content}
-                    </p>
-                  </div>
-                ))}
+                      {message.content && (
+                        <p
+                          className={`max-w-[80%] whitespace-pre-wrap break-words rounded-[12px] px-3 py-2 text-[14px] leading-[22px] ${
+                            message.role === 'me'
+                              ? 'bg-primary-soft text-ink'
+                              : 'border border-border bg-surface text-ink'
+                          }`}
+                        >
+                          {message.content}
+                        </p>
+                      )}
+                      {imageAttachments.length > 0 && (
+                        <div className="mt-1 flex flex-wrap gap-1.5">
+                          {imageAttachments.map((attachment) => (
+                            <AttachmentThumb
+                              key={attachment.id}
+                              materialId={attachment.id}
+                              onOpen={(url) => setLightbox(url)}
+                            />
+                          ))}
+                        </div>
+                      )}
+                      {badge && (
+                        <span className="mt-0.5 text-[11px] text-ink-muted">{badge}</span>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
               <div className="sticky bottom-0 border-t border-border bg-surface px-4 py-3 pb-[max(12px,env(safe-area-inset-bottom))]">
                 <div className="mb-2 flex gap-2">
                   <button
                     type="button"
                     className={`h-8 rounded-[6px] px-3 text-[13px] ${role === 'other' ? 'bg-primary text-white' : 'border border-border text-ink'}`}
-                    onClick={() => setRole('other')}
+                    onClick={() => {
+                      setRole('other')
+                      // 切去保存对方消息时，候选已不适用，清掉免得误记为「改写」
+                      setPickedText(null)
+                    }}
                   >
                     对方
                   </button>
@@ -407,12 +563,76 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
                     我
                   </button>
                 </div>
+                {role === 'me' && pickedText !== null && (
+                  <div className="mb-2 flex items-center justify-between gap-2 rounded-[6px] bg-primary-soft px-3 py-1.5">
+                    <p className="text-[12px] leading-5 text-ink-secondary">
+                      {draft.trim() === pickedText
+                        ? '已选用候选，原样发送将记录为「采用推荐」'
+                        : '候选已被改动，发送将记录为「改写推荐」'}
+                    </p>
+                    <button
+                      type="button"
+                      className="shrink-0 text-[12px] text-primary"
+                      onClick={() => setPickedText(null)}
+                    >
+                      按自己写的算
+                    </button>
+                  </div>
+                )}
+                {images.length > 0 && (
+                  <div className="mb-2 flex flex-wrap gap-2">
+                    {images.map((item) => (
+                      <div key={item.materialId} className="relative">
+                        <button
+                          type="button"
+                          className="block h-16 w-16 overflow-hidden rounded-[8px] border border-border"
+                          onClick={() => setLightbox(item.url)}
+                          aria-label="查看大图"
+                        >
+                          <img src={item.url} alt="" className="h-full w-full object-cover" />
+                        </button>
+                        <button
+                          type="button"
+                          className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-ink text-[12px] leading-none text-white"
+                          onClick={() => removeImage(item.materialId)}
+                          aria-label="移除这张图"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                    <span className="self-end text-[11px] text-ink-muted">
+                      {images.length}/{MAX_IMAGES}
+                    </span>
+                  </div>
+                )}
                 <textarea
                   value={draft}
                   onChange={(event) => setDraft(event.target.value)}
+                  onPaste={onPaste}
                   rows={2}
-                  placeholder="粘贴对方发来的内容"
+                  placeholder={
+                    visionReady === false
+                      ? role === 'other'
+                        ? '粘贴对方发来的内容（当前模型不支持看图，图片无法添加）'
+                        : '写下你要回复的话'
+                      : role === 'other'
+                        ? '粘贴对方发来的内容，也可以直接贴聊天截图'
+                        : '写下你要回复的话'
+                  }
                   className="w-full resize-none rounded-[6px] border border-border px-3 py-2 text-ink outline-none"
+                />
+                <input
+                  ref={fileInput}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  multiple
+                  className="hidden"
+                  onChange={(event) => {
+                    const files = Array.from(event.target.files ?? [])
+                    event.target.value = ''
+                    void addImages(files)
+                  }}
                 />
                 {reflection && <MemoryNote reflection={reflection} onUndo={() => void undoReview()} />}
                 {previousDraft !== null && (
@@ -428,6 +648,15 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
                   </button>
                 )}
                 <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
+                  <Button
+                    size="sm"
+                    loading={uploading}
+                    disabled={visionReady === false}
+                    disabledReason="当前默认模型不支持看图"
+                    onClick={() => fileInput.current?.click()}
+                  >
+                    图片
+                  </Button>
                   <Button size="sm" loading={busy} disabled={!draft.trim()} disabledReason="请先输入内容" onClick={() => void polishDraft()}>
                     润色
                   </Button>
@@ -446,7 +675,7 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
                       评估这句
                     </Button>
                   )}
-                  <Button size="sm" loading={busy} disabled={!draft.trim()} disabledReason="请先输入内容" onClick={() => void send()}>
+                  <Button size="sm" loading={busy} disabled={!draft.trim() && images.length === 0} disabledReason="请先输入内容或贴图" onClick={() => void send()}>
                     保存
                   </Button>
                   <Button
@@ -465,7 +694,87 @@ export default function ChatPage({ onOpenSettings, onLogout }: Props) {
           )}
         </section>
       </div>
+      {lightbox !== null && <Lightbox url={lightbox} onClose={() => setLightbox(null)} />}
     </PageShell>
+  )
+}
+
+/** 消息里的图片缩略图：懒加载原图（带鉴权），点击放大。 */
+function AttachmentThumb({
+  materialId,
+  onOpen,
+}: {
+  materialId: number
+  onOpen: (url: string) => void
+}) {
+  const [url, setUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    let objectUrl: string | null = null
+    let alive = true
+    fetchMaterialFile(materialId)
+      .then((blob) => {
+        objectUrl = URL.createObjectURL(blob)
+        if (alive) setUrl(objectUrl)
+      })
+      .catch(() => undefined)
+    return () => {
+      alive = false
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [materialId])
+
+  return (
+    <button
+      type="button"
+      className="block h-16 w-16 overflow-hidden rounded-[8px] border border-border bg-surface-muted"
+      onClick={() => url && onOpen(url)}
+      aria-label="查看大图"
+    >
+      {url ? (
+        <img src={url} alt="" className="h-full w-full object-cover" />
+      ) : (
+        <span className="flex h-full w-full items-center justify-center text-[11px] text-ink-muted">
+          加载中
+        </span>
+      )}
+    </button>
+  )
+}
+
+/** 大图查看：点击任意处或按 Esc 关闭。 */
+function Lightbox({ url, onClose }: { url: string; onClose: () => void }) {
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label="图片预览"
+    >
+      <img
+        src={url}
+        alt=""
+        className="max-h-[85vh] max-w-full rounded-[8px] object-contain"
+        onClick={(event) => event.stopPropagation()}
+      />
+      <button
+        type="button"
+        className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-[18px] leading-none text-ink"
+        onClick={onClose}
+        aria-label="关闭"
+      >
+        ×
+      </button>
+    </div>
   )
 }
 

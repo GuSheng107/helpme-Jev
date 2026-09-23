@@ -140,7 +140,7 @@ helpme-jev/
 | `messages` | id, conversation_id, role(me\|other), content, attachments(JSON), created_at, seq | |
 | `memories` | id, owner_user_id, **subject**(me\|other\|relation), **counterpart_key**, category, content, valid_from, valid_to, confidence, source(auto\|qa\|import\|reflection), evidence(JSON), created_at, updated_at | **记忆条目（用户级）**：LLM 复盘产出，条目化 + 时序。**对象归属**：`me`/`relation` 类 `counterpart_key` 留空＝全局共享；`other` 类**必带对象标识**，装配时按当前对象过滤 —— 否则"她喜欢可颂"会串到别的对象会话 |
 | `memory_reflections` | id, owner_user_id, trace_id, scope(会话范围 / upto_seq), changes(JSON), model, created_at | **复盘记录**：每次 LLM 复盘产出的记忆变更集，可回溯、可撤销 |
-| `personas` | id, owner_user_id, **counterpart_key**, **subject**(me\|other), traits(JSON), evidence(JSON), confidence(JSON), version, updated_at | **人设档案**：与记忆相反，人设**按聊天对象区分** —— 每个对象 × 主体（我/对方）各一份；`counterpart_key` 标识对象，同一对象跨会话共用 |
+| `personas` | id, owner_user_id, **counterpart_key**, **subject**(me\|other), **context**(romance\|workplace), traits(JSON), evidence(JSON), confidence(JSON), version, updated_at | **人设档案**：与记忆相反，人设**按「聊天对象 × 情境」分档** —— 同一个人可能既是恋爱对象又是职场协作方，`counterpart_key` 相同、`context` 不同，各建一份、互不覆盖（皇上 2026-09-23 定） |
 | `session_summaries` | id, conversation_id, **upto_seq**, summary, created_at | 滚动摘要：上下文预算超限时压缩历史 |
 | `clarifications` | id, conversation_id, trace_id, questions(JSON), answers(JSON), created_at | LLM 提问收集信息的记录（可回溯"当时补了什么料"） |
 | `qa_pairs` | id, owner_user_id, conversation_id, question, answer, tags(JSON), source, created_at | **用户提交的 QA 对**（JSON 批量导入）：作为背景知识参与装配与建模 |
@@ -241,24 +241,18 @@ class Scenario:
 | 场景 | 题目集来源 |
 |---|---|
 | **恋爱助手** | **人工预设**：Jarvis 7 题移植 + `emotion`(18 类) + `emotion_intensity`(5 档) |
-| **职场助手** | **agent-first**：参考项目里**没有现成的职场题目集**（Jarvis 仅一套混了恋爱/职场语境的通用题），故改由 **LLM 按场景描述现场生成**，用户确认后落库 |
+| **职场助手** | **人工预设**（皇上 2026-09-23 定，与恋爱同构）：`stakes_level` 利害程度替代危险度、`other_needs` 替代 she_needs、新增 `power_dynamic`（上级/平级/下级/外部），情绪集职场化（被催促/戒备/恼火…），共 10 题 |
 | **通用决策** | 无固定题目，进入「决策工作台」自由提问 |
 
-#### agent-first 的题目生成（职场场景为例）
+#### 内置场景与代码注册表
 
-```text
-用户填写 / 选择场景描述（如"职场沟通：同事 / 上下级 / 客户"）
-      ↓
-LLM 生成题目集草案（noul / choice / score 混排，英文 instructions + 判别规则）
-      ↓
-用户预览、增删改（可再交 LLM 润色修订）
-      ↓
-落库为该场景的 judge_questions / persona_questions
-```
+- 内置场景在启动时播种（幂等），题目的**唯一来源是代码**（`app/scenarios/`）；
+  场景行只存身份 + 题目快照，判断 / 建模时按 `kind` 回代码取题
+- 判断与面板渲染共用一条链路：差异全部收在 `JudgePack`（题目、标题、标签、利害题 key 与阈值）
+- 新增场景 = 加一个题目模块 + 在注册表登记，不改面板代码
 
-> **理由**：题目集的判别规则本质是"业务知识"，人工硬写一套通用题容易失真；
-> 交 LLM 按场景生成、人工把关，是 **agent-first** 的合理落法。
-> **生成结果必须经用户确认才落库**，不自作主张。
+> **agent-first 的位置后移**：自定义场景仍走 LLM 生成题目草案 → 用户确认落库（§8.3），
+> 预设场景不再依赖生成。
 
 ### 8.3 自定义场景
 
@@ -387,6 +381,10 @@ LLM 生成题目集草案（noul / choice / score 混排，英文 instructions +
 
 > **人设题集的归属**：人设题**挂在场景上**（`scenarios.persona_questions`），随场景切换 ——
 > 恋爱场景出「依恋类型 / 爱的五种语言 / 大五」，职场场景出「DISC / 冲突风格 / 大五」，**两者不混用**。
+>
+> **同一对象跨情境**（皇上 2026-09-23 定）：人设按「对象 × 情境」分档存储（`personas.context`），
+> 恋爱情境与职场情境各一份档案、各自更新版本，互不覆盖 —— 一个人在恋人面前和在会议室里
+> 完全可能判若两人，合成一份反而失真。
 
 #### 证据来源分三档（置信度不同）
 
@@ -425,7 +423,7 @@ LLM 针对**该维度**生成追问 → 用户补充 → 重新建模。
 
 #### 聊天记录导入的解析约定
 
-- 支持「`我:` / `她:` 内容」逐行格式，角色标签可由用户自定义映射（如「老婆」「宝宝」→ 对方）
+- 支持「`我:` / `对方:` 内容」逐行格式，角色标签可由用户自定义映射（如「老婆」「宝宝」「名字」→ 对方）；默认认 `她` / `他` / `TA`，**不预设对方性别**
 - 解析结果写入 `messages` 并标 `source=import`
 - **导入前必须给用户预览确认**（认出多少条、角色判对没有），**绝不静默入库**
 

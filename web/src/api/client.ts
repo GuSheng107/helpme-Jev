@@ -99,6 +99,63 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   return payload as T
 }
 
+/** multipart 上传（图片等二进制）。 */
+export async function postForm<T>(path: string, form: FormData): Promise<T> {
+  const headers = new Headers()
+  const token = getToken()
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+
+  const response = await fetch(path, { method: 'POST', headers, body: form })
+  const text = await response.text()
+  let payload: unknown = null
+  if (text) {
+    try {
+      payload = JSON.parse(text)
+    } catch {
+      payload = null
+    }
+  }
+  if (!response.ok) {
+    const errorBody = (payload as { error?: ApiErrorBody } | null)?.error
+    if (response.status === 401) {
+      clearToken()
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT))
+    }
+    throw new ApiError(
+      response.status,
+      errorBody ?? { code: 'UNKNOWN', message: `上传失败（HTTP ${response.status}）` },
+    )
+  }
+  return payload as T
+}
+
+/** 带鉴权取二进制（图片原图），供 <img> 用 objectURL 展示。 */
+export async function fetchBlob(path: string): Promise<Blob> {
+  const headers = new Headers()
+  const token = getToken()
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+
+  const response = await fetch(path, { headers })
+  if (!response.ok) {
+    const text = await response.text().catch(() => '')
+    let errorBody: ApiErrorBody | undefined
+    try {
+      errorBody = (JSON.parse(text) as { error?: ApiErrorBody }).error
+    } catch {
+      /* 非 JSON 错误体 */
+    }
+    if (response.status === 401) {
+      clearToken()
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT))
+    }
+    throw new ApiError(
+      response.status,
+      errorBody ?? { code: 'UNKNOWN', message: `加载失败（HTTP ${response.status}）` },
+    )
+  }
+  return response.blob()
+}
+
 export const api = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body?: unknown, notifyUnauthorized = true) =>

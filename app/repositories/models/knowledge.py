@@ -61,9 +61,10 @@ class MemoryReflection(Base, TimestampMixin):
 
 
 class Persona(Base, TimestampMixin):
-    """人设档案 —— **按聊天对象区分**（与记忆相反）。
+    """人设档案 —— 按「聊天对象 × 情境」区分（与记忆相反）。
 
-    每个 ``counterpart_key`` × ``subject`` 各一份；``traits`` 存结构化人格维度，
+    同一个人可能既是恋爱对象又是职场协作方：``counterpart_key`` 相同、
+    ``context`` 不同，各建一份，互不覆盖。``traits`` 存结构化人格维度，
     ``confidence`` 不足时**保留旧档案不覆盖**。
     """
 
@@ -75,6 +76,9 @@ class Persona(Base, TimestampMixin):
     )
     counterpart_key: Mapped[str] = mapped_column(String(128), index=True, nullable=False, default="")
     subject: Mapped[str] = mapped_column(String(8), nullable=False, default="other")  # me | other
+    context: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="romance", index=True
+    )  # romance | workplace
     traits: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     evidence: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)

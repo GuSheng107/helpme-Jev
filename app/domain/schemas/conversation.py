@@ -34,6 +34,8 @@ class ConversationView(BaseModel):
     counterpart_name: str
     relationship: str
     scenario_id: int | None
+    # 场景 kind（romance / workplace / …），前端据此切面板文案与人设情境
+    scenario_kind: str = "romance"
     message_count: int
     created_at: str
     updated_at: str
@@ -43,6 +45,10 @@ class MessageCreate(StrictModel):
     role: Literal["me", "other"]
     content: str = Field(default="", max_length=4000)
     attachments: list[dict] = Field(default_factory=list, max_length=MAX_ATTACHMENTS)
+    # 图片素材 id：后端解析成 attachments JSON（type=image），
+    # 上限 9 张（用户 2026-09-23 定）
+    attachment_ids: list[int] = Field(default_factory=list, max_length=9)
+    source: str = Field(default="manual", pattern="^(manual|candidate|rewrite|import)$")
 
     @field_validator("attachments")
     @classmethod

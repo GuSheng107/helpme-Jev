@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, File, Query, Response, UploadFile
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -45,6 +46,10 @@ def _counterpart_key(name: str, fallback: str) -> str:
 
 
 def _conversation_view(db: Session, row: Conversation) -> ConversationView:
+    kind = "romance"
+    if row.scenario_id is not None:
+        scenario = db.get(Scenario, row.scenario_id)
+        kind = (scenario.kind if scenario else None) or "romance"
     return ConversationView(
         id=row.id,
         title=row.title,
@@ -52,6 +57,7 @@ def _conversation_view(db: Session, row: Conversation) -> ConversationView:
         counterpart_name=row.counterpart_name,
         relationship=row.relationship,
         scenario_id=row.scenario_id,
+        scenario_kind=kind,
         message_count=_messages.count(db, conversation_id=row.id),
         created_at=iso_utc(row.created_at) or "",
         updated_at=iso_utc(row.updated_at) or "",
@@ -183,6 +189,38 @@ def list_messages(
     return [_message_view(row) for row in rows]
 
 
+@router.post("/{conversation_id}/images", status_code=201)
+async def upload_image(
+    conversation_id: int,
+    file: UploadFile = File(),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_active_user),
+) -> dict:
+    """会话内贴图：只有默认 LLM 支持看图时才可用（系统不做 OCR）。"""
+    from ..services.analyze_service import AnalyzeService
+    from ..services.image_service import save_image
+
+    conversation = _require_conversation(
+        db, owner_user_id=user.id, conversation_id=conversation_id
+    )
+    llm = AnalyzeService()._require_provider(db, owner_user_id=user.id, kind="llm")
+    if not llm.supports_vision:
+        raise DomainError(
+            DomainErrorCode.VALIDATION_FAILED,
+            "当前默认语言模型不支持看图，无法添加图片。可在设置里换用支持视觉的模型。",
+            status_code=422,
+        )
+    content = await file.read()
+    row = save_image(
+        db,
+        owner_user_id=user.id,
+        conversation_id=conversation.id,
+        content=content,
+        mime=(file.content_type or "").split(";")[0].strip(),
+    )
+    return {"id": row.id, "mime": row.mime, "bytes": row.bytes}
+
+
 @router.post("/{conversation_id}/messages", response_model=MessageView, status_code=201)
 def append_message(
     conversation_id: int,
@@ -193,7 +231,8 @@ def append_message(
     conversation = _require_conversation(
         db, owner_user_id=user.id, conversation_id=conversation_id
     )
-    if not payload.content.strip() and not payload.attachments:
+    attachments = _resolve_attachments(db, payload=payload, conversation=conversation, user=user)
+    if not payload.content.strip() and not attachments:
         raise DomainError(
             DomainErrorCode.VALIDATION_FAILED, "消息内容不能为空", status_code=422
         )
@@ -202,8 +241,8 @@ def append_message(
         seq=_messages.next_seq(db, conversation_id=conversation.id),
         role=payload.role,
         content=payload.content,
-        attachments=json.dumps(payload.attachments, ensure_ascii=False),
-        source="manual",
+        attachments=json.dumps(attachments, ensure_ascii=False),
+        source=payload.source,
     )
     try:
         _messages.add(db, row)
@@ -215,3 +254,38 @@ def append_message(
             DomainErrorCode.CONFLICT, "消息序号冲突，请重试", status_code=409
         ) from exc
     return _message_view(row)
+
+
+def _resolve_attachments(
+    db: Session, *, payload: MessageCreate, conversation: Conversation, user: User
+) -> list[dict]:
+    """attachment_ids（图片素材）→ attachments JSON；校验归属与总数上限。"""
+    from ..repositories.models import Material
+
+    attachments = [dict(item) for item in payload.attachments if isinstance(item, dict)]
+    if payload.attachment_ids:
+        rows = {
+            row.id: row
+            for row in db.scalars(
+                select(Material).where(
+                    Material.id.in_(payload.attachment_ids),
+                    Material.owner_user_id == user.id,
+                )
+            ).all()
+        }
+        for material_id in payload.attachment_ids:
+            material = rows.get(material_id)
+            if material is None or material.conversation_id != conversation.id:
+                raise DomainError(
+                    DomainErrorCode.VALIDATION_FAILED,
+                    "图片不存在或不属于这个会话",
+                    status_code=422,
+                )
+            attachments.append(
+                {"type": "image", "id": material.id, "mime": material.mime or ""}
+            )
+    if len(attachments) > 9:
+        raise DomainError(
+            DomainErrorCode.VALIDATION_FAILED, "一条消息最多带 9 张图", status_code=422
+        )
+    return attachments

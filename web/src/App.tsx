@@ -4,9 +4,10 @@ import { fetchMe, logout, type UserSummary } from './api/auth'
 import ChangePasswordPage from './pages/ChangePasswordPage'
 import ChatPage from './pages/ChatPage'
 import LoginPage from './pages/LoginPage'
+import PersonaPage from './pages/PersonaPage'
 import SettingsPage from './pages/SettingsPage'
 
-type Page = 'chat' | 'settings'
+type Page = 'chat' | 'settings' | 'personas'
 
 /**
  * 轻量路由（状态机）；页面多了再引入路由库。
@@ -65,6 +66,10 @@ export default function App() {
     return <ChangePasswordPage user={user} forced onDone={setUser} />
   }
 
+  if (page === 'personas') {
+    return <PersonaPage onBack={() => setPage('chat')} />
+  }
+
   if (page === 'settings') {
     return (
       <SettingsPage
@@ -74,5 +79,11 @@ export default function App() {
     )
   }
 
-  return <ChatPage onLogout={handleLogout} onOpenSettings={() => setPage('settings')} />
+  return (
+    <ChatPage
+      onLogout={handleLogout}
+      onOpenSettings={() => setPage('settings')}
+      onOpenPersonas={() => setPage('personas')}
+    />
+  )
 }

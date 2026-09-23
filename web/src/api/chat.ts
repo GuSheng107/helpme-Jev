@@ -1,10 +1,19 @@
-import { api } from './client'
+import { api, fetchBlob, postForm } from './client'
+
+export interface ImageAttachment {
+  type: 'image'
+  id: number
+  mime: string
+}
 
 export interface ChatMessage {
   id: number
   seq: number
   role: 'me' | 'other'
   content: string
+  attachments: ImageAttachment[]
+  /** 这条内容怎么来的：manual=自己写的 candidate=采用推荐 rewrite=改写推荐 import=导入 */
+  source: 'manual' | 'candidate' | 'rewrite' | 'import'
   created_at: string
 }
 
@@ -15,7 +24,17 @@ export interface Conversation {
   counterpart_key: string
   relationship: string
   scenario_id: number | null
+  scenario_kind: string
   message_count: number
+}
+
+export interface Scenario {
+  id: number
+  slug: string
+  name: string
+  kind: string
+  description: string
+  is_builtin: boolean
 }
 
 export interface ProbBar {
@@ -91,10 +110,15 @@ export function listConversations() {
   return api.get<Conversation[]>('/api/conversations')
 }
 
+export function listScenarios() {
+  return api.get<Scenario[]>('/api/scenarios')
+}
+
 export function createConversation(body: {
   title: string
   counterpart_name: string
   relationship: string
+  scenario_id?: number | null
 }) {
   return api.post<Conversation>('/api/conversations', body)
 }
@@ -103,8 +127,49 @@ export function listMessages(conversationId: number) {
   return api.get<ChatMessage[]>(`/api/conversations/${conversationId}/messages`)
 }
 
-export function appendMessage(conversationId: number, role: 'me' | 'other', content: string) {
-  return api.post<ChatMessage>(`/api/conversations/${conversationId}/messages`, { role, content })
+export function appendMessage(
+  conversationId: number,
+  role: 'me' | 'other',
+  content: string,
+  source: 'manual' | 'candidate' | 'rewrite' | 'import' = 'manual',
+  attachmentIds: number[] = [],
+) {
+  return api.post<ChatMessage>(`/api/conversations/${conversationId}/messages`, {
+    role,
+    content,
+    source,
+    attachment_ids: attachmentIds,
+  })
+}
+
+export interface UploadedImage {
+  id: number
+  mime: string
+  bytes: number
+}
+
+/** 上传一张会话图片（需默认 LLM 支持看图，后端会拦）。 */
+export function uploadImage(conversationId: number, file: File) {
+  const form = new FormData()
+  form.append('file', file, file.name || 'image')
+  return postForm<UploadedImage>(`/api/conversations/${conversationId}/images`, form)
+}
+
+/** 拉取图片原图（带鉴权），调用方负责 createObjectURL / revoke。 */
+export function fetchMaterialFile(materialId: number) {
+  return fetchBlob(`/api/materials/${materialId}/file`)
+}
+
+/** 当前默认 LLM 是否支持看图（用于贴图入口的门控）。 */
+export function defaultLlmSupportsVision(): Promise<boolean> {
+  return api
+    .get<{ kind: string; supports_vision: boolean; is_default: boolean }[]>('/api/providers?kind=llm')
+    .then((rows) => {
+      if (rows.length === 0) return false
+      const chosen = rows.find((row) => row.is_default) ?? rows[0]
+      return Boolean(chosen.supports_vision)
+    })
+    .catch(() => false)
 }
 
 export interface Candidate {

@@ -1,6 +1,6 @@
-"""恋爱判断：最近消息 → 注释翻译 → JEV 10 题 → 中文面板。
+"""聊天判断：最近消息 → 注释翻译 → JEV 场景题集 → 中文面板。
 
-P2 的装配器是最小版，只取最近 N 条消息。记忆、人设、滚动摘要留到 P3。
+题目集按会话挂的场景取（恋爱 / 职场），面板渲染逻辑共用（packs.JudgePack）。
 """
 
 from __future__ import annotations
@@ -14,17 +14,12 @@ from ..clients.translation import annotate
 from ..domain.errors import DomainError, DomainErrorCode
 from ..repositories.conversations_repo import MessageRepository
 from ..repositories.models import Conversation
-from ..scenarios.questions_romance import (
-    HIGH_DANGER_LEVEL,
-    INTENSITY_LABELS,
-    PANEL_KEYS,
-    QUESTION_TITLES,
-    label_of,
-    romance_questions,
-)
+from ..scenarios.packs import ROMANCE_PACK, JudgePack
 from .context_service import dropped_count, ensure_summary, render_background
+from .image_service import image_context_contents
 from .memory_service import MemoryService
 from .provider_service import ProviderService
+from .scenario_service import pack_of
 
 # 送进 JEV 的消息条数（DESIGN.md §9.2）
 RECENT_MESSAGE_LIMIT = 10
@@ -72,10 +67,11 @@ def build_state(
     return state
 
 
-def present_answers(answers: dict) -> dict:
+def present_answers(answers: dict, pack: JudgePack = ROMANCE_PACK) -> dict:
     """把 System One 的 answers 收成面板能直接画的结构。"""
     items: list[dict] = []
-    for key, title in QUESTION_TITLES.items():
+    questions = pack.questions()
+    for key, title in pack.question_titles.items():
         raw = answers.get(key)
         if not isinstance(raw, dict):
             items.append({"key": key, "title": title, "kind": "missing", "text": "未返回"})
@@ -88,7 +84,11 @@ def present_answers(answers: dict) -> dict:
             bars = []
             if isinstance(probabilities, dict):
                 bars = [
-                    {"key": str(name), "label": label_of(key, str(name)), "value": _as_float(prob) or 0.0}
+                    {
+                        "key": str(name),
+                        "label": pack.label_of(key, str(name)),
+                        "value": _as_float(prob) or 0.0,
+                    }
                     for name, prob in probabilities.items()
                 ]
                 bars.sort(key=lambda item: item["value"], reverse=True)
@@ -98,7 +98,7 @@ def present_answers(answers: dict) -> dict:
                     "title": title,
                     "kind": "choice",
                     "value": chosen,
-                    "text": label_of(key, chosen),
+                    "text": pack.label_of(key, chosen),
                     "confidence": confidence,
                     "bars": bars,
                 }
@@ -115,7 +115,7 @@ def present_answers(answers: dict) -> dict:
                     "kind": "noul",
                     "value": side,
                     "probability": prob,
-                    "text": label_of(key, side),
+                    "text": pack.label_of(key, side),
                 }
             )
             continue
@@ -124,11 +124,13 @@ def present_answers(answers: dict) -> dict:
             score = _as_float(raw.get("score"))
             level = int(round(score)) if score is not None else None
             if key == "emotion_intensity" and level is not None:
-                text = INTENSITY_LABELS[min(max(level, 0), len(INTENSITY_LABELS) - 1)]
-                scale_max = len(INTENSITY_LABELS) - 1
+                labels = pack.intensity_labels
+                text = labels[min(max(level, 0), len(labels) - 1)]
+                scale_max = len(labels) - 1
             else:
-                text = f"{level}/9" if level is not None else "—"
-                scale_max = 9
+                levels = _score_levels(questions, key)
+                text = f"{level}/{len(levels) - 1}" if level is not None else "—"
+                scale_max = len(levels) - 1
             items.append(
                 {
                     "key": key,
@@ -138,7 +140,7 @@ def present_answers(answers: dict) -> dict:
                     "score": score,
                     "scale_max": scale_max,
                     "text": text,
-                    "tone": _danger_tone(level) if key == "danger_level" else "info",
+                    "tone": _danger_tone(level) if key == pack.risk_key else "info",
                 }
             )
             continue
@@ -146,15 +148,22 @@ def present_answers(answers: dict) -> dict:
         items.append({"key": key, "title": title, "kind": "missing", "text": "无法解析"})
 
     by_key = {item["key"]: item for item in items}
-    danger = by_key.get("danger_level", {})
+    risk = by_key.get(pack.risk_key, {})
     sufficient = by_key.get("context_sufficient", {})
     return {
-        "panel": [by_key[key] for key in PANEL_KEYS if key in by_key],
-        "more": [item for item in items if item["key"] not in PANEL_KEYS],
-        "high_danger": (danger.get("value") or 0) >= HIGH_DANGER_LEVEL,
+        "panel": [by_key[key] for key in pack.panel_keys if key in by_key],
+        "more": [item for item in items if item["key"] not in pack.panel_keys],
+        "high_danger": (risk.get("value") or 0) >= pack.risk_threshold,
         "context_sufficient": sufficient.get("value") != "false",
         "sufficiency_percent": round((sufficient.get("probability") or 0) * 100),
     }
+
+
+def _score_levels(questions: dict, key: str) -> list[str]:
+    """score 题的档位数（文本 x/9 之类用）。取不到时按 10 档。"""
+    question = questions.get(key) or {}
+    levels = question.get("criteria")
+    return levels if isinstance(levels, list) and levels else [""] * 10
 
 
 class AnalyzeService:
@@ -179,12 +188,22 @@ class AnalyzeService:
         jev = self._require_provider(db, owner_user_id=owner_user_id, kind="jev")
         llm = self._require_provider(db, owner_user_id=owner_user_id, kind="llm")
 
+        # 附件图片先读成英文描述（多模态，仅 vision 模型；系统不做 OCR），
+        # 再与正文一起走注释翻译 —— 日志里原文与译文仍成对呈现
+        contents = image_context_contents(
+            db,
+            llm=llm,
+            api_key=_providers.decrypt_key(llm),
+            rows=rows,
+            owner_user_id=owner_user_id,
+            trace_id=trace_id,
+        )
         originals = [(str(row.seq), row.content) for row in rows]
         annotated, translated = annotate(
             endpoint_url=llm.endpoint_url,
             api_key=_providers.decrypt_key(llm),
             model=llm.model,
-            lines=originals,
+            lines=[(str(row.seq), text) for row, text in zip(rows, contents)],
         )
         if translated is not None and not translated.ok:
             self._write_logs(
@@ -209,6 +228,7 @@ class AnalyzeService:
         jev_messages = [
             {"from": row.role, "text": annotated[str(row.seq)]} for row in rows
         ]
+        pack = pack_of(db, conversation)
         memories = _memory.list_active(
             db,
             owner_user_id=owner_user_id,
@@ -230,7 +250,7 @@ class AnalyzeService:
             api_key=_providers.decrypt_key(jev),
             model=jev.model,
             state=state,
-            questions=romance_questions(),
+            questions=pack.questions(),
         )
         self._write_logs(
             db,
@@ -254,7 +274,7 @@ class AnalyzeService:
             )
             raise DomainError(code, "分析未完成，请重试。", status_code=502)
 
-        view = present_answers(result.answers)
+        view = present_answers(result.answers, pack)
         view["trace_id"] = trace_id
         view["model"] = result.model_reported
         view["latency_ms"] = result.latency_ms

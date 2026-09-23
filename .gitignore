@@ -18,6 +18,7 @@ data/*.db-shm
 
 # 上传的素材（截图等）
 data/uploads/
+data/materials/
 
 # 前端
 node_modules/

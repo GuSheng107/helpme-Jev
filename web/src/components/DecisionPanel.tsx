@@ -88,10 +88,20 @@ function Row({ item }: { item: JudgeItem }) {
   )
 }
 
-export default function DecisionPanel({ result }: { result: AnalyzeResult }) {
+const RISK_ITEM_KEYS = new Set(['danger_level', 'stakes_level'])
+const RISK_WORDS: Record<string, string> = { danger_level: '风险', stakes_level: '利害' }
+
+export default function DecisionPanel({
+  result,
+  scenarioKind = 'romance',
+}: {
+  result: AnalyzeResult
+  scenarioKind?: string
+}) {
   const [open, setOpen] = useState(false)
-  const danger = result.panel.find((item) => item.key === 'danger_level')
+  const risk = result.panel.find((item) => RISK_ITEM_KEYS.has(item.key))
   const action = result.panel.find((item) => item.key === 'best_action')
+  const riskWord = RISK_WORDS[risk?.key ?? ''] ?? '风险'
 
   return (
     <section className="border-b border-border-subtle bg-surface">
@@ -102,8 +112,8 @@ export default function DecisionPanel({ result }: { result: AnalyzeResult }) {
         aria-expanded={open}
       >
         <span className="flex items-center gap-2">
-          <StatusTag tone={danger?.tone === 'success' || danger?.tone === 'warning' || danger?.tone === 'danger' ? danger.tone : 'info'}>
-            风险 {danger?.text ?? '—'}
+          <StatusTag tone={risk?.tone === 'success' || risk?.tone === 'warning' || risk?.tone === 'danger' ? risk.tone : 'info'}>
+            {riskWord} {risk?.text ?? '—'}
           </StatusTag>
           <span className="truncate text-[13px] text-ink-secondary">{action?.text ?? ''}</span>
         </span>
@@ -112,7 +122,11 @@ export default function DecisionPanel({ result }: { result: AnalyzeResult }) {
 
       <div className={`${open ? 'block' : 'hidden'} space-y-3 px-4 pb-4 lg:block lg:pt-4`}>
         {result.high_danger && (
-          <Notice tone="danger">此事不适合用文字处理，建议当面或电话沟通。</Notice>
+          <Notice tone="danger">
+            {scenarioKind === 'workplace'
+              ? '这件事利害不小，建议先电话或当面对齐，再落成文字。'
+              : '此事不适合用文字处理，建议当面或电话沟通。'}
+          </Notice>
         )}
         <p className="text-[13px] text-ink-secondary">信息充足度 {result.sufficiency_percent}%</p>
         {!result.context_sufficient && (
@@ -121,6 +135,7 @@ export default function DecisionPanel({ result }: { result: AnalyzeResult }) {
         {result.context_truncated && (
           <Notice tone="info">记录较多，较早的条目本次未纳入。</Notice>
         )}
+        <Notice tone="info">人工智能会出错，关键信息请仔细甄别。</Notice>
         <div className="space-y-3">
           {result.panel.map((item) => (
             <Row key={item.key} item={item} />

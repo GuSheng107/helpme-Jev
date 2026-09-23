@@ -80,7 +80,8 @@ QUESTION_TITLES: dict[str, str] = {
     "danger_level": "危险度",
     "should_reply_now": "下一条要不要有实质内容",
     "best_action": "最佳动作",
-    "she_needs": "她需要什么",
+    # key 沿用 she_needs（JEV 协议兼容），展示一律「对方」，不预设性别
+    "she_needs": "对方需要什么",
     "tension_resolved": "紧张是否化解",
     "emotion": "情绪",
     "emotion_intensity": "情绪强度",
