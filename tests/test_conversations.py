@@ -210,3 +210,30 @@ def test_conversation_list_is_scoped_to_owner(client: TestClient, db: Session) -
 
 def test_conversations_require_auth(client: TestClient) -> None:
     assert client.get("/api/conversations").status_code in (401, 403)
+
+
+def test_counterpart_key_frozen_after_creation(client: TestClient, db: Session) -> None:
+    """改名**不应**改变 counterpart_key。
+
+    人设档案按 counterpart_key 索引（含 version 链），一旦重算，
+    旧 key 下的整份人设就会变成孤儿（皇上审阅意见第 3 条）。
+    """
+    token = _make_user(client, db, "keyuser")
+    headers = _auth(token)
+
+    created = client.post(
+        "/api/conversations",
+        json={"title": "对话", "counterpart_name": "宝宝"},
+        headers=headers,
+    ).json()
+    original_key = created["counterpart_key"]
+    assert original_key == "宝宝"
+
+    renamed = client.patch(
+        f"/api/conversations/{created['id']}",
+        json={"counterpart_name": "小美"},
+        headers=headers,
+    ).json()
+
+    assert renamed["counterpart_name"] == "小美"  # 显示名跟着改
+    assert renamed["counterpart_key"] == original_key  # 对象标识保持不变

@@ -21,16 +21,20 @@ import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 
-from app.core.db import SessionLocal, engine  # noqa: E402
+from app.core.db import SessionLocal  # noqa: E402
 from app.main import app  # noqa: E402
 from app.repositories.models import User  # noqa: E402
-from app.services.bootstrap import create_all, ensure_default_admin  # noqa: E402
+from app.services.bootstrap import ensure_default_admin, run_migrations  # noqa: E402
 
 
 @pytest.fixture(scope="session", autouse=True)
 def _init_db() -> None:
-    """整个测试会话只建一次表。"""
-    create_all()
+    """整个测试会话只迁移一次。
+
+    用迁移建库而**不是** ``create_all`` —— 这样迁移脚本本身每次跑测试都被验证一次，
+    避免"迁移写错了但没人发现"。
+    """
+    run_migrations()
 
 
 @pytest.fixture

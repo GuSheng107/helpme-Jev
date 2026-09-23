@@ -1,25 +1,31 @@
-"""启动引导：建表、首启管理员、Schema 自检。
+"""启动引导：数据库迁移、Schema 自检、首启管理员。
 
-约定（沿用参考项目）：**不用迁移工具**，靠 ``SCHEMA_VERSION`` 常量 + 启动自检；
-表结构由 ``Base.metadata.create_all`` 保证（本项目为新库，尚无演进包袱）。
+Schema 的**唯一来源是 Alembic 迁移**（``migrations/``）——
+不再用 ``create_all`` 建表，避免"迁移历史"与"实际表结构"两条线。
+
+> 为什么不用 ``create_all``：一旦有已部署实例，绕过迁移直接改模型会让
+> 它们变成"迁移地狱"（皇上审阅意见第 4 条）。
 """
 
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 
 from ..core.config import get_settings
 from ..core.constants import SCHEMA_VERSION
-from ..core.db import Base, SessionLocal, engine
+from ..core.db import SessionLocal, engine
 from ..core.security import SecretCryptoError, app_secret_bytes, hash_password
 from ..domain.enums import UserRole
 from ..repositories.auth_repo import UserRepository
 from ..repositories.models import User
 
 logger = logging.getLogger("helpme_jev.bootstrap")
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 # 期望存在的表（自检用）
 EXPECTED_TABLES = {
@@ -42,11 +48,14 @@ EXPECTED_TABLES = {
 }
 
 
-def create_all() -> None:
-    """确保全部模型已注册后建表。"""
-    from ..repositories import models  # noqa: F401  导入即注册
+def run_migrations() -> None:
+    """执行 Alembic 迁移到 head。"""
+    from alembic import command
+    from alembic.config import Config as AlembicConfig
 
-    Base.metadata.create_all(bind=engine)
+    alembic_cfg = AlembicConfig(str(PROJECT_ROOT / "alembic.ini"))
+    alembic_cfg.set_main_option("script_location", str(PROJECT_ROOT / "migrations"))
+    command.upgrade(alembic_cfg, "head")
 
 
 def verify_schema() -> None:
@@ -57,15 +66,12 @@ def verify_schema() -> None:
     if missing:
         raise RuntimeError(f"Schema 不完整，缺少表：{sorted(missing)}")
     logger.info(
-        "Schema v%s 校验通过，共 %d 张表", SCHEMA_VERSION, len(present)
+        "Schema v%s 校验通过，共 %d 张表", SCHEMA_VERSION, len(EXPECTED_TABLES)
     )
 
 
 def ensure_default_admin(db: Session) -> User | None:
-    """首启创建默认管理员，**强制改密**。
-
-    仅在库里一个用户都没有时执行。
-    """
+    """首启创建默认管理员，**强制改密**。仅在库里一个用户都没有时执行。"""
     settings = get_settings()
     users = UserRepository()
     if users.count(db) > 0:
@@ -96,7 +102,7 @@ def bootstrap() -> None:
     except SecretCryptoError as exc:
         raise RuntimeError(str(exc)) from exc
 
-    create_all()
+    run_migrations()
     verify_schema()
 
     with SessionLocal() as db:

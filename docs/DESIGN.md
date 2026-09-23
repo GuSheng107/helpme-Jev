@@ -115,6 +115,10 @@ helpme-jev/
 │       ├── pages/Settings/         # 配置（JEV / LLM + 连通性测试 + 上下文窗口）
 │       ├── pages/Scenarios/        # 场景管理
 │       └── pages/Logs/             # 调用日志
+├── migrations/                     # Alembic 迁移（**schema 唯一来源**）
+│   ├── env.py                      # 从 app.core.config 注入 DB 地址；开启 render_as_batch（SQLite 改表必需）
+│   └── versions/                   # 迁移脚本
+├── alembic.ini                     # 刻意不写 DB 地址（由 env.py 注入），且**必须保持 ASCII**（alembic 按系统 locale 读取）
 ├── data/                           # SQLite 文件（gitignore）
 ├── tests/                          # pytest（见 §16 测试策略）
 └── pyproject.toml
@@ -134,7 +138,7 @@ helpme-jev/
 | `scenarios` | id, owner_user_id(**NULL=系统预设**), slug, name, kind, description, judge_questions(JSON), **persona_questions(JSON)**, system_prompt, rank_min, rank_max, is_builtin | 场景 = **判断题目集 + 人设题目集** + 提示词 |
 | `conversations` | id, owner_user_id, scenario_id, title, counterpart_name, relationship, created_at, updated_at | |
 | `messages` | id, conversation_id, role(me\|other), content, attachments(JSON), created_at, seq | |
-| `memories` | id, owner_user_id, **subject**(me\|other\|relation), **category**, content, **valid_from**, **valid_to**, confidence, **source**(auto\|qa\|import\|reflection), evidence(JSON), created_at, updated_at | **记忆条目（用户级，跨对象共享）**：由 **LLM 复盘**产出，条目化 + **时序**（变更不覆盖、加有效期）；见 §8.8 |
+| `memories` | id, owner_user_id, **subject**(me\|other\|relation), **counterpart_key**, category, content, valid_from, valid_to, confidence, source(auto\|qa\|import\|reflection), evidence(JSON), created_at, updated_at | **记忆条目（用户级）**：LLM 复盘产出，条目化 + 时序。**对象归属**：`me`/`relation` 类 `counterpart_key` 留空＝全局共享；`other` 类**必带对象标识**，装配时按当前对象过滤 —— 否则"她喜欢可颂"会串到别的对象会话 |
 | `memory_reflections` | id, owner_user_id, trace_id, scope(会话范围 / upto_seq), changes(JSON), model, created_at | **复盘记录**：每次 LLM 复盘产出的记忆变更集，可回溯、可撤销 |
 | `personas` | id, owner_user_id, **counterpart_key**, **subject**(me\|other), traits(JSON), evidence(JSON), confidence(JSON), version, updated_at | **人设档案**：与记忆相反，人设**按聊天对象区分** —— 每个对象 × 主体（我/对方）各一份；`counterpart_key` 标识对象，同一对象跨会话共用 |
 | `session_summaries` | id, conversation_id, **upto_seq**, summary, created_at | 滚动摘要：上下文预算超限时压缩历史 |
@@ -157,6 +161,10 @@ helpme-jev/
 5. **登出**：置 `revoked_at`（软撤销）
 6. **强制改密**：`must_change_password=true` 时，会话只放行 4 个白名单端点，其余 403
 7. **登录限流**：内存 dict + 锁，key = `client_ip|username`，60s 窗口上限 10 次
+
+> **已知取舍：token 存 localStorage**。前端把 token 放在 localStorage，因此**存在 XSS 读取面**。
+> 对本项目的定位（自部署、小圈子、单机）可接受；若要加固，改为 **httpOnly cookie + CSRF token**
+> —— 代价是跨域与移动端调试变复杂。此处**明确记录该取舍**，避免日后被当成疏漏。
 
 ---
 
@@ -316,11 +324,24 @@ LLM 生成题目集草案（noul / choice / score 混排，英文 instructions +
 
 | 优先级 | 材料 | 来源 | 说明 |
 |---|---|---|---|
-| 1（必带） | 当前会话最近 N 条消息 | `messages` | N 默认 10，随场景可配 |
-| 2（必带） | 关系记忆（**用户级，跨对象共享**） | `memories` | 偏好 / 雷区 / 口头禅 / 重要事件 |
-| 3（必带） | 人设档案（**按当前聊天对象取**） | `personas` | 该对象的「我」+「对方」两份，结构化压缩 |
-| 4（可裁） | 情绪轨迹 | `memories`（`category=情绪模式` 的条目） | 历次分析的情绪走向 —— **无独立字段，由记忆条目承载** |
-| 5（可裁） | 滚动摘要 | `session_summaries` | 更早对话的 LLM 摘要 |
+| 1 | 当前会话最近 N 条消息 | `messages` | N 默认 10，随场景可配 |
+| 2 | 关系记忆 | `memories`（**按对象过滤**，规则见下） | 偏好 / 雷区 / 口头禅 / 重要事件 |
+| 3 | 人设档案 | `personas`（`counterpart_key` = 当前对象） | 该对象的「我」+「对方」两份 |
+| 4 | 情绪轨迹 | `memories`（`category=情绪模式`） | 历次分析的情绪走向 —— 无独立字段，由记忆条目承载 |
+| 5 | 滚动摘要 | `session_summaries` | 更早对话的 LLM 摘要 |
+
+**记忆的对象过滤规则**（皇上审阅意见第 2 条）：
+
+- `subject = me` / `relation` —— **始终参与**（全局共享）
+- `subject = other` —— **仅当 `counterpart_key` 等于当前会话对象时参与**；
+  留空视为"未归属"，**不进任何 background**，宁缺勿串
+
+**裁剪规则**（修正此前"必带 / 可裁"的自相矛盾）：
+
+- 1–3 为**优先保底**、4–5 为**可裁**；
+- 但"保底"≠"永不裁"：当 1–3 自身已超预算时，**按条从最旧开始回退**（先退第 1 项消息），
+  并在面板上明示「上下文已截断」，让用户知道判断依据被压缩过；
+- 裁剪**永远整块删除**，绝不截半条消息或半句话。
 
 - 压缩触发：LLM 侧上下文逼近**其配置的窗口上限**时，把 `upto_seq` 之前的消息压缩为一条新摘要
 - 本次调用的**实际上下文**与 `trace_id` 一并写入 `call_logs`，**可完整回放**（见 §7）
@@ -542,8 +563,18 @@ Jarvis 的做法是"题目英文 + 聊天内容保留中文"，本方案**更进
 | **上下文层** | `state` 里的对话按上表规则处理；**英文内容原样通过** |
 | **结果层** | JEV 返回的枚举值（`confirm_you_care`、`danger_level=4`）走**本地映射表**转成用户语言的标签；自由文本才由 LLM 回译 |
 
-**语言判定**：轻量检测原文主语言（**不额外调用 LLM**，用字符集 / 字频判定即可）。
+**语言判定**：**含任何非 ASCII 字符即走翻译**，不额外调用 LLM。
+这样中英混排（如「今天 meeting 太多」）不会被误判成纯英文而漏译；
 判定不确定时**默认走翻译** —— 宁可多译一次，不可漏译。
+
+**翻译 prompt 必须要求保留情绪信号**（皇上审阅意见第 7 条）：
+
+- **标点风格原样保留** —— 句号结尾的冷淡感、连用「？？？」的急迫感，都是信号
+- **emoji / 颜文字 / 重复字符**（「好好好」）不省略、不改写
+- **语气词**（「嗯」「哦」「呵呵」）保留原始形态，不替换成通用英文语气词
+
+> 语气损耗无法根除，只能缓解。**`call_logs` 已存双语对照**（送 JEV 的英文版 + 用户看到的中文版），
+> 前端日志页应提供**并排对照视图** —— 便于区分"是翻译错还是判断错"。
 
 **成本控制**：枚举走本地映射表（零 LLM 成本）；仅自由文本才需回译调用。
 
@@ -716,7 +747,7 @@ Jarvis 的做法是"题目英文 + 聊天内容保留中文"，本方案**更进
 | 20 | **数据权利** | 提供**数据导出**与**账号注销**（见 §11 / §13 P8） |
 | 21 | **测试** | **必须写测试**（pytest；上游一律 mock；见 §16） |
 | 22 | **部署运维** | 一期不做（不写 Docker / 运维章节） |
-| 23 | **数据保留期** | 日志与聊天记录**默认 15 天**滚动清除（见 §4） |
+| 23 | **数据保留期** | **只对 `call_logs` 设 15 天滚动清除**；**`messages` 不按天数清** —— 只清"已被滚动摘要覆盖"的旧消息，以保证人设 `evidence`、情绪轨迹、复盘原料不断档（见 §4 / §8.5） |
 | 24 | **移动端适配** | 前端**响应式适配手机**，聊天副驾优先（见 §12） |
 | 25 | **记忆与人设** | **允许重复存储**，去重与整合交给 **LLM 复盘**统一处理（见 §8.8） |
 | 26 | **职场场景题目集** | 参考项目**无现成题集** → 走 **agent-first**：LLM 生成 + 用户确认落库（见 §8.2） |
@@ -763,3 +794,43 @@ Jarvis 的做法是"题目英文 + 聊天内容保留中文"，本方案**更进
 
 - 前端 UI 不做 E2E（人工验收）
 - 职场场景题目集的"业务正确性"无法自动化 —— 需人工设计 + 真实对话校准
+
+---
+
+## 17. 审阅意见采纳记录（2026-09-23）
+
+### 已立即落实
+
+| # | 意见（指出的问题） | 落实方式 |
+|---|---|---|
+| 1 | messages 保留期与知识体系冲突 | §14 第 23 条改为：**只对 `call_logs` 设 15 天**；`messages` 只清"已被滚动摘要覆盖"的 |
+| 2 | `other` 记忆无对象归属，跨对象会串 | `memories` 增 **`counterpart_key`**；§8.5 补过滤规则（`other` 类必带对象、未归属者不进 background） |
+| 3 | 改名断 `counterpart_key`，人设成孤儿 | 代码改为**生成后冻结**（改名只动显示名），已加测试锁定 |
+| 4 | 无迁移机制，后续改表会成为迁移地狱 | **引入 Alembic**（`migrations/`，`render_as_batch` 适配 SQLite）；<br>bootstrap 与测试夹具**均走 `alembic upgrade head`**，schema 单一来源；baseline 已生成 |
+| 5 | §8.5「必带」与「可裁」自相矛盾 | §8.5 补：1–3 优先保底、4–5 可裁；**保底项自身超预算时按条从最旧回退，并在面板明示"上下文已截断"** |
+| 6 | 语言判定规则需明确 | §9.6 改为「**含任何非 ASCII 字符即走翻译**」，避免中英混排误判 |
+| 7 | 翻译桥语气损耗 | §9.6 补翻译 prompt 要求（**保留标点风格 / emoji / 重复字符 / 语气词**）+ 日志页**双语并排对照** |
+
+### 采纳并排入阶段
+
+| # | 意见 | 排期与做法 |
+|---|---|---|
+| 8 | **决策可解释层** | **P4**：LLM 基于「JEV 决策 + 消息」生成"为什么这么判"，UI 标注**由 LLM 解读、仅供参考**。属"表达"而非"决策"，**不破铁律** |
+| 9 | **连通性测试 → 冒烟测试 + JEV 健康度** | **P1**：内置 3–5 组标准 case（典型输入 → 期望决策分布），连通测试时顺带跑出**健康度**；<br>**健康度未达标前，排序条数 UI 锁死 3 条**（顺带解决排序题校准问题） |
+| 10 | **高危险度人文设计** | **P6**：`danger_level ≥ 8` 时，面板首屏不再是"3 条候选"，而是「**这已超出文字回复能解决的范围，建议当面或电话沟通**」 |
+| 11 | **决策效果闭环** | **P8 之后**：复盘管线捕捉「上次定夺 → 本次情绪变化」的关联，让人设/记忆更新带上因果 |
+
+### 小项
+
+| # | 意见 | 落实 |
+|---|---|---|
+| 12 | 串行调用延迟（实为 **7 次**） | **P4**：LLM 起草时**一次输出中文候选 + 英文版**（省一次翻译调用）；<br>前端**全程逐步进度指示**（当前处于 翻译 / 判断 / 起草 / 排序 哪一步） |
+| 13 | 追问地狱 | **P4**：面板常显「**信息充足度 xx%**」，并**永远保留「跳过追问，直接出结果」** —— 拍板在用户，不在 JEV |
+| 14 | 依赖度提醒 | **P6**：统计「候选直接采用率 vs 手动改写率」，**只展示不说教** |
+| 15 | token 存 localStorage 的 XSS 面 | 已在 §5 标注该取舍（自部署小圈子可接受；如需加固改 httpOnly cookie + CSRF） |
+
+### 待皇上定夺
+
+- **第 12 条的"预热并行"与"用户手动触发"存在语义冲突**：
+  若在用户查看决策时就**后台预热起草**，延迟可显著下降，但"手动触发"就变成了"手动揭晓"。
+  是保留纯粹的手动触发（接受延迟），还是允许预热（接受语义弱化）—— 需皇上定。

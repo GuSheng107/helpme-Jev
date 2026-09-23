@@ -14,6 +14,12 @@ from .base import TimestampMixin
 class Memory(Base, TimestampMixin):
     """记忆条目 —— **用户级**：按用户隔离，但**不区分聊天对象**（跨会话共享）。
 
+    对象归属（皇上 2026-09-23 定）：
+
+    - ``subject`` 为 ``me`` / ``relation`` 时，``counterpart_key`` **留空 = 全局共享**
+    - ``subject`` 为 ``other`` 时，``counterpart_key`` **带对象标识**，
+      装配 background 时按当前对象过滤 —— 否则"她喜欢可颂"会串到别的对象会话里
+
     时序设计（借鉴 Zep / Graphiti）：变更**不覆盖**，旧的置 ``valid_to``（INVALIDATE），
     历史保留可追溯。
     """
@@ -25,6 +31,9 @@ class Memory(Base, TimestampMixin):
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     subject: Mapped[str] = mapped_column(String(16), nullable=False, default="relation")
+    counterpart_key: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="", index=True
+    )
     category: Mapped[str] = mapped_column(String(32), nullable=False, default="其他", index=True)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     valid_from: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

@@ -135,7 +135,10 @@ def update_conversation(
         row.title = payload.title.strip()
     if payload.counterpart_name is not None:
         row.counterpart_name = payload.counterpart_name.strip()
-        row.counterpart_key = _counterpart_key(row.counterpart_name, row.title)
+        # counterpart_key **生成后冻结**：改名只影响显示名，不改对象标识。
+        # 否则旧 key 下的人设档案（含 version 链）会变成孤儿。
+        if not row.counterpart_key:
+            row.counterpart_key = _counterpart_key(row.counterpart_name, row.title)
     if payload.relationship is not None:
         row.relationship = payload.relationship.strip()
     db.commit()
