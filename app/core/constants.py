@@ -37,7 +37,15 @@ LLM_TIMEOUT_SECONDS = 60
 UPSTREAM_MAX_RETRIES = 3
 
 # ------------------------------------------------------------------ 上下文预算
-JEV_STATE_BUDGET_CHARS = 1500
+# JEV（TypeSafe System One / jev-1.13.0）官方规格：
+#   - 单请求 64k token（state + 全部 questions 合计）
+#   - 其中 state + 单个最长 question ≤ 32k token（英文约 15 万字符）
+#   注意：官方把「大而嘈杂的 state」列为已知失败模式（无关细节会成为干扰项），
+#   建议 "filter first; send only what the question needs"。
+#   因此**默认值刻意保守**（5000 字符 ≈ 远低于上限），可配但不应顶格用。
+JEV_STATE_BUDGET_CHARS = 5000
+# 官方硬上限（32k token）折算成中文字符的保守估值，用于配置校验
+JEV_STATE_HARD_LIMIT_CHARS = 60_000
 LLM_CONTEXT_BUDGET_TOKENS_DEFAULT = 64_000
 
 # ------------------------------------------------------------------ 日志
