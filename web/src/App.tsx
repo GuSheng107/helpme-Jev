@@ -3,11 +3,13 @@ import { UNAUTHORIZED_EVENT, ApiError, clearToken, getToken } from './api/client
 import { fetchMe, logout, type UserSummary } from './api/auth'
 import ChangePasswordPage from './pages/ChangePasswordPage'
 import ChatPage from './pages/ChatPage'
+import DecisionPage from './pages/DecisionPage'
 import LoginPage from './pages/LoginPage'
 import PersonaPage from './pages/PersonaPage'
+import ScenarioPage from './pages/ScenarioPage'
 import SettingsPage from './pages/SettingsPage'
 
-type Page = 'chat' | 'settings' | 'personas'
+type Page = 'chat' | 'settings' | 'personas' | 'decide' | 'scenarios'
 
 /**
  * 轻量路由（状态机）；页面多了再引入路由库。
@@ -68,6 +70,15 @@ export default function App() {
 
   if (page === 'personas') {
     return <PersonaPage onBack={() => setPage('chat')} />
+
+  }
+
+  if (page === 'decide') {
+    return <DecisionPage onBack={() => setPage('chat')} />
+  }
+
+  if (page === 'scenarios') {
+    return <ScenarioPage onBack={() => setPage('chat')} />
   }
 
   if (page === 'settings') {
@@ -84,6 +95,8 @@ export default function App() {
       onLogout={handleLogout}
       onOpenSettings={() => setPage('settings')}
       onOpenPersonas={() => setPage('personas')}
+      onOpenDecide={() => setPage('decide')}
+      onOpenScenarios={() => setPage('scenarios')}
     />
   )
 }

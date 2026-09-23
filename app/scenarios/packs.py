@@ -7,7 +7,7 @@ JudgePack 里：题目、标题、标签、利害题的 key 与阈值、需求�
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 from .questions_romance import (
@@ -50,12 +50,14 @@ class JudgePack:
     question_titles: dict[str, str]
     label_of: Callable[[str, str], str]
     intensity_labels: tuple[str, ...]
-    # 利害题（危险度 / 利害程度）：≥ 阈值时不建议直接落文字
+    # 利害题（危险度 / 利害程度）：≥ 阈值时不建议直接落文字；空串 = 该场景无此题
     risk_key: str
     risk_threshold: int
-    # 需求题的 key（恋爱沿用 she_needs，职场用 other_needs）
+    # 需求题的 key（恋爱沿用 she_needs，职场用 other_needs；空串 = 没有）
     needs_key: str
     risk_word: str
+    # score 题的中文档位（如情绪强度 5 档）；key 不在表里则显示 x/N
+    level_labels: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 ROMANCE_PACK = JudgePack(
@@ -69,6 +71,7 @@ ROMANCE_PACK = JudgePack(
     risk_threshold=_ROMANCE_RISK_THRESHOLD,
     needs_key="she_needs",
     risk_word="危险",
+    level_labels={"emotion_intensity": tuple(_ROMANCE_INTENSITY)},
 )
 
 WORKPLACE_PACK = JudgePack(
@@ -82,6 +85,7 @@ WORKPLACE_PACK = JudgePack(
     risk_threshold=_WORKPLACE_RISK_THRESHOLD,
     needs_key="other_needs",
     risk_word="利害",
+    level_labels={"emotion_intensity": tuple(_WORKPLACE_INTENSITY)},
 )
 
 _PACKS: dict[str, JudgePack] = {

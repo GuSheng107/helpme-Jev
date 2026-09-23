@@ -32,6 +32,8 @@ import { EmptyState, Notice, PageShell } from '../components/layout'
 interface Props {
   onOpenSettings: () => void
   onOpenPersonas: () => void
+  onOpenDecide: () => void
+  onOpenScenarios: () => void
   onLogout: () => void
 }
 
@@ -51,7 +53,13 @@ interface PendingImage {
 /** 一条消息最多带的图片数 */
 const MAX_IMAGES = 9
 
-export default function ChatPage({ onOpenSettings, onOpenPersonas, onLogout }: Props) {
+export default function ChatPage({
+  onOpenSettings,
+  onOpenPersonas,
+  onOpenDecide,
+  onOpenScenarios,
+  onLogout,
+}: Props) {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [currentId, setCurrentId] = useState<number | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -422,6 +430,12 @@ export default function ChatPage({ onOpenSettings, onOpenPersonas, onLogout }: P
               </span>
             </div>
             <div className="flex items-center gap-2">
+              <Button size="sm" onClick={onOpenDecide}>
+                决策
+              </Button>
+              <Button size="sm" onClick={onOpenScenarios}>
+                场景
+              </Button>
               <Button size="sm" onClick={onOpenPersonas}>
                 人设
               </Button>

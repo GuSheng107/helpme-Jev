@@ -11,7 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import account, auth, chat, conversations, personas, providers, scenarios
+from .api import account, auth, chat, conversations, decide, personas, providers, scenarios
 from .core.config import get_settings
 from .domain.errors import DomainError, DomainErrorCode
 from .services.bootstrap import bootstrap
@@ -84,6 +84,7 @@ app.include_router(providers.router)
 app.include_router(scenarios.router)
 app.include_router(conversations.router)
 app.include_router(chat.router)
+app.include_router(decide.router)
 app.include_router(personas.router)
 
 # ---------------------------------------------------------------- 静态托管

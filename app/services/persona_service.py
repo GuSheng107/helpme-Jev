@@ -12,7 +12,7 @@ from ..clients.translation import annotate
 from ..core.time import iso_utc
 from ..domain.errors import DomainError, DomainErrorCode
 from ..repositories.conversations_repo import MessageRepository
-from ..repositories.models import Conversation, Persona
+from ..repositories.models import Conversation, Persona, Scenario
 from ..scenarios.persona_questions import (
     TRAIT_LABELS,
     WEAK_SCIENCE_TRAITS,
@@ -82,6 +82,11 @@ class PersonaService:
             raise DomainError(DomainErrorCode.VALIDATION_FAILED, "对象只能是我或对方", status_code=422)
         # 情境优先取请求；没带就从会话挂的场景推断 —— 同一个人在恋爱与职场各一份档案
         kind = context or kind_of(db, conversation)
+        custom_questions = None
+        if kind == "custom":
+            # 自定义场景：人设题用场景存的题集；档案情境按内容判（依恋爱 / 依职场）
+            custom_questions = self._custom_persona_questions(db, conversation)
+            kind = "workplace" if custom_questions and "disc" in custom_questions else "romance"
         if kind not in {"romance", "workplace"}:
             kind = "romance"
         rows = _messages.list_by_conversation(
@@ -99,7 +104,7 @@ class PersonaService:
             api_key=_providers.decrypt_key(jev),
             model=jev.model,
             state=state,
-            questions=persona_questions_for(kind, subject),
+            questions=custom_questions or persona_questions_for(kind, subject),
         )
         if not result.ok:
             raise DomainError(DomainErrorCode.JEV_UPSTREAM_ERROR, "建模未完成，请重试。", status_code=502)
@@ -148,6 +153,20 @@ class PersonaService:
         adopted = sum(1 for row in rows if row.source == "candidate")
         rewritten = sum(1 for row in rows if row.source == "rewrite")
         return {"adopted": adopted, "rewritten": rewritten}
+
+    def _custom_persona_questions(self, db, conversation) -> dict | None:
+        """自定义场景存的人设题集（剥掉展示性字段）；取不到返回 None。"""
+        from ..services.scenario_service import _load_questions, strip_meta
+
+        if conversation.scenario_id is None:
+            return None
+        scenario = db.get(Scenario, conversation.scenario_id)
+        if scenario is None:
+            return None
+        raw = _load_questions(scenario.persona_questions or "{}")
+        if not raw:
+            return None
+        return strip_meta(raw)
 
     def _state(self, db, owner_user_id, conversation, rows, self_report) -> dict:
         llm = _analyze._require_provider(db, owner_user_id=owner_user_id, kind="llm")

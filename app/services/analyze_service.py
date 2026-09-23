@@ -123,8 +123,8 @@ def present_answers(answers: dict, pack: JudgePack = ROMANCE_PACK) -> dict:
         if "score" in raw:
             score = _as_float(raw.get("score"))
             level = int(round(score)) if score is not None else None
-            if key == "emotion_intensity" and level is not None:
-                labels = pack.intensity_labels
+            labels = pack.level_labels.get(key)
+            if labels and level is not None:
                 text = labels[min(max(level, 0), len(labels) - 1)]
                 scale_max = len(labels) - 1
             else:
