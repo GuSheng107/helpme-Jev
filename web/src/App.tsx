@@ -5,11 +5,12 @@ import ChangePasswordPage from './pages/ChangePasswordPage'
 import ChatPage from './pages/ChatPage'
 import DecisionPage from './pages/DecisionPage'
 import LoginPage from './pages/LoginPage'
+import LogsPage from './pages/LogsPage'
 import PersonaPage from './pages/PersonaPage'
 import ScenarioPage from './pages/ScenarioPage'
 import SettingsPage from './pages/SettingsPage'
 
-type Page = 'chat' | 'settings' | 'personas' | 'decide' | 'scenarios'
+type Page = 'chat' | 'settings' | 'personas' | 'decide' | 'scenarios' | 'logs'
 
 /**
  * 轻量路由（状态机）；页面多了再引入路由库。
@@ -86,8 +87,13 @@ export default function App() {
       <SettingsPage
         onLogout={handleLogout}
         onBack={() => setPage('chat')}
+        onOpenLogs={() => setPage('logs')}
       />
     )
+  }
+
+  if (page === 'logs') {
+    return <LogsPage onBack={() => setPage('settings')} />
   }
 
   return (

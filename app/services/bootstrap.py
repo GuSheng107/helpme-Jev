@@ -118,6 +118,29 @@ def purge_stale_sessions(db: Session) -> int:
     return purged
 
 
+def purge_old_call_logs(db: Session) -> int:
+    """``call_logs`` 滚动清理（默认 15 天，皇上定的保留期）。
+
+    只清调用日志：``messages`` 不按天数清 —— 只清"已被滚动摘要覆盖"的旧消息，
+    保证人设 evidence、情绪轨迹、复盘原料不断档（DESIGN.md 已定事项 23）。
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import delete
+
+    from ..core.config import get_settings
+    from ..core.time import utc_now
+    from ..repositories.models import CallLog
+
+    cutoff = utc_now() - timedelta(days=get_settings().retention_days)
+    result = db.execute(delete(CallLog).where(CallLog.created_at < cutoff))
+    db.commit()
+    purged = int(result.rowcount or 0)
+    if purged:
+        logger.info("已清理 %d 天前的调用日志 %d 条", get_settings().retention_days, purged)
+    return purged
+
+
 def ensure_builtin_scenarios(db: Session) -> None:
     """内置场景（恋爱 / 职场）播种：题目快照来自代码，幂等。
 
@@ -178,5 +201,6 @@ def bootstrap() -> None:
 
     with SessionLocal() as db:
         purge_stale_sessions(db)
+        purge_old_call_logs(db)
         ensure_default_admin(db)
         ensure_builtin_scenarios(db)

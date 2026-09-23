@@ -8,6 +8,7 @@ import {
   type MemoryItem,
   type Reflection,
 } from '../api/chat'
+import { deleteAccount, exportAccountData } from '../api/logs'
 import {
   createProvider,
   deleteProvider,
@@ -25,6 +26,7 @@ import { DataCard, EmptyState, Notice, PageBody, PageHeader, PageShell, StatusTa
 interface Props {
   onLogout: () => void
   onBack: () => void
+  onOpenLogs: () => void
 }
 
 interface FormState {
@@ -49,7 +51,7 @@ const BLANK: FormState = {
   context_window_tokens: 64000,
 }
 
-export default function SettingsPage({ onLogout, onBack }: Props) {
+export default function SettingsPage({ onLogout, onBack, onOpenLogs }: Props) {
   const [rows, setRows] = useState<ProviderView[]>([])
   const [loading, setLoading] = useState(true)
   const [form, setForm] = useState<FormState | null>(null)
@@ -59,6 +61,10 @@ export default function SettingsPage({ onLogout, onBack }: Props) {
   const [results, setResults] = useState<Record<number, ConnectionTestResult>>({})
   const [memories, setMemories] = useState<MemoryItem[]>([])
   const [reflections, setReflections] = useState<Reflection[]>([])
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   const reload = useCallback(async () => {
     try {
@@ -157,6 +163,38 @@ export default function SettingsPage({ onLogout, onBack }: Props) {
       await reload()
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '删除失败')
+    }
+  }
+
+  async function downloadExport() {
+    setExporting(true)
+    setError(null)
+    try {
+      const blob = await exportAccountData()
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `helpme-jev-export-${new Date().toISOString().slice(0, 10)}.json`
+      anchor.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '导出未完成')
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  async function destroyAccount() {
+    if (!confirmPassword) return
+    setDeleting(true)
+    setError(null)
+    try {
+      await deleteAccount(confirmPassword)
+      onLogout()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '注销未完成')
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -345,6 +383,55 @@ export default function SettingsPage({ onLogout, onBack }: Props) {
             </DataCard>
           </div>
         )}
+
+        <div className="mb-4">
+          <DataCard title="数据与日志">
+            <p className="mb-3 text-[13px] leading-5 text-ink-secondary">
+              你的会话、记忆、人设与日志都保存在本机。可以随时导出，或注销账号彻底删除。
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button size="sm" loading={exporting} onClick={() => void downloadExport()}>
+                导出我的数据
+              </Button>
+              <Button size="sm" onClick={onOpenLogs}>
+                查看调用日志
+              </Button>
+            </div>
+            <div className="mt-4 rounded-[8px] border border-danger/30 bg-surface p-3">
+              <p className="text-[13px] font-medium text-ink">注销账号</p>
+              <p className="mt-1 text-[13px] leading-5 text-ink-muted">
+                删除全部会话、记忆、人设与配置，不可恢复。需要输入密码确认。
+              </p>
+              {confirmDelete ? (
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <input
+                    className="w-48 rounded-[6px] border border-border px-2 py-1.5 text-[14px]"
+                    type="password"
+                    placeholder="输入登录密码"
+                    value={confirmPassword}
+                    onChange={(event) => setConfirmPassword(event.target.value)}
+                  />
+                  <Button size="sm" variant="danger" loading={deleting} disabled={!confirmPassword} disabledReason="请输入密码" onClick={() => void destroyAccount()}>
+                    确认注销
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      setConfirmDelete(false)
+                      setConfirmPassword('')
+                    }}
+                  >
+                    手滑了
+                  </Button>
+                </div>
+              ) : (
+                <Button className="mt-2" size="sm" variant="danger" onClick={() => setConfirmDelete(true)}>
+                  注销账号
+                </Button>
+              )}
+            </div>
+          </DataCard>
+        </div>
 
         <DataCard title="已添加">
           {loading ? (
