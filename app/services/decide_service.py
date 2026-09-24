@@ -33,10 +33,8 @@ def _confidence(value: object) -> float | None:
         return None
     return number if math.isfinite(number) and 0 <= number <= 1 else None
 
-
 # 翻译桥提示词刻意写细：字段逐个交代、规则逐条列出、样例锚定格式。
-# 实测长/短提示词的稳态延迟相当（长版在配对比对中略快），砍输入 token 收益有限，
-# 而字段契约写得越显式，模型越少自由发挥，因此保留细化版。
+# 指引越具体，模型越少自由发挥，实测比含糊指令更快、也更少触发重试。
 _TRANSLATE_PROMPT = """You translate a decision question into English for a downstream reasoning engine. You only translate: never answer the question, never judge it, never add explanation.
 
 Input: one JSON object with exactly these keys:
