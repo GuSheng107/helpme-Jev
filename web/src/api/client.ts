@@ -99,6 +99,71 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   return payload as T
 }
 
+/** 流式 POST：逐帧回调 SSE 的 data 事件，返回时流已结束。 */
+export async function postStream(
+  path: string,
+  body: unknown,
+  onEvent: (event: unknown) => void,
+): Promise<void> {
+  const headers = new Headers({ 'Content-Type': 'application/json' })
+  const token = getToken()
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+
+  const response = await fetch(path, { method: 'POST', headers, body: JSON.stringify(body) })
+  if (!response.ok) {
+    const text = await response.text()
+    let payload: unknown = null
+    if (text) {
+      try {
+        payload = JSON.parse(text)
+      } catch {
+        payload = null
+      }
+    }
+    const errorBody = (payload as { error?: ApiErrorBody } | null)?.error
+    if (response.status === 401) {
+      clearToken()
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT))
+    }
+    throw new ApiError(
+      response.status,
+      errorBody ?? { code: 'UNKNOWN', message: `请求失败（HTTP ${response.status}）` },
+    )
+  }
+  if (!response.body) throw new ApiError(0, { code: 'UNKNOWN', message: '流式响应不可用' })
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let boundary = buffer.indexOf('\n\n')
+    while (boundary !== -1) {
+      const frame = buffer.slice(0, boundary)
+      buffer = buffer.slice(boundary + 2)
+      boundary = buffer.indexOf('\n\n')
+      const event = frameData(frame)
+      if (event !== null) onEvent(event)
+    }
+  }
+}
+
+function frameData(frame: string): unknown | null {
+  const data = frame
+    .split('\n')
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice(5).trim())
+    .join('')
+  if (!data) return null
+  try {
+    return JSON.parse(data)
+  } catch {
+    return null
+  }
+}
+
 /** multipart 上传（图片等二进制）。 */
 export async function postForm<T>(path: string, form: FormData): Promise<T> {
   const headers = new Headers()

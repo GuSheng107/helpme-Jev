@@ -7,6 +7,7 @@ import {
 import Button from '../components/Button'
 import { confirmAction } from '../components/confirm'
 import { DataCard, Notice, PageBody, PageHeader, PageShell } from '../components/layout'
+import StageLoader, { type LoaderStep } from '../components/StageLoader'
 import { formatLocalTime } from '../utils/datetime'
 
 const TYPE_LABELS: Record<QuestionType, string> = {
@@ -15,6 +16,19 @@ const TYPE_LABELS: Record<QuestionType, string> = {
   score: '评分题',
 }
 const PAGE_SIZE = 5
+// 收尾状态停留一下再收起，否则"已完成"一闪而过看不见
+const DONE_HOLD_MS = 600
+
+type LoaderKey = 'translate' | 'decide' | 'polish'
+const STEP_LABELS: Record<LoaderKey, { running: string; done: string }> = {
+  translate: { running: '翻译中', done: '翻译完成' },
+  decide: { running: '决策中', done: '决策完成' },
+  polish: { running: '正在润色', done: '润色完成' },
+}
+
+function holdDone(): Promise<void> {
+  return new Promise((resolve) => { window.setTimeout(resolve, DONE_HOLD_MS) })
+}
 
 interface DecisionDraft {
   question: string
@@ -38,6 +52,8 @@ export default function DecisionPage() {
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyError, setHistoryError] = useState('')
   const [selectedHistory, setSelectedHistory] = useState<DecisionHistoryItem | null>(null)
+  const [plan, setPlan] = useState<LoaderKey[]>([])
+  const [progress, setProgress] = useState(0)
   const questionRef = useRef<HTMLTextAreaElement>(null)
   const contextRef = useRef<HTMLTextAreaElement>(null)
 
@@ -52,6 +68,12 @@ export default function DecisionPage() {
   const busy = deciding || polishing
   const filledOptions = options.map((item) => item.trim()).filter(Boolean)
   const canSubmit = question.trim().length > 0 && (kind !== 'choice' || filledOptions.length >= 2)
+  // 已完成的步数由服务端事件推进：progress 之前的算完成，正好卡在 progress 的算进行中
+  const loaderSteps: LoaderStep[] = plan.map((key, index) => ({
+    key,
+    ...STEP_LABELS[key],
+    state: index < progress ? 'done' : index === progress ? 'running' : 'pending',
+  }))
 
   const loadHistory = useCallback(async (page: number) => {
     setHistoryLoading(true)
@@ -85,18 +107,33 @@ export default function DecisionPage() {
     setAnswer(null)
     setDeciding(true)
     setError(null)
+    setPlan([])
+    setProgress(0)
     try {
-      const answered = await decide({
-        question: question.trim(),
-        question_type: kind,
-        options: kind === 'choice' ? filledOptions : [],
-        context: context.trim(),
-      })
+      const answered = await decide(
+        {
+          question: question.trim(),
+          question_type: kind,
+          options: kind === 'choice' ? filledOptions : [],
+          context: context.trim(),
+        },
+        (event) => {
+          if (event.stage === 'plan') {
+            setPlan(event.steps ?? [])
+            setProgress(0)
+          } else if (event.stage === 'translate_done' || event.stage === 'done') {
+            setProgress((current) => current + 1)
+          }
+        },
+      )
       setAnswer(answered)
+      await holdDone()
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '判断未完成')
     } finally {
       setDeciding(false)
+      setPlan([])
+      setProgress(0)
       if (historyPage === 0) void loadHistory(0)
       else setHistoryPage(0)
     }
@@ -107,6 +144,8 @@ export default function DecisionPage() {
     const original: DecisionDraft = { question, options: [...options], context }
     setPolishing(true)
     setError(null)
+    setPlan(['polish'])
+    setProgress(0)
     try {
       const result = await polishDecision({
         question,
@@ -118,10 +157,14 @@ export default function DecisionPage() {
       setQuestion(result.question)
       if (kind === 'choice') setOptions(result.options)
       setContext(result.context)
+      setProgress(1)
+      await holdDone()
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '润色未完成')
     } finally {
       setPolishing(false)
+      setPlan([])
+      setProgress(0)
     }
   }
 
@@ -189,9 +232,8 @@ export default function DecisionPage() {
             </div>
             {polishing && (
               <div role="status" className="absolute inset-0 z-10 flex items-center justify-center rounded-[8px] bg-white/75 backdrop-blur-[1px]">
-                <div className="flex items-center gap-2 rounded-[8px] border border-border bg-surface px-4 py-2 text-[13px] font-medium text-primary shadow-sm">
-                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-                  正在润色题目、选项和上下文…
+                <div className="rounded-[8px] border border-border bg-surface px-5 py-4 shadow-sm">
+                  <StageLoader steps={loaderSteps} />
                 </div>
               </div>
             )}
@@ -240,10 +282,10 @@ export default function DecisionPage() {
           </DataCard>
           </div>
           </div>
-          {deciding && (
+          {deciding && loaderSteps.length > 0 && (
             <div role="status" className="absolute inset-0 z-10 flex items-start justify-center rounded-[8px] bg-page/80 pt-32 backdrop-blur-[1px]">
-              <div className="flex items-center gap-2 rounded-[8px] border border-border bg-surface px-5 py-3 text-[14px] font-medium text-ink shadow-sm">
-                <span className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />判断中…
+              <div className="rounded-[8px] border border-border bg-surface px-5 py-4 shadow-sm">
+                <StageLoader steps={loaderSteps} />
               </div>
             </div>
           )}

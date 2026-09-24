@@ -1,4 +1,4 @@
-import { api } from './client'
+import { api, ApiError, postStream, type ApiErrorBody } from './client'
 
 export type QuestionType = 'noul' | 'choice' | 'score'
 
@@ -29,13 +29,44 @@ export interface DecideResponse {
   result: DecideResult
 }
 
-export function decide(body: {
-  question: string
-  question_type: QuestionType
-  options?: string[]
-  context?: string
-}) {
-  return api.post<DecideResponse>('/api/decide', body)
+export type DecideStepKey = 'translate' | 'decide'
+
+/** 流式判断的阶段事件：plan 先交代这次要走几步，之后每完成一步推一条。 */
+export interface DecideStreamEvent {
+  stage: 'plan' | 'translate_done' | 'done' | 'error'
+  steps?: DecideStepKey[]
+  payload?: DecideResponse
+  error?: ApiErrorBody
+}
+
+export function decide(
+  body: {
+    question: string
+    question_type: QuestionType
+    options?: string[]
+    context?: string
+  },
+  onEvent?: (event: DecideStreamEvent) => void,
+): Promise<DecideResponse> {
+  let answer: DecideResponse | null = null
+  let failure: ApiErrorBody | null = null
+  return postStream('/api/decide/stream', body, (raw) => {
+    const event = raw as DecideStreamEvent
+    if (event.stage === 'done') {
+      answer = event.payload ?? null
+      onEvent?.(event)
+      return
+    }
+    if (event.stage === 'error') {
+      failure = event.error ?? { code: 'UNKNOWN', message: '判断未完成，请重试' }
+      return
+    }
+    onEvent?.(event)
+  }).then(() => {
+    if (failure) throw new ApiError(502, failure)
+    if (!answer) throw new ApiError(0, { code: 'UNKNOWN', message: '判断未完成，请重试' })
+    return answer
+  })
 }
 
 export interface DecisionHistoryItem {
