@@ -5,15 +5,14 @@
 
 from __future__ import annotations
 
-import json
-
 from sqlalchemy.orm import Session
 
 from ..clients import jev_client
 from ..clients.translation import annotate
+from ..core.logging import dump_body, pick_level
 from ..domain.errors import DomainError, DomainErrorCode
 from ..repositories.conversations_repo import MessageRepository
-from ..repositories.models import Conversation
+from ..repositories.models import CallLog, Conversation
 from ..scenarios.packs import ROMANCE_PACK, JudgePack
 from .context_service import dropped_count, ensure_summary, render_background
 from .image_service import image_context_contents
@@ -238,10 +237,12 @@ class AnalyzeService:
         summary = ensure_summary(
             db,
             conversation_id=conversation.id,
+            owner_user_id=owner_user_id,
             endpoint_url=llm.endpoint_url,
             api_key=_providers.decrypt_key(llm),
             model=llm.model,
             protocol=llm.protocol,
+            trace_id=trace_id,
         )
         background = render_background(memories, summary=summary)
         state = build_state(
@@ -254,6 +255,17 @@ class AnalyzeService:
             state=state,
             questions=pack.questions(),
         )
+        # 先渲染面板，好让日志知道有几道题没拿到答案（面板显示「未返回 / 无法解析」）
+        view = present_answers(result.answers, pack) if result.ok else None
+        missing = (
+            tuple(
+                item["key"]
+                for item in (*view["panel"], *view["more"])
+                if item["kind"] == "missing"
+            )
+            if view is not None
+            else ()
+        )
         self._write_logs(
             db,
             owner_user_id=owner_user_id,
@@ -265,10 +277,11 @@ class AnalyzeService:
             translated=translated,
             state=state,
             result=result,
+            missing=missing,
         )
         db.commit()
 
-        if not result.ok:
+        if not result.ok or view is None:
             code = (
                 DomainErrorCode.PROTOCOL_MISMATCH
                 if result.error_code == "PROTOCOL_MISMATCH"
@@ -276,7 +289,6 @@ class AnalyzeService:
             )
             raise DomainError(code, "分析未完成，请重试。", status_code=502)
 
-        view = present_answers(result.answers, pack)
         view["trace_id"] = trace_id
         view["model"] = result.model_reported
         view["latency_ms"] = result.latency_ms
@@ -322,53 +334,60 @@ class AnalyzeService:
         translated,
         state: dict,
         result,
+        missing: tuple[str, ...] = (),
     ) -> None:
         """中英并排写进调用日志，方便以后分清是翻译错还是判断错。"""
-        from ..core.logging import sanitize_log_value
-        from ..repositories.models import CallLog
-
         pairs = [
             {"seq": seq, "original": text, "annotated": annotated.get(seq, text)}
             for seq, text in originals
         ]
         if translated is not None:
+            request_body, request_cut = dump_body({"lines": pairs})
+            response_body, response_cut = dump_body(translated.payload)
+            truncated = request_cut or response_cut
             db.add(
                 CallLog(
                     owner_user_id=owner_user_id,
                     trace_id=trace_id,
                     kind="llm",
                     phase="translate",
-                    level="info" if translated.ok else "error",
+                    level=pick_level(ok=translated.ok, degraded=truncated),
                     endpoint_url=llm.endpoint_url,
                     model=llm.model,
-                    request_body=_dump(sanitize_log_value({"lines": pairs})),
-                    response_body=_dump(sanitize_log_value(translated.payload)),
+                    request_body=request_body,
+                    response_body=response_body,
+                    truncated=truncated,
                     status_code=translated.status_code,
                     latency_ms=translated.latency_ms,
                     error="" if translated.ok else translated.detail,
                 )
             )
         if result is not None:
+            response: dict = {"answers": result.answers}
+            if result.degradation:
+                response["degradation"] = result.degradation
+            if missing:
+                response["missing_questions"] = list(missing)
+            request_body, request_cut = dump_body({"state": state, "lines": pairs})
+            response_body, response_cut = dump_body(response)
+            truncated = request_cut or response_cut
             db.add(
                 CallLog(
                     owner_user_id=owner_user_id,
                     trace_id=trace_id,
                     kind="jev",
                     phase="analyze",
-                    level="info" if result.ok else "error",
+                    level=pick_level(
+                        ok=result.ok,
+                        degraded=truncated or result.degraded or bool(missing),
+                    ),
                     endpoint_url=jev.endpoint_url,
                     model=result.model_reported or jev.model,
-                    request_body=_dump(sanitize_log_value({"state": state, "lines": pairs})),
-                    response_body=_dump(sanitize_log_value({"answers": result.answers})),
+                    request_body=request_body,
+                    response_body=response_body,
+                    truncated=truncated,
                     status_code=result.status_code,
                     latency_ms=result.latency_ms,
                     error="" if result.ok else result.detail,
                 )
             )
-
-
-def _dump(value: object) -> str:
-    text = json.dumps(value, ensure_ascii=False)
-    if len(text.encode("utf-8")) <= 64 * 1024:
-        return text
-    return text.encode("utf-8")[: 64 * 1024].decode("utf-8", errors="ignore")

@@ -165,24 +165,30 @@ def image_context_contents(
 
 
 def _write_describe_log(db: Session, *, owner_user_id: int, trace_id: str, llm, result, image_count: int) -> None:
-    """读图调用也进调用日志（phase=describe），方便分清是读图错还是判断错。"""
-    from ..core.logging import sanitize_log_value
+    """读图调用也进调用日志（phase=describe），方便分清是读图错还是判断错。
+
+    读图失败**不中断分析**（退回纯正文继续），故记 warn 而非 error。
+    """
+    from ..core.logging import dump_body, pick_level
     from ..repositories.models import CallLog
 
+    response_body, response_cut = dump_body(result.payload)
+    request_body, request_cut = dump_body(
+        {"images": image_count, "note": "原图以 data URL 交给多模态模型，系统未做 OCR"}
+    )
+    truncated = request_cut or response_cut
     db.add(
         CallLog(
             owner_user_id=owner_user_id,
             trace_id=trace_id,
             kind="llm",
             phase="describe",
-            level="info" if result.ok else "error",
+            level=pick_level(ok=True, degraded=not result.ok or truncated),
             endpoint_url=llm.endpoint_url,
             model=llm.model,
-            request_body=json.dumps(
-                {"images": image_count, "note": "原图以 data URL 交给多模态模型，系统未做 OCR"},
-                ensure_ascii=False,
-            ),
-            response_body=json.dumps(sanitize_log_value(result.payload), ensure_ascii=False),
+            request_body=request_body,
+            response_body=response_body,
+            truncated=truncated,
             status_code=result.status_code,
             latency_ms=result.latency_ms,
             error="" if result.ok else result.detail,
