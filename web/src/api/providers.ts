@@ -60,7 +60,7 @@ export interface ProviderCreatePayload {
   is_enabled?: boolean
 }
 
-export type ProviderUpdatePayload = Partial<Omit<ProviderCreatePayload, 'kind'>>
+export type ProviderUpdatePayload = Partial<Pick<ProviderView, 'name' | 'context_window_tokens' | 'is_enabled'>>
 
 export const listProviders = (kind?: ProviderKind) =>
   api.get<ProviderView[]>(kind ? `/api/providers?kind=${kind}` : '/api/providers')
@@ -68,7 +68,7 @@ export const listProviders = (kind?: ProviderKind) =>
 export const createProvider = (payload: ProviderCreatePayload) =>
   api.post<ProviderView>('/api/providers', payload)
 
-/** 注意：不传 api_key 表示**保持原值**（空字符串不承担"清空"语义）。 */
+/** 更新只开放名称、LLM 上下文窗口和启停；Key / 地址 / 模型改不了（后端 422）。 */
 export const updateProvider = (id: number, payload: ProviderUpdatePayload) =>
   api.patch<ProviderView>(`/api/providers/${id}`, payload)
 

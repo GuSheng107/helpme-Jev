@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import json
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
 from ..clients import jev_client, llm_client
 from ..core.constants import PURPOSE_PROVIDER_APIKEY
+from ..core.logging import dump_body, pick_level
 from ..core.security import SecretCryptoError, decrypt_secret, encrypt_secret
 from ..core.time import iso_utc, utc_now
+from ..domain.enums import CallLogLevel
 from ..domain.errors import DomainError, DomainErrorCode
 from ..domain.schemas.provider import (
     ConnectionTestResult,
@@ -108,44 +109,27 @@ class ProviderService:
     ) -> ProviderConfig:
         row = self.get_or_404(db, owner_user_id=owner_user_id, provider_id=provider_id)
         fields = payload.model_dump(exclude_unset=True)
-        connection_changed = bool(fields.get("api_key")) or any(
-            fields.get(name) is not None and fields[name] != getattr(row, name)
-            for name in ("protocol", "endpoint_url", "model", "supports_vision")
-            if name != "protocol" or row.kind == "llm"
-        )
-        if fields.get("is_enabled") is True and (connection_changed or row.last_test_ok is not True):
+        if fields.get("is_enabled") is True and row.last_test_ok is not True:
             raise DomainError(
                 DomainErrorCode.VALIDATION_FAILED, "连通性测试通过后才能启用", status_code=422
             )
-
-        if fields.get("is_default") is True:
-            self.repo.clear_default(db, owner_user_id=owner_user_id, kind=row.kind)
-
-        if "protocol" in fields and fields["protocol"] and row.kind == "llm":
-            row.protocol = fields["protocol"]
-        if "name" in fields and fields["name"] is not None:
-            row.name = fields["name"].strip()
-        if "endpoint_url" in fields and fields["endpoint_url"] is not None:
-            row.endpoint_url = fields["endpoint_url"].strip()
-        if "model" in fields and fields["model"] is not None:
-            row.model = fields["model"].strip()
-        if "supports_vision" in fields and fields["supports_vision"] is not None:
-            row.supports_vision = fields["supports_vision"]
-        if "context_window_tokens" in fields and fields["context_window_tokens"] is not None:
+        if fields.get("name") is not None:
+            name = fields["name"].strip()
+            if not name:
+                raise DomainError(
+                    DomainErrorCode.VALIDATION_FAILED, "名称不能为空", status_code=422
+                )
+            row.name = name
+        if fields.get("context_window_tokens") is not None:
+            if row.kind != "llm":
+                raise DomainError(
+                    DomainErrorCode.VALIDATION_FAILED,
+                    "只有表达模型可设置上下文窗口", status_code=422,
+                )
             row.context_window_tokens = fields["context_window_tokens"]
-        if "is_default" in fields and fields["is_default"] is not None:
-            row.is_default = fields["is_default"]
-        if "is_enabled" in fields and fields["is_enabled"] is not None:
+        if fields.get("is_enabled") is not None:
             row.is_enabled = fields["is_enabled"]
-        # api_key 传了才替换；传 None 视为保持原值
-        if fields.get("api_key"):
-            row.api_key_enc = encrypt_secret(fields["api_key"], PURPOSE_PROVIDER_APIKEY)
-        # 只有实际改动连接内容才清除旧测试结果；仅改名称不影响可用性。
-        if connection_changed:
-            row.is_enabled = False
-            row.last_test_ok = None
-            row.last_tested_at = None
-
+        # 这些字段不改变连通性；保留已有测试状态和启用状态。
         db.commit()
         return row
 
@@ -195,12 +179,13 @@ class ProviderService:
             )
 
         # JEV：先连通，再冒烟；每条返回路径都写回测试状态。
+        # 连通日志延后到冒烟结束再写 —— 健康度偏低要记 warn，得先知道结果。
         trace_id = uuid4().hex
         conn = jev_client.test_connection(
             endpoint_url=row.endpoint_url, api_key=api_key, model=row.model
         )
-        self._log_test(db, owner_user_id=owner_user_id, row=row, trace_id=trace_id, phase="connect", result=conn)
         if not conn.ok:
+            self._log_test(db, owner_user_id=owner_user_id, row=row, trace_id=trace_id, phase="connect", result=conn)
             self._record_test_state(db, row, ok=False)
             return ConnectionTestResult(
                 ok=False,
@@ -210,6 +195,7 @@ class ProviderService:
             )
 
         if not with_smoke:
+            self._log_test(db, owner_user_id=owner_user_id, row=row, trace_id=trace_id, phase="connect", result=conn)
             self._record_test_state(db, row, ok=True)
             return ConnectionTestResult(
                 ok=True,
@@ -222,10 +208,16 @@ class ProviderService:
             endpoint_url=row.endpoint_url, api_key=api_key, model=row.model
         )
         if report is None:
+            note = f"冒烟测试无法完成：{last.detail}"
+            self._log_test(
+                db, owner_user_id=owner_user_id, row=row, trace_id=trace_id,
+                phase="connect", result=conn, level=CallLogLevel.ERROR.value,
+                note=note, error_note=note,
+            )
             self._record_test_state(db, row, ok=False)
             return ConnectionTestResult(
                 ok=False,
-                detail=f"协议连通，但冒烟测试无法完成：{last.detail}",
+                detail=f"协议连通，但{note}",
                 latency_ms=last.latency_ms,
                 error_code=last.error_code,
                 model_reported=last.model_reported,
@@ -233,6 +225,20 @@ class ProviderService:
 
         health = report.health
         verdict = "达标" if health >= SMOKE_HEALTH_THRESHOLD else "偏低"
+        # 连通正常但健康度不达标：接口能用、判断质量存疑 → warn（不阻断使用）
+        self._log_test(
+            db, owner_user_id=owner_user_id, row=row, trace_id=trace_id,
+            phase="connect", result=conn,
+            level=(
+                CallLogLevel.INFO.value
+                if health >= SMOKE_HEALTH_THRESHOLD
+                else CallLogLevel.WARN.value
+            ),
+            note=(
+                f"冒烟测试 {report.passed}/{report.total} 通过，"
+                f"健康度 {health}%（{verdict}，门槛 {SMOKE_HEALTH_THRESHOLD}%）"
+            ),
+        )
         self._record_test_state(db, row, ok=True)
         return ConnectionTestResult(
             ok=True,
@@ -265,30 +271,56 @@ class ProviderService:
         row.is_enabled = ok
         db.commit()
 
-    def _log_test(self, db, *, owner_user_id: int, row: ProviderConfig, trace_id: str, phase: str, result) -> None:
-        """连通测试写入调用日志，凭据不入库。"""
+    def _log_test(
+        self,
+        db,
+        *,
+        owner_user_id: int,
+        row: ProviderConfig,
+        trace_id: str,
+        phase: str,
+        result,
+        level: str | None = None,
+        note: str = "",
+        error_note: str | None = None,
+    ) -> None:
+        """连通测试写入调用日志，凭据不入库。
+
+        ``level`` 缺省按调用本身成败定级；JEV 的连通日志会显式传入级别，
+        以便把冒烟健康度偏低记为 warn、把冒烟跑不完记为 error。
+        """
         from ..repositories.models import CallLog
 
+        request_body, request_cut = dump_body(
+            {"protocol": row.protocol, "model": row.model, "vision": phase == "vision"}
+        )
+        response: dict = {
+            "detail": result.detail,
+            "reply": getattr(result, "payload", {}).get("reply", ""),
+        }
+        if note:
+            response["note"] = note
+        response_body, response_cut = dump_body(response)
+        truncated = request_cut or response_cut
+        ok = bool(result.ok)
         db.add(
             CallLog(
                 owner_user_id=owner_user_id,
                 trace_id=trace_id,
                 kind=row.kind,
                 phase=phase,
-                level="info" if result.ok else "error",
+                level=level or pick_level(ok=ok, degraded=truncated),
                 endpoint_url=row.endpoint_url,
                 model=row.model,
-                request_body=json.dumps(
-                    {"protocol": row.protocol, "model": row.model, "vision": phase == "vision"},
-                    ensure_ascii=False,
-                ),
-                response_body=json.dumps(
-                    {"detail": result.detail, "reply": getattr(result, "payload", {}).get("reply", "")},
-                    ensure_ascii=False,
-                )[:65536],
+                request_body=request_body,
+                response_body=response_body,
+                truncated=truncated,
                 status_code=result.status_code,
                 latency_ms=result.latency_ms,
-                error="" if result.ok else result.detail,
+                error=(
+                    error_note if error_note is not None
+                    else ("" if ok else result.detail)
+                ),
             )
         )
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { ApiError } from '../api/client'
 import { avatarDataUrl, changePassword, updateAvatar, updateProfile, type UserSummary } from '../api/auth'
 import { deleteAccount, exportAccountData } from '../api/logs'
@@ -13,9 +13,12 @@ import {
   type ProviderView,
 } from '../api/providers'
 import Button from '../components/Button'
+import { ConfirmDialog, confirmAction } from '../components/confirm'
+import Modal from '../components/Modal'
 import { toast, toastError } from '../components/toast'
 import Field from '../components/Field'
 import { DataCard, EmptyState, Notice, PageBody, PageHeader, PageShell, StatusTag } from '../components/layout'
+import { formatLocalDate } from '../utils/datetime'
 
 interface Props {
   user: UserSummary
@@ -35,18 +38,16 @@ interface FormState {
   context_window_tokens: number
 }
 
-const COPY: Record<ProviderKind, { title: string; address: string; model: string; test: string }> = {
+const COPY: Record<ProviderKind, { title: string; address: string; model: string }> = {
   llm: {
     title: '表达模型',
     address: 'https://api.example.com/v1/chat/completions',
     model: 'gpt-4o-mini',
-    test: '发一条最小对话，确认地址、密钥和模型可用。',
   },
   jev: {
     title: '决策模型',
     address: 'https://api.typesafe.ai/v1/systemone',
     model: 'jev-latest',
-    test: '先确认协议连通，再跑一组标准用例，给出健康度。',
   },
 }
 
@@ -96,43 +97,32 @@ export default function SettingsPage({ user, onUserChange, onLogout }: Props) {
     if (!form) return
     setBusy(true)
     try {
-      let saved: ProviderView
-      if (form.id === null) {
-        saved = await createProvider({
-          kind: form.kind,
-          protocol: form.kind === 'llm' ? form.protocol : 'openai',
+      if (form.id !== null) {
+        await updateProvider(form.id, {
           name: form.name,
-          endpoint_url: form.endpoint_url,
-          api_key: form.api_key,
-          model: form.model,
-          supports_vision: form.kind === 'llm' && form.supports_vision,
-          context_window_tokens: form.kind === 'llm' ? form.context_window_tokens : 64000,
-          is_default: !rows.some((row) => row.kind === form.kind),
+          ...(form.kind === 'llm' ? { context_window_tokens: form.context_window_tokens } : {}),
         })
-      } else {
-        const payload: Record<string, unknown> = {
-          protocol: form.kind === 'llm' ? form.protocol : 'openai',
-          name: form.name,
-          endpoint_url: form.endpoint_url,
-          model: form.model,
-        }
-        if (form.kind === 'llm') {
-          payload.supports_vision = form.supports_vision
-          payload.context_window_tokens = form.context_window_tokens
-        }
-        if (form.api_key) payload.api_key = form.api_key
-        saved = await updateProvider(form.id, payload)
+        setForm(null)
+        await reload()
+        toast('已保存')
+        return
       }
+      const saved = await createProvider({
+        kind: form.kind,
+        protocol: form.kind === 'llm' ? form.protocol : 'openai',
+        name: form.name,
+        endpoint_url: form.endpoint_url,
+        api_key: form.api_key,
+        model: form.model,
+        supports_vision: form.kind === 'llm' && form.supports_vision,
+        context_window_tokens: form.kind === 'llm' ? form.context_window_tokens : 64000,
+        is_default: !rows.some((row) => row.kind === form.kind),
+      })
       const checked = await testProvider(saved.id)
       setResults((prev) => ({ ...prev, [saved.id]: checked }))
       if (!checked.ok) {
-        if (form.id === null) {
-          await deleteProvider(saved.id)
-          toast(checked.detail || '连通性测试未通过，配置未保存', 'danger')
-        } else {
-          await reload()
-          toast(`配置已保存但已停用：${checked.detail || '连通性测试未通过'}`, 'danger')
-        }
+        await deleteProvider(saved.id)
+        toast(checked.detail || '连通性测试未通过，配置未保存', 'error')
         return
       }
       setForm(null)
@@ -151,7 +141,7 @@ export default function SettingsPage({ user, onUserChange, onLogout }: Props) {
       const result = await testProvider(row.id)
       setResults((prev) => ({ ...prev, [row.id]: result }))
       await reload()
-      toast(result.ok ? '连接成功' : result.detail || '连接失败', result.ok ? 'success' : 'danger')
+      toast(result.ok ? '连接成功' : result.detail || '连接失败', result.ok ? 'success' : 'error')
     } catch (err) {
       toastError(err, '连接失败')
     } finally {
@@ -161,7 +151,7 @@ export default function SettingsPage({ user, onUserChange, onLogout }: Props) {
 
   async function toggle(row: ProviderView) {
     if (!row.is_enabled && row.last_test_ok !== true) {
-      toast('连通性测试通过后才能启用', 'danger')
+      toast('连通性测试通过后才能启用', 'warning')
       return
     }
     try {
@@ -174,7 +164,12 @@ export default function SettingsPage({ user, onUserChange, onLogout }: Props) {
   }
 
   async function remove(row: ProviderView) {
-    if (!window.confirm(`删除「${row.name}」？删除后需要重新填写。`)) return
+    if (!await confirmAction({
+      title: '删除模型配置',
+      message: `删除「${row.name}」？删除后需要重新填写。`,
+      confirmText: '确认删除',
+      tone: 'danger',
+    })) return
     try {
       await deleteProvider(row.id)
       await reload()
@@ -184,14 +179,14 @@ export default function SettingsPage({ user, onUserChange, onLogout }: Props) {
     }
   }
 
-  async function downloadExport(format: 'json' | 'markdown') {
+  async function downloadExport() {
     setExporting(true)
     try {
-      const blob = await exportAccountData(format)
+      const blob = await exportAccountData()
       const url = URL.createObjectURL(blob)
       const anchor = document.createElement('a')
       anchor.href = url
-      anchor.download = `helpme-jev-${new Date().toISOString().slice(0, 10)}.${format === 'json' ? 'json' : 'md'}`
+      anchor.download = `helpme-jev-${formatLocalDate()}.md`
       document.body.appendChild(anchor)
       anchor.click()
       anchor.remove()
@@ -262,13 +257,10 @@ export default function SettingsPage({ user, onUserChange, onLogout }: Props) {
           <DataCard title="导出数据">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="text-[13px] leading-5 text-ink-secondary">
-                下载原始 JSON 数据，或生成便于阅读的 Markdown 摘要。
+                将个人数据导出为 Markdown 文件。
               </p>
-              <Button size="sm" loading={exporting} onClick={() => void downloadExport('json')}>
-                下载 JSON
-              </Button>
-              <Button size="sm" loading={exporting} onClick={() => void downloadExport('markdown')}>
-                下载 Markdown
+              <Button size="sm" loading={exporting} onClick={() => void downloadExport()}>
+                导出
               </Button>
             </div>
           </DataCard>
@@ -284,28 +276,18 @@ export default function SettingsPage({ user, onUserChange, onLogout }: Props) {
             </div>
           </DataCard>
           {confirmDelete && (
-            <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/30 px-4" onClick={() => setConfirmDelete(false)}>
-              <form
-                className="w-full max-w-md space-y-4 rounded-[10px] border border-border bg-surface p-5 shadow-[0_16px_48px_rgb(15_23_42/0.18)]"
-                onClick={(event) => event.stopPropagation()}
-                onSubmit={(event) => {
-                  event.preventDefault()
-                  void destroyAccount()
-                }}
-              >
-                <h3 className="text-[16px] font-semibold text-ink">确认注销</h3>
-                <p className="text-[13px] leading-5 text-ink-secondary">
-                  将删除该账号下的全部数据，包括会话、人设、记忆、配置和上传的图片，并退出登录。此操作无法恢复。
-                </p>
-                <Field label="登录密码" type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required />
-                <div className="flex justify-end gap-2">
-                  <Button type="button" onClick={() => { setConfirmDelete(false); setConfirmPassword('') }}>取消</Button>
-                  <Button type="submit" variant="danger" loading={deleting} disabled={!confirmPassword} disabledReason="请输入密码">
-                    确认注销
-                  </Button>
-                </div>
-              </form>
-            </div>
+            <ConfirmDialog
+              title="确认注销"
+              message="将删除该账号下的全部数据，包括会话、人设、记忆、配置和上传的图片，并退出登录。此操作无法恢复。"
+              confirmText="确认注销"
+              tone="danger"
+              busy={deleting}
+              confirmDisabled={!confirmPassword}
+              onConfirm={() => void destroyAccount()}
+              onCancel={() => { setConfirmDelete(false); setConfirmPassword('') }}
+            >
+              <Field label="登录密码" type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required />
+            </ConfirmDialog>
           )}
         </div>
       </PageBody>
@@ -359,7 +341,7 @@ function AccountCard({
   function pickAvatar(file: File | undefined) {
     if (!file) return
     if (file.size > MAX_AVATAR_BYTES) {
-      toast('头像不能超过 1MB')
+      toast('头像不能超过 1MB', 'warning')
       return
     }
     const reader = new FileReader()
@@ -443,22 +425,21 @@ function ProviderSection({
   onRemove: (row: ProviderView) => void
 }) {
   const copy = COPY[kind]
+  const formTitleId = useId()
   return (
     <DataCard
       title={copy.title}
       actions={rows.length === 0 ? <Button size="sm" variant="primary" onClick={onAdd}>添加</Button> : undefined}
     >
-      <p className="mb-3 text-[13px] text-ink-muted">{copy.test}</p>
       {form && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/30 px-4" onClick={onCancel}>
+        <Modal size="md" labelledBy={formTitleId} initialFocusSelector="input" onClose={onCancel} busy={busy}>
           <form
             onSubmit={onSubmit}
-            onClick={(event) => event.stopPropagation()}
-            className="w-full max-w-lg space-y-3 rounded-[10px] border border-border bg-surface p-5 shadow-[0_16px_48px_rgb(15_23_42/0.18)]"
+            className="space-y-3 p-5 sm:p-6"
           >
-            <h3 className="text-[16px] font-semibold text-ink">{form.id === null ? `添加${copy.title}` : `编辑${copy.title}`}</h3>
-            <Field label="名称" value={form.name} onChange={(event) => onChange({ ...form, name: event.target.value })} required />
-            {kind === 'llm' && (
+            <h3 id={formTitleId} className="text-[17px] font-semibold text-[#1b3658]">{form.id === null ? `添加${copy.title}` : `编辑${copy.title}`}</h3>
+            <Field label="名称（页面显示）" value={form.name} onChange={(event) => onChange({ ...form, name: event.target.value })} required />
+            {kind === 'llm' && form.id === null && (
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="block">
                   <span className="mb-1.5 block text-[13px] font-medium text-ink-secondary">协议</span>
@@ -474,6 +455,8 @@ function ProviderSection({
                 </label>
               </div>
             )}
+            {form.id === null && (
+              <>
             <Field
               label={kind === 'llm' ? 'API Base URL' : '接口地址'}
               value={form.endpoint_url}
@@ -491,6 +474,8 @@ function ProviderSection({
               <Field label="模型" value={form.model} onChange={(event) => onChange({ ...form, model: event.target.value })} required placeholder={form.protocol === 'anthropic' ? 'claude-sonnet-4-5' : 'gpt-4o-mini'} />
               <Field label="API Key" type="password" value={form.api_key} onChange={(event) => onChange({ ...form, api_key: event.target.value })} required={form.id === null} placeholder={form.id === null ? 'sk-...' : '留空则保持不变'} />
             </div>
+              </>
+            )}
             {kind === 'llm' && (
               <details className="rounded-[8px] border border-border">
                 <summary className="cursor-pointer px-3 py-2 text-[13px] font-medium text-ink-secondary">高级配置</summary>
@@ -508,12 +493,14 @@ function ProviderSection({
                     </div>
                     <input
                       type="number"
+                      min={1000}
+                      max={2000000}
                       value={form.context_window_tokens}
                       onChange={(event) => onChange({ ...form, context_window_tokens: Number(event.target.value) || 64000 })}
                       className="h-9 w-full rounded-[6px] border border-border bg-surface px-3"
                     />
                   </div>
-                  <label className="block">
+                  {form.id === null && <label className="block">
                     <span className="mb-1.5 block text-[13px] font-medium text-ink-secondary">图片输入</span>
                     <select
                       value={form.supports_vision ? 'yes' : 'no'}
@@ -523,16 +510,16 @@ function ProviderSection({
                       <option value="no">不支持</option>
                       <option value="yes">支持</option>
                     </select>
-                  </label>
+                  </label>}
                 </div>
               </details>
             )}
             <div className="flex justify-end gap-2 pt-1">
-              <Button type="button" onClick={onCancel}>取消</Button>
+              <Button type="button" disabled={busy} onClick={onCancel}>取消</Button>
               <Button type="submit" variant="primary" loading={busy}>保存</Button>
             </div>
           </form>
-        </div>
+        </Modal>
       )}
       {loading ? (
         <p className="py-4 text-center text-[13px] text-ink-muted">加载中…</p>
