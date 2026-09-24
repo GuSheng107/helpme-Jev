@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.security import hash_password
 from app.domain.enums import UserRole
 from app.repositories.auth_repo import UserRepository
-from app.repositories.models import User
+from app.repositories.models import ProviderConfig, User
 
 
 def _user(client: TestClient, db: Session, username: str) -> tuple[dict[str, str], str]:
@@ -33,7 +33,7 @@ def _user(client: TestClient, db: Session, username: str) -> tuple[dict[str, str
     return {"Authorization": f"Bearer {resp.json()['access_token']}"}, password
 
 
-def _configure(client: TestClient, headers: dict) -> None:
+def _configure(client: TestClient, db: Session, headers: dict) -> None:
     for kind in ("llm", "jev"):
         created = client.post(
             "/api/providers",
@@ -52,6 +52,12 @@ def _configure(client: TestClient, headers: dict) -> None:
             },
         )
         assert created.status_code == 201, created.text
+        # 本组用例只测业务日志；模拟已完成连通性测试的提供方。
+        provider = db.get(ProviderConfig, created.json()["id"])
+        assert provider is not None
+        provider.last_test_ok = True
+        provider.is_enabled = True
+        db.commit()
 
 
 class _Resp:
@@ -122,7 +128,7 @@ def test_logs_list_and_trace_filter(
     client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     headers, _ = _user(client, db, "logsone")
-    _configure(client, headers)
+    _configure(client, db, headers)
     trace_id = _run_analysis(client, headers, monkeypatch)
 
     listed = client.get("/api/logs", headers=headers)
@@ -142,8 +148,11 @@ def test_logs_list_and_trace_filter(
     filtered = client.get("/api/logs", headers=headers, params={"trace_id": trace_id})
     assert all(item["trace_id"] == trace_id for item in filtered.json()["items"])
 
-    by_kind = client.get("/api/logs", headers=headers, params={"kind": "jev"})
-    assert all(item["kind"] == "jev" for item in by_kind.json()["items"])
+    by_level = client.get("/api/logs", headers=headers, params={"level": "info"})
+    assert all(item["level"] == "info" for item in by_level.json()["items"])
+    stats = client.get("/api/logs/stats", headers=headers)
+    assert stats.status_code == 200
+    assert stats.json()["judgment_count"] == 1
 
 
 def test_logs_isolated_between_users(client: TestClient, db: Session) -> None:
@@ -157,7 +166,7 @@ def test_export_contains_personal_data(
     client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     headers, _ = _user(client, db, "exportone")
-    _configure(client, headers)
+    _configure(client, db, headers)
     _run_analysis(client, headers, monkeypatch)
     exported = client.get("/api/account/export", headers=headers)
     assert exported.status_code == 200, exported.text
@@ -173,7 +182,7 @@ def test_account_deletion_requires_password_and_cascades(
     client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     headers, password = _user(client, db, "deleteone")
-    _configure(client, headers)
+    _configure(client, db, headers)
     _run_analysis(client, headers, monkeypatch)
 
     wrong = client.request(

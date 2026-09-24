@@ -39,6 +39,8 @@ class UserSummary(BaseModel):
     must_change_password: bool
     capabilities: list[str]
     email: str | None = None
+    created_at: str = ""
+    avatar_base64: str | None = None
 
 
 class LoginResponse(UserSummary):

@@ -27,14 +27,12 @@ import {
 import Button from '../components/Button'
 import DecisionPanel from '../components/DecisionPanel'
 import Field from '../components/Field'
-import { EmptyState, Notice, PageShell } from '../components/layout'
+import { EmptyState, Notice } from '../components/layout'
 
 interface Props {
+  currentId: number | null
+  setCurrentId: (id: number | null) => void
   onOpenSettings: () => void
-  onOpenPersonas: () => void
-  onOpenDecide: () => void
-  onOpenScenarios: () => void
-  onLogout: () => void
 }
 
 /** 我方消息的来源徽标：manual 不标（默认就是自己写的），标出来的是特殊的 */
@@ -53,15 +51,8 @@ interface PendingImage {
 /** 一条消息最多带的图片数 */
 const MAX_IMAGES = 9
 
-export default function ChatPage({
-  onOpenSettings,
-  onOpenPersonas,
-  onOpenDecide,
-  onOpenScenarios,
-  onLogout,
-}: Props) {
+export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Props) {
   const [conversations, setConversations] = useState<Conversation[]>([])
-  const [currentId, setCurrentId] = useState<number | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [draft, setDraft] = useState('')
   const [role, setRole] = useState<'other' | 'me'>('other')
@@ -344,8 +335,8 @@ export default function ChatPage({
   }
 
   return (
-    <PageShell>
-      <div className="mx-auto flex min-h-screen max-w-5xl flex-col lg:h-screen lg:min-h-0 lg:flex-row">
+    <div className="flex h-full min-h-0 flex-col bg-page">
+      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         <aside
           className={`${listOpen ? 'block' : 'hidden'} border-b border-border bg-surface lg:block lg:w-60 lg:shrink-0 lg:border-b-0 lg:border-r`}
         >
@@ -428,23 +419,6 @@ export default function ChatPage({
               <span className="truncate text-[16px] font-semibold text-ink">
                 {current ? current.counterpart_name || current.title : 'HelpMe'}
               </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Button size="sm" onClick={onOpenDecide}>
-                决策
-              </Button>
-              <Button size="sm" onClick={onOpenScenarios}>
-                场景
-              </Button>
-              <Button size="sm" onClick={onOpenPersonas}>
-                人设
-              </Button>
-              <Button size="sm" onClick={onOpenSettings}>
-                设置
-              </Button>
-              <Button size="sm" onClick={onLogout}>
-                退出
-              </Button>
             </div>
           </header>
 
@@ -709,7 +683,7 @@ export default function ChatPage({
         </section>
       </div>
       {lightbox !== null && <Lightbox url={lightbox} onClose={() => setLightbox(null)} />}
-    </PageShell>
+    </div>
   )
 }
 

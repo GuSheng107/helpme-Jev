@@ -16,6 +16,7 @@ from app.repositories.models import User
 from app.scenarios.builders import BACKGROUND_NOTE
 from app.scenarios.questions_romance import PANEL_KEYS, romance_questions
 from app.services.analyze_service import present_answers
+from tests.provider_setup import mark_provider_tested
 
 
 def _make_user(client: TestClient, db: Session, username: str) -> str:
@@ -159,6 +160,7 @@ def _configure(client: TestClient, headers: dict) -> None:
             headers=headers,
         )
         assert resp.status_code == 201, resp.text
+        mark_provider_tested(resp.json()["id"])
 
 
 def _conversation(client: TestClient, headers: dict) -> int:

@@ -98,6 +98,8 @@ def test_create_returns_masked_key_only(client: TestClient, db: Session) -> None
     assert "sk-abcdefghijklmnop" not in str(body)
     assert body["api_key_masked"].startswith("sk-a")
     assert "••••" in body["api_key_masked"]
+    assert body["is_enabled"] is False
+    assert body["last_test_ok"] is None
 
 
 def test_update_without_api_key_keeps_original(client: TestClient, db: Session) -> None:
@@ -125,38 +127,22 @@ def test_replace_api_key(client: TestClient, db: Session) -> None:
     assert updated.json()["api_key_masked"].startswith("sk-Z")
 
 
-def test_only_one_default_per_kind(client: TestClient, db: Session) -> None:
-    token = _make_user(client, db, "defuser")
+def test_only_one_provider_per_kind(client: TestClient, db: Session) -> None:
+    token = _make_user(client, db, "oneuser")
     headers = _auth(token)
-
-    first = client.post(
+    _create_llm(client, headers)
+    again = client.post(
         "/api/providers",
         json={
             "kind": "llm",
-            "name": "A",
-            "endpoint_url": "https://a.example.com/v1",
-            "api_key": "sk-aaaaaaaaaaaa",
-            "model": "m1",
-            "is_default": True,
-        },
-        headers=headers,
-    ).json()
-    second = client.post(
-        "/api/providers",
-        json={
-            "kind": "llm",
-            "name": "B",
+            "name": "第二个",
             "endpoint_url": "https://b.example.com/v1",
             "api_key": "sk-bbbbbbbbbbbb",
             "model": "m2",
-            "is_default": True,
         },
         headers=headers,
-    ).json()
-
-    rows = {item["id"]: item["is_default"] for item in client.get("/api/providers", headers=headers).json()}
-    assert rows[second["id"]] is True
-    assert rows[first["id"]] is False  # 旧的默认被清掉
+    )
+    assert again.status_code == 409
 
 
 def test_delete_provider(client: TestClient, db: Session) -> None:
@@ -187,7 +173,10 @@ def test_provider_isolation(client: TestClient, db: Session) -> None:
 def test_llm_connection_ok(client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_httpx(
         monkeypatch,
-        response=_FakeResponse(200, {"model": "gpt-4o-mini", "choices": [{"index": 0}], "usage": {"total_tokens": 3}}),
+        response=_FakeResponse(
+            200,
+            {"model": "gpt-4o-mini", "choices": [{"message": {"content": "ok"}}], "usage": {"total_tokens": 3}},
+        ),
     )
     token = _make_user(client, db, "llmok")
     headers = _auth(token)
@@ -199,6 +188,38 @@ def test_llm_connection_ok(client: TestClient, db: Session, monkeypatch: pytest.
     assert body["ok"] is True
     assert "连通正常" in body["detail"]
     assert body["smoke"] is None  # LLM 不跑冒烟
+    provider = client.get("/api/providers", headers=headers).json()[0]
+    assert provider["is_enabled"] is True
+    assert provider["last_test_ok"] is True
+
+
+def test_connection_change_clears_old_test_result(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_httpx(
+        monkeypatch,
+        response=_FakeResponse(200, {"choices": [{"message": {"content": "ok"}}]}),
+    )
+    headers = _auth(_make_user(client, db, "retestuser"))
+    created = _create_llm(client, headers)
+    provider_id = created["id"]
+    assert client.post(f"/api/providers/{provider_id}/test", headers=headers).json()["ok"] is True
+
+    renamed = client.patch(
+        f"/api/providers/{provider_id}", json={"name": "新名称"}, headers=headers
+    ).json()
+    assert renamed["is_enabled"] is True
+    assert renamed["last_test_ok"] is True
+
+    changed = client.patch(
+        f"/api/providers/{provider_id}", json={"model": "new-model"}, headers=headers
+    ).json()
+    assert changed["is_enabled"] is False
+    assert changed["last_test_ok"] is None
+    enable = client.patch(
+        f"/api/providers/{provider_id}", json={"is_enabled": True}, headers=headers
+    )
+    assert enable.status_code == 422
 
 
 def test_llm_connection_auth_failure(client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -276,6 +297,9 @@ def test_jev_connection_and_smoke(
     # 0.9 满足"负面 > 0.7"与"风险 > 0.7"，但不满足"低于阈值"的用例
     assert body["smoke"]["passed"] == 2
     assert body["smoke"]["health"] == 40
+    provider = client.get("/api/providers", headers=headers).json()[0]
+    assert provider["last_test_ok"] is True
+    assert provider["is_enabled"] is True
 
 
 def test_jev_protocol_mismatch(client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -288,6 +312,11 @@ def test_jev_protocol_mismatch(client: TestClient, db: Session, monkeypatch: pyt
     body = client.post(f"/api/providers/{created['id']}/test", headers=headers).json()
     assert body["ok"] is False
     assert body["error_code"] == "PROTOCOL_MISMATCH"
+    provider = client.get("/api/providers", headers=headers).json()[0]
+    assert provider["last_test_ok"] is False
+    assert provider["is_enabled"] is False
+    logs = client.get("/api/logs", headers=headers, params={"level": "error"}).json()["items"]
+    assert any(item["kind"] == "jev" and item["phase"] == "connect" for item in logs)
 
 
 def test_jev_skip_smoke(client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch) -> None:

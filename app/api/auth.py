@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from ..core import login_throttle
 from ..core.db import get_db
+from ..core.time import iso_utc
 from ..domain.errors import DomainError, DomainErrorCode
 from ..domain.schemas.auth import LoginRequest, LoginResponse, RegisterRequest, UserSummary
 from ..repositories.models import User
@@ -25,6 +26,8 @@ def to_summary(user: User) -> UserSummary:
         must_change_password=user.must_change_password,
         capabilities=capabilities_for(user),
         email=user.email,
+        created_at=iso_utc(user.created_at) or "",
+        avatar_base64=user.avatar_base64 or None,
     )
 
 

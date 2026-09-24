@@ -203,6 +203,7 @@ class AnalyzeService:
             endpoint_url=llm.endpoint_url,
             api_key=_providers.decrypt_key(llm),
             model=llm.model,
+            protocol=llm.protocol,
             lines=[(str(row.seq), text) for row, text in zip(rows, contents)],
         )
         if translated is not None and not translated.ok:
@@ -240,6 +241,7 @@ class AnalyzeService:
             endpoint_url=llm.endpoint_url,
             api_key=_providers.decrypt_key(llm),
             model=llm.model,
+            protocol=llm.protocol,
         )
         background = render_background(memories, summary=summary)
         state = build_state(
@@ -288,6 +290,11 @@ class AnalyzeService:
         if chosen is None:
             rows = _providers.list_for_user(db, owner_user_id=owner_user_id, kind=kind)
             chosen = rows[0] if rows else None
+        if chosen is not None and not chosen.is_enabled:
+            name = "决策模型" if kind == "jev" else "表达模型"
+            raise DomainError(
+                DomainErrorCode.NOT_CONFIGURED, f"{name}已停用，请在设置里启用。", status_code=409
+            )
         if chosen is None:
             code = (
                 DomainErrorCode.JEV_NOT_CONFIGURED
@@ -331,6 +338,7 @@ class AnalyzeService:
                     trace_id=trace_id,
                     kind="llm",
                     phase="translate",
+                    level="info" if translated.ok else "error",
                     endpoint_url=llm.endpoint_url,
                     model=llm.model,
                     request_body=_dump(sanitize_log_value({"lines": pairs})),
@@ -347,6 +355,7 @@ class AnalyzeService:
                     trace_id=trace_id,
                     kind="jev",
                     phase="analyze",
+                    level="info" if result.ok else "error",
                     endpoint_url=jev.endpoint_url,
                     model=result.model_reported or jev.model,
                     request_body=_dump(sanitize_log_value({"state": state, "lines": pairs})),

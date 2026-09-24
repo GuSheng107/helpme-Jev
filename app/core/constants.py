@@ -23,10 +23,10 @@ SESSION_TOKEN_BYTES = 32
 SESSION_TOKEN_PREFIX_LEN = 8
 
 # ------------------------------------------------------------------ 邀请码
-INVITATION_CODE_LENGTH = 20
-INVITATION_CODE_PREFIX_LEN = 8
+INVITATION_CODE_PREFIX = "JEV"
+INVITATION_CODE_SEGMENT_LENGTH = 4
+INVITATION_CODE_SEGMENTS = 3
 INVITATION_MAX_USES = 1000
-INVITATION_MAX_EXPIRY_YEARS = 5
 
 # ------------------------------------------------------------------ 数据保留
 RETENTION_DAYS_DEFAULT = 15

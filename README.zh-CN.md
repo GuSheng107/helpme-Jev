@@ -8,7 +8,7 @@
 
 <p align="center">
   一个小而完整的自托管工具，帮你处理难回的消息和拿不准的决定。<br>
-  <strong>JEV 负责判断，可选的 LLM 负责措辞，下一步由你决定。</strong>
+  <strong>JEV 负责判断，LLM 处理语言任务，下一步由你决定。</strong>
 </p>
 
 <p align="center">
@@ -39,7 +39,7 @@
 
 > **JEV 负责判断，LLM 帮忙表达，最后还是你决定。**
 
-JEV（TypeSafe System One）回答的是有类型的问题，例如是非概率、选项概率和评分。它不负责写最终消息。需要时，可以让兼容 OpenAI 接口的 LLM 做翻译、追问、起草或润色。
+JEV（TypeSafe System One）回答的是有类型的问题，例如是非概率、选项概率和评分。它不负责写最终消息。LLM 负责把输入翻译给 JEV，并可按需追问、起草或润色。程序支持 OpenAI Chat Completions、OpenAI Responses 和 Anthropic Messages 协议。
 
 ## 它能做什么
 
@@ -75,7 +75,7 @@ flowchart LR
 - Python 3.12 或更高版本
 - [uv](https://docs.astral.sh/uv/)
 - Node.js 20 或更高版本，用于前端开发服务器和构建
-- 如果要进行真实分析，还需要一个兼容 System One 协议的 JEV 接口和一个兼容 OpenAI Chat 接口的 LLM 接口
+- 如果要进行真实分析，还需要一个兼容 System One 协议的 JEV 接口，以及使用上述任一协议的 LLM 接口
 
 ### 1. 克隆并安装
 
@@ -149,12 +149,13 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8790
    - 填写 API Key 和模型名。
    - 运行连通性测试和 JEV 冒烟测试。
 2. 添加 <code>llm</code> 类型的提供方。
-   - 填写完整的 OpenAI 兼容 Chat 接口 <code>POST</code> URL；程序不会猜测或自动拼接路径。
+   - 选择 OpenAI Chat Completions、OpenAI Responses 或 Anthropic Messages 协议。
+   - 填写 API 基础地址（例如 <code>https://api.openai.com/v1</code>）；程序会根据协议拼接路径。原有完整接口地址也可使用。
    - 填写 API Key 和模型名。
    - 如果需要读截图，把它标记为支持视觉。
-3. 分别选择两类默认提供方。
+3. 分别运行连通性测试。新配置测试通过后才会启用。
 
-LLM 只在流程需要语言处理时使用：翻译、追问、图片描述、候选回复和润色。结构化判断仍由 JEV 完成。
+LLM 在流程需要语言处理时使用：翻译、追问、图片描述、候选回复和润色。结构化判断仍由 JEV 完成。管理员可在邀请码页面生成邀请码，并反复点击复制图标复制已显示的邀请码。
 
 ## 环境变量
 

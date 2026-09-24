@@ -10,6 +10,8 @@ export interface UserSummary {
   must_change_password: boolean
   capabilities: string[]
   email?: string | null
+  created_at?: string
+  avatar_base64?: string | null
 }
 
 export interface LoginResponse extends UserSummary {
@@ -32,12 +34,25 @@ export function register(payload: {
   return api.post<UserSummary>('/api/auth/register', payload, false)
 }
 
+export function avatarDataUrl(base64: string): string {
+  const mime = base64.startsWith('/9j/') ? 'image/jpeg' : 'image/png'
+  return `data:${mime};base64,${base64}`
+}
+
 export function fetchMe(): Promise<UserSummary> {
   return api.get<UserSummary>('/api/auth/me')
 }
 
 export function logout(): Promise<void> {
   return api.post<void>('/api/auth/logout')
+}
+
+export function updateProfile(displayName: string): Promise<UserSummary> {
+  return api.patch<UserSummary>('/api/account/profile', { display_name: displayName })
+}
+
+export function updateAvatar(avatar: string | null): Promise<UserSummary> {
+  return api.patch<UserSummary>('/api/account/avatar', { avatar })
 }
 
 export function changePassword(oldPassword: string, newPassword: string): Promise<UserSummary> {

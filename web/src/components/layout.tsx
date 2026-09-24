@@ -64,11 +64,11 @@ type StatusTone = 'success' | 'primary' | 'warning' | 'danger' | 'info'
  */
 export function StatusTag({ tone, children }: { tone: StatusTone; children: ReactNode }) {
   const tones: Record<StatusTone, string> = {
-    success: 'bg-[#f0f9eb] text-success border-[#e1f3d8]',
-    primary: 'bg-primary-soft text-primary-hover border-[#d9ecff]',
-    warning: 'bg-[#fdf6ec] text-warning border-[#faecd8]',
-    danger: 'bg-[#fef0f0] text-danger border-[#fde2e2]',
-    info: 'bg-[#f4f4f5] text-info border-[#e9e9eb]',
+    success: 'bg-primary-soft text-success border-primary-soft',
+    primary: 'bg-primary-soft text-primary-hover border-primary-soft',
+    warning: 'bg-[#fbf3e4] text-warning border-[#f3e4c4]',
+    danger: 'bg-[#fbeceb] text-danger border-[#f3d4d0]',
+    info: 'bg-surface-muted text-info border-border',
   }
   return (
     <span

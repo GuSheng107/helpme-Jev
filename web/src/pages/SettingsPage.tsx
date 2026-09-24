@@ -1,13 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError } from '../api/client'
-import {
-  forgetMemory,
-  listMemories,
-  listReflections,
-  revertReflection,
-  type MemoryItem,
-  type Reflection,
-} from '../api/chat'
+import { avatarDataUrl, changePassword, updateAvatar, updateProfile, type UserSummary } from '../api/auth'
 import { deleteAccount, exportAccountData } from '../api/logs'
 import {
   createProvider,
@@ -20,18 +13,20 @@ import {
   type ProviderView,
 } from '../api/providers'
 import Button from '../components/Button'
+import { toast, toastError } from '../components/toast'
 import Field from '../components/Field'
 import { DataCard, EmptyState, Notice, PageBody, PageHeader, PageShell, StatusTag } from '../components/layout'
 
 interface Props {
+  user: UserSummary
+  onUserChange: (user: UserSummary) => void
   onLogout: () => void
-  onBack: () => void
-  onOpenLogs: () => void
 }
 
 interface FormState {
   id: number | null
   kind: ProviderKind
+  protocol: 'openai' | 'openai_responses' | 'anthropic'
   name: string
   endpoint_url: string
   api_key: string
@@ -40,27 +35,43 @@ interface FormState {
   context_window_tokens: number
 }
 
-const BLANK: FormState = {
-  id: null,
-  kind: 'jev',
-  name: '',
-  endpoint_url: '',
-  api_key: '',
-  model: '',
-  supports_vision: false,
-  context_window_tokens: 64000,
+const COPY: Record<ProviderKind, { title: string; address: string; model: string; test: string }> = {
+  llm: {
+    title: '表达模型',
+    address: 'https://api.example.com/v1/chat/completions',
+    model: 'gpt-4o-mini',
+    test: '发一条最小对话，确认地址、密钥和模型可用。',
+  },
+  jev: {
+    title: '决策模型',
+    address: 'https://api.typesafe.ai/v1/systemone',
+    model: 'jev-latest',
+    test: '先确认协议连通，再跑一组标准用例，给出健康度。',
+  },
 }
 
-export default function SettingsPage({ onLogout, onBack, onOpenLogs }: Props) {
+function blank(kind: ProviderKind): FormState {
+  return {
+    id: null,
+    kind,
+    protocol: 'openai',
+    name: '',
+    endpoint_url: '',
+    api_key: '',
+    model: '',
+    supports_vision: false,
+    context_window_tokens: 64000,
+  }
+}
+
+/** 设置：表达模型和决策模型完全分开，下面只留账号自己的数据操作。 */
+export default function SettingsPage({ user, onUserChange, onLogout }: Props) {
   const [rows, setRows] = useState<ProviderView[]>([])
   const [loading, setLoading] = useState(true)
   const [form, setForm] = useState<FormState | null>(null)
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [testing, setTesting] = useState<number | null>(null)
   const [results, setResults] = useState<Record<number, ConnectionTestResult>>({})
-  const [memories, setMemories] = useState<MemoryItem[]>([])
-  const [reflections, setReflections] = useState<Reflection[]>([])
   const [confirmPassword, setConfirmPassword] = useState('')
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [exporting, setExporting] = useState(false)
@@ -68,16 +79,9 @@ export default function SettingsPage({ onLogout, onBack, onOpenLogs }: Props) {
 
   const reload = useCallback(async () => {
     try {
-      const [providers, noted, history] = await Promise.all([
-        listProviders(),
-        listMemories(),
-        listReflections(),
-      ])
-      setRows(providers)
-      setMemories(noted.items)
-      setReflections(history)
+      setRows(await listProviders())
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : '加载失败')
+      toastError(err, '加载失败')
     } finally {
       setLoading(false)
     }
@@ -91,68 +95,81 @@ export default function SettingsPage({ onLogout, onBack, onOpenLogs }: Props) {
     event.preventDefault()
     if (!form) return
     setBusy(true)
-    setError(null)
     try {
+      let saved: ProviderView
       if (form.id === null) {
-        await createProvider({
+        saved = await createProvider({
           kind: form.kind,
+          protocol: form.kind === 'llm' ? form.protocol : 'openai',
           name: form.name,
           endpoint_url: form.endpoint_url,
           api_key: form.api_key,
           model: form.model,
-          supports_vision: form.supports_vision,
-          context_window_tokens: form.context_window_tokens,
+          supports_vision: form.kind === 'llm' && form.supports_vision,
+          context_window_tokens: form.kind === 'llm' ? form.context_window_tokens : 64000,
+          is_default: !rows.some((row) => row.kind === form.kind),
         })
       } else {
-        // 不传 api_key 表示保持原值
         const payload: Record<string, unknown> = {
+          protocol: form.kind === 'llm' ? form.protocol : 'openai',
           name: form.name,
           endpoint_url: form.endpoint_url,
           model: form.model,
-          supports_vision: form.supports_vision,
-          context_window_tokens: form.context_window_tokens,
+        }
+        if (form.kind === 'llm') {
+          payload.supports_vision = form.supports_vision
+          payload.context_window_tokens = form.context_window_tokens
         }
         if (form.api_key) payload.api_key = form.api_key
-        await updateProvider(form.id, payload)
+        saved = await updateProvider(form.id, payload)
+      }
+      const checked = await testProvider(saved.id)
+      setResults((prev) => ({ ...prev, [saved.id]: checked }))
+      if (!checked.ok) {
+        if (form.id === null) {
+          await deleteProvider(saved.id)
+          toast(checked.detail || '连通性测试未通过，配置未保存', 'danger')
+        } else {
+          await reload()
+          toast(`配置已保存但已停用：${checked.detail || '连通性测试未通过'}`, 'danger')
+        }
+        return
       }
       setForm(null)
       await reload()
+      toast('连通正常，已保存')
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : '保存失败')
+      toastError(err, '保存失败')
     } finally {
       setBusy(false)
     }
   }
 
-  async function undoReflection(id: number) {
-    try {
-      await revertReflection(id)
-      await reload()
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : '撤销失败')
-    }
-  }
-
-  async function dropMemory(id: number) {
-    try {
-      await forgetMemory(id)
-      setMemories((current) => current.filter((item) => item.id !== id))
-      setReflections(await listReflections())
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : '删除失败')
-    }
-  }
-
   async function runTest(row: ProviderView) {
     setTesting(row.id)
-    setError(null)
     try {
-      const result = await testProvider(row.id, row.kind === 'jev')
+      const result = await testProvider(row.id)
       setResults((prev) => ({ ...prev, [row.id]: result }))
+      await reload()
+      toast(result.ok ? '连接成功' : result.detail || '连接失败', result.ok ? 'success' : 'danger')
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : '连接失败')
+      toastError(err, '连接失败')
     } finally {
       setTesting(null)
+    }
+  }
+
+  async function toggle(row: ProviderView) {
+    if (!row.is_enabled && row.last_test_ok !== true) {
+      toast('连通性测试通过后才能启用', 'danger')
+      return
+    }
+    try {
+      await updateProvider(row.id, { is_enabled: !row.is_enabled })
+      await reload()
+      toast(row.is_enabled ? '已停用' : '已启用')
+    } catch (err) {
+      toastError(err, '操作失败')
     }
   }
 
@@ -161,24 +178,27 @@ export default function SettingsPage({ onLogout, onBack, onOpenLogs }: Props) {
     try {
       await deleteProvider(row.id)
       await reload()
+      toast('已删除')
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : '删除失败')
+      toastError(err, '删除失败')
     }
   }
 
-  async function downloadExport() {
+  async function downloadExport(format: 'json' | 'markdown') {
     setExporting(true)
-    setError(null)
     try {
-      const blob = await exportAccountData()
+      const blob = await exportAccountData(format)
       const url = URL.createObjectURL(blob)
       const anchor = document.createElement('a')
       anchor.href = url
-      anchor.download = `helpme-jev-export-${new Date().toISOString().slice(0, 10)}.json`
+      anchor.download = `helpme-jev-${new Date().toISOString().slice(0, 10)}.${format === 'json' ? 'json' : 'md'}`
+      document.body.appendChild(anchor)
       anchor.click()
-      URL.revokeObjectURL(url)
+      anchor.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+      toast('已开始下载')
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : '导出未完成')
+      toastError(err, '导出未完成')
     } finally {
       setExporting(false)
     }
@@ -187,12 +207,12 @@ export default function SettingsPage({ onLogout, onBack, onOpenLogs }: Props) {
   async function destroyAccount() {
     if (!confirmPassword) return
     setDeleting(true)
-    setError(null)
     try {
       await deleteAccount(confirmPassword)
+      toast('账号已注销')
       onLogout()
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : '注销未完成')
+      toastError(err, '注销未完成')
     } finally {
       setDeleting(false)
     }
@@ -200,364 +220,381 @@ export default function SettingsPage({ onLogout, onBack, onOpenLogs }: Props) {
 
   return (
     <PageShell>
-      <header className="border-b border-border bg-surface">
-        <div className="mx-auto flex h-[52px] max-w-5xl items-center justify-between px-5">
-          <div className="flex items-center gap-3">
-            <button type="button" className="text-[13px] text-primary" onClick={onBack}>
-              返回
-            </button>
-            <span className="text-[16px] font-semibold leading-6 text-ink">设置</span>
-          </div>
-          <Button size="sm" onClick={onLogout}>
-            退出
-          </Button>
-        </div>
-      </header>
-
       <PageBody>
-        <PageHeader
-          title="连接"
-          description="判断和生成文本各需填写地址、密钥与模型。"
-          actions={
-            <Button variant="primary" onClick={() => setForm({ ...BLANK })}>
-              添加
-            </Button>
-          }
-        />
+        <PageHeader title="设置" description="账号、表达模型和决策模型。" />
+        <div className="mb-4">
+          <AccountCard user={user} onUserChange={onUserChange} />
+        </div>
+        <div className="space-y-4">
+          {(['llm', 'jev'] as const).map((kind) => (
+            <ProviderSection
+              key={kind}
+              kind={kind}
+              rows={rows.filter((row) => row.kind === kind)}
+              loading={loading}
+              form={form?.kind === kind ? form : null}
+              busy={busy}
+              testing={testing}
+              results={results}
+              onAdd={() => setForm(blank(kind))}
+              onEdit={(row) =>
+                setForm({
+                  id: row.id,
+                  kind: row.kind,
+                  protocol: row.protocol,
+                  name: row.name,
+                  endpoint_url: row.endpoint_url,
+                  api_key: '',
+                  model: row.model,
+                  supports_vision: row.supports_vision,
+                  context_window_tokens: row.context_window_tokens,
+                })
+              }
+              onCancel={() => setForm(null)}
+              onChange={setForm}
+              onSubmit={submit}
+              onTest={runTest}
+              onToggle={toggle}
+              onRemove={remove}
+            />
+          ))}
 
-        {error && (
-          <div className="mb-4">
-            <Notice tone="danger">{error}</Notice>
-          </div>
-        )}
+          <DataCard title="导出数据">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-[13px] leading-5 text-ink-secondary">
+                下载原始 JSON 数据，或生成便于阅读的 Markdown 摘要。
+              </p>
+              <Button size="sm" loading={exporting} onClick={() => void downloadExport('json')}>
+                下载 JSON
+              </Button>
+              <Button size="sm" loading={exporting} onClick={() => void downloadExport('markdown')}>
+                下载 Markdown
+              </Button>
+            </div>
+          </DataCard>
 
-        {form && (
-          <div className="mb-4">
-            <DataCard title={form.id === null ? '添加连接' : '修改连接'}>
-              <form onSubmit={submit} className="space-y-3">
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <label className="block">
-                    <span className="mb-1.5 block text-[13px] font-medium text-ink-secondary">
-                      类型
-                    </span>
-                    <select
-                      value={form.kind}
-                      disabled={form.id !== null}
-                      onChange={(e) => setForm({ ...form, kind: e.target.value as ProviderKind })}
-                      className="h-9 w-full rounded-[6px] border border-border bg-surface px-3 disabled:bg-surface-muted"
-                    >
-                      <option value="jev">判断</option>
-                      <option value="llm">写句子</option>
-                    </select>
-                  </label>
-                  <Field
-                    label="名称"
-                    value={form.name}
-                    onChange={(e) => setForm({ ...form, name: e.target.value })}
-                    placeholder="便于识别的名称"
-                    required
-                  />
-                </div>
-
-                <Field
-                  label="地址"
-                  value={form.endpoint_url}
-                  onChange={(e) => setForm({ ...form, endpoint_url: e.target.value })}
-                  placeholder={
-                    form.kind === 'jev'
-                      ? 'https://api.typesafe.ai/v1/systemone'
-                      : 'https://api.example.com/v1/chat/completions'
-                  }
-                  required
-                  hint="请填写完整地址"
-                />
-
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <Field
-                    label="模型名"
-                    value={form.model}
-                    onChange={(e) => setForm({ ...form, model: e.target.value })}
-                    placeholder={form.kind === 'jev' ? 'jev-latest' : 'gpt-4o-mini'}
-
-                    required
-                    hint={form.kind === 'jev' ? '建议填写具体版本，jev-latest 会随官方更新变化' : undefined}
-                  />
-                  <Field
-                    label="密钥"
-                    type="password"
-                    value={form.api_key}
-                    onChange={(e) => setForm({ ...form, api_key: e.target.value })}
-                    required={form.id === null}
-                    placeholder={form.id === null ? '粘贴密钥' : '留空则保持不变'}
-                    hint={form.id === null ? '仅保存在本机，保存后不再显示全文' : '留空则保持原密钥'}
-                  />
-                </div>
-
-                {form.kind === 'llm' && (
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <Field
-                      label="上下文长度"
-                      type="number"
-                      value={String(form.context_window_tokens)}
-                      onChange={(e) =>
-                        setForm({ ...form, context_window_tokens: Number(e.target.value) || 64000 })
-                      }
-                      hint="按该模型的上下文长度填写，不确定可保持默认"
-                    />
-                    <label className="flex items-center gap-2 pt-6 text-[13px] text-ink-secondary">
-                      <input
-                        type="checkbox"
-                        checked={form.supports_vision}
-                        onChange={(e) => setForm({ ...form, supports_vision: e.target.checked })}
-                      />
-                      支持图片
-                    </label>
-                  </div>
-                )}
-
-                <div className="flex gap-2 pt-1">
-                  <Button type="submit" variant="primary" loading={busy}>
-                    保存
-                  </Button>
-                  <Button type="button" onClick={() => setForm(null)}>
-                    取消
+          <DataCard title="注销账号">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-[13px] leading-5 text-ink-secondary">
+                账号、会话、人设和配置会全部删除，无法恢复。建议先下载一份数据。
+              </p>
+              <Button size="sm" variant="danger" onClick={() => setConfirmDelete(true)}>
+                注销账号
+              </Button>
+            </div>
+          </DataCard>
+          {confirmDelete && (
+            <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/30 px-4" onClick={() => setConfirmDelete(false)}>
+              <form
+                className="w-full max-w-md space-y-4 rounded-[10px] border border-border bg-surface p-5 shadow-[0_16px_48px_rgb(15_23_42/0.18)]"
+                onClick={(event) => event.stopPropagation()}
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  void destroyAccount()
+                }}
+              >
+                <h3 className="text-[16px] font-semibold text-ink">确认注销</h3>
+                <p className="text-[13px] leading-5 text-ink-secondary">
+                  将删除该账号下的全部数据，包括会话、人设、记忆、配置和上传的图片，并退出登录。此操作无法恢复。
+                </p>
+                <Field label="登录密码" type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required />
+                <div className="flex justify-end gap-2">
+                  <Button type="button" onClick={() => { setConfirmDelete(false); setConfirmPassword('') }}>取消</Button>
+                  <Button type="submit" variant="danger" loading={deleting} disabled={!confirmPassword} disabledReason="请输入密码">
+                    确认注销
                   </Button>
                 </div>
               </form>
-            </DataCard>
-          </div>
-        )}
-
-        <div className="mb-4">
-          <DataCard title="已记录">
-            {memories.length === 0 ? (
-              <EmptyState title="暂无记录" description="判断完成后，相关事实会自动记录在这里。" />
-            ) : (
-              <ul className="divide-y divide-border-subtle">
-                {memories.map((item) => (
-                  <li key={item.id} className="flex items-start justify-between gap-3 py-2.5 first:pt-0 last:pb-0">
-                    <div>
-                      <p className="text-[14px] leading-[22px] text-ink">{item.content}</p>
-                      <p className="mt-0.5 text-[13px] leading-5 text-ink-muted">
-                        {item.subject}
-                        {item.counterpart_key ? ` · ${item.counterpart_key}` : ''} · {item.category}
-                      </p>
-                    </div>
-                    <Button size="sm" onClick={() => void dropMemory(item.id)}>
-                      删除
-                    </Button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </DataCard>
-        </div>
-
-        {reflections.some((item) => !item.reverted_at && item.changes.some((change) => change.content)) && (
-          <div className="mb-4">
-            <DataCard title="最近变更">
-              <ul className="space-y-3">
-                {reflections
-                  .filter((item) => !item.reverted_at)
-                  .map((item, index) => {
-                    const lines = item.changes.filter((change) => change.content && !change.skipped)
-                    if (lines.length === 0) return null
-                    return (
-                      <li key={item.id} className="flex items-start justify-between gap-3">
-                        <ul>
-                          {lines.map((change, line) => (
-                            <li key={line} className="text-[14px] leading-[22px] text-ink">
-                              {change.content}
-                            </li>
-                          ))}
-                        </ul>
-                        {index === 0 && (
-                          <Button size="sm" onClick={() => void undoReflection(item.id)}>
-                            撤销
-                          </Button>
-                        )}
-                      </li>
-                    )
-                  })}
-              </ul>
-            </DataCard>
-          </div>
-        )}
-
-        <div className="mb-4">
-          <DataCard title="数据与日志">
-            <p className="mb-3 text-[13px] leading-5 text-ink-secondary">
-              你的会话、记忆、人设与日志都保存在本机。可以随时导出，或注销账号彻底删除。
-            </p>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button size="sm" loading={exporting} onClick={() => void downloadExport()}>
-                导出我的数据
-              </Button>
-              <Button size="sm" onClick={onOpenLogs}>
-                查看调用日志
-              </Button>
             </div>
-            <div className="mt-4 rounded-[8px] border border-danger/30 bg-surface p-3">
-              <p className="text-[13px] font-medium text-ink">注销账号</p>
-              <p className="mt-1 text-[13px] leading-5 text-ink-muted">
-                删除全部会话、记忆、人设与配置，不可恢复。需要输入密码确认。
-              </p>
-              {confirmDelete ? (
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <input
-                    className="w-48 rounded-[6px] border border-border px-2 py-1.5 text-[14px]"
-                    type="password"
-                    placeholder="输入登录密码"
-                    value={confirmPassword}
-                    onChange={(event) => setConfirmPassword(event.target.value)}
-                  />
-                  <Button size="sm" variant="danger" loading={deleting} disabled={!confirmPassword} disabledReason="请输入密码" onClick={() => void destroyAccount()}>
-                    确认注销
-                  </Button>
-                  <Button
-                    size="sm"
-                    onClick={() => {
-                      setConfirmDelete(false)
-                      setConfirmPassword('')
-                    }}
-                  >
-                    手滑了
-                  </Button>
-                </div>
-              ) : (
-                <Button className="mt-2" size="sm" variant="danger" onClick={() => setConfirmDelete(true)}>
-                  注销账号
-                </Button>
-              )}
-            </div>
-          </DataCard>
-        </div>
-
-        <DataCard title="已添加">
-          {loading ? (
-            <p className="py-6 text-center text-[13px] text-ink-muted">加载中…</p>
-          ) : rows.length === 0 ? (
-            <EmptyState
-              title="尚未添加连接"
-              description="请先添加「判断」，再添加「写句子」。地址与密钥由你自行提供。"
-              action={
-                <Button variant="primary" onClick={() => setForm({ ...BLANK })}>
-                  添加
-                </Button>
-              }
-            />
-          ) : (
-            <ul className="divide-y divide-border-subtle">
-              {rows.map((row) => {
-                const result = results[row.id]
-                return (
-                  <li key={row.id} className="py-3 first:pt-0 last:pb-0">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-[14px] font-medium text-ink">{row.name}</span>
-                          <StatusTag tone={row.kind === 'jev' ? 'primary' : 'info'}>
-                            {row.kind === 'jev' ? '判断' : '写句子'}
-                          </StatusTag>
-                          {row.is_default && <StatusTag tone="success">默认</StatusTag>}
-                        </div>
-                        <p className="mono mt-1 truncate text-[13px] text-ink-muted">
-                          {row.endpoint_url}
-                        </p>
-                        <p className="mono mt-0.5 text-[13px] text-ink-muted">
-                          {row.model} · {row.api_key_masked}
-                          {row.kind === 'llm' && ` · 窗口 ${row.context_window_tokens}`}
-                        </p>
-                      </div>
-                      <div className="flex shrink-0 gap-2">
-                        <Button
-                          size="sm"
-                          loading={testing === row.id}
-                          onClick={() => void runTest(row)}
-                        >
-                          测试连接
-                        </Button>
-                        <Button
-                          size="sm"
-                          onClick={() =>
-                            setForm({
-                              id: row.id,
-                              kind: row.kind,
-                              name: row.name,
-                              endpoint_url: row.endpoint_url,
-                              api_key: '',
-                              model: row.model,
-                              supports_vision: row.supports_vision,
-                              context_window_tokens: row.context_window_tokens,
-                            })
-                          }
-                        >
-                          编辑
-                        </Button>
-                        <Button size="sm" variant="danger" onClick={() => void remove(row)}>
-                          删除
-                        </Button>
-                      </div>
-                    </div>
-
-                    {result && (
-                      <div className="mt-3 rounded-[6px] bg-surface-muted p-3">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <StatusTag tone={result.ok ? 'success' : 'danger'}>
-                            {result.ok ? '连接成功' : '连接失败'}
-                          </StatusTag>
-                          <span className="text-[13px] text-ink-secondary">
-                            耗时 {result.latency_ms} ms
-                          </span>
-                          {result.model_reported && (
-                            <span className="mono text-[13px] text-ink-muted">
-                              {result.model_reported}
-                            </span>
-                          )}
-                        </div>
-                        <p className="mt-2 text-[13px] leading-5 text-ink-secondary">
-                          {result.detail}
-                        </p>
-
-                        {result.smoke && (
-                          <div className="mt-3">
-                            <div className="flex items-center gap-2">
-                              <span className="text-[13px] text-ink-secondary">准确率</span>
-                              <span
-                                className={`mono text-[14px] font-medium ${
-                                  result.smoke.health >= 80 ? 'text-success' : 'text-warning'
-                                }`}
-                              >
-                                {result.smoke.health}%
-                              </span>
-                              <span className="text-[13px] text-ink-muted">
-                                ({result.smoke.passed}/{result.smoke.total} 通过)
-                              </span>
-                            </div>
-                            <ul className="mt-2 space-y-1">
-                              {result.smoke.outcomes.map((item) => (
-                                <li key={item.name} className="flex items-center gap-2 text-[13px]">
-                                  <StatusTag tone={item.passed ? 'success' : 'danger'}>
-                                    {item.passed ? '通过' : '未过'}
-                                  </StatusTag>
-                                  <span className="text-ink-secondary">{item.name}</span>
-                                  <span className="mono text-ink-muted">
-                                    期望 {item.expected} · 实际 {item.actual}
-                                  </span>
-                                </li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </li>
-                )
-              })}
-            </ul>
           )}
-        </DataCard>
+        </div>
       </PageBody>
     </PageShell>
+  )
+}
+
+const MAX_AVATAR_BYTES = 1024 * 1024
+
+function AccountCard({
+  user,
+  onUserChange,
+}: {
+  user: UserSummary
+  onUserChange: (user: UserSummary) => void
+}) {
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [displayName, setDisplayName] = useState(user.display_name)
+  const [oldPassword, setOldPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  async function saveProfile(event: React.FormEvent) {
+    event.preventDefault()
+    setBusy(true)
+    try {
+      onUserChange(await updateProfile(displayName))
+      toast('昵称已更新')
+    } catch (err) {
+      toastError(err, '保存失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function savePassword(event: React.FormEvent) {
+    event.preventDefault()
+    setBusy(true)
+    try {
+      onUserChange(await changePassword(oldPassword, newPassword))
+      setOldPassword('')
+      setNewPassword('')
+      toast('密码已修改')
+    } catch (err) {
+      toastError(err, '修改失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function pickAvatar(file: File | undefined) {
+    if (!file) return
+    if (file.size > MAX_AVATAR_BYTES) {
+      toast('头像不能超过 1MB')
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = async () => {
+      const raw = String(reader.result || '')
+      const payload = raw.includes(',') ? raw.split(',')[1] : raw
+      setBusy(true)
+      try {
+        onUserChange(await updateAvatar(payload))
+        toast('头像已更新')
+      } catch (err) {
+        toastError(err, '头像未更新')
+      } finally {
+        setBusy(false)
+      }
+    }
+    reader.readAsDataURL(file)
+  }
+
+  return (
+    <DataCard title="账号">
+      <div className="flex items-center gap-4">
+        {user.avatar_base64 ? (
+          <img src={avatarDataUrl(user.avatar_base64)} alt="" className="h-14 w-14 rounded-full object-cover" />
+        ) : (
+          <span className="inline-flex h-14 w-14 items-center justify-center rounded-full bg-primary text-[18px] font-medium text-white">
+            {(user.display_name || user.username).slice(0, 1)}
+          </span>
+        )}
+        <div>
+          <input ref={fileRef} type="file" accept="image/png,image/jpeg" className="hidden" onChange={(event) => pickAvatar(event.target.files?.[0])} />
+          <Button size="sm" loading={busy} onClick={() => fileRef.current?.click()}>更换头像</Button>
+          <p className="mt-1 text-[12px] text-ink-muted">PNG 或 JPEG，不超过 1MB。没有头像时显示昵称首字。</p>
+        </div>
+      </div>
+      <form onSubmit={saveProfile} className="mt-4 grid gap-3 sm:grid-cols-2">
+        <Field label="用户名" value={user.username} disabled hint="登录名创建后不可修改" />
+        <Field label="昵称" value={displayName} onChange={(event) => setDisplayName(event.target.value)} required />
+        <div><Button type="submit" size="sm" variant="primary" loading={busy}>保存资料</Button></div>
+      </form>
+      <form onSubmit={savePassword} className="mt-4 grid gap-3 border-t border-border-subtle pt-4 sm:grid-cols-2">
+        <Field label="原密码" type="password" value={oldPassword} onChange={(event) => setOldPassword(event.target.value)} required />
+        <Field label="新密码" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required hint="至少 10 位，含字母、数字和符号" />
+        <div><Button type="submit" size="sm" loading={busy} disabled={!oldPassword || !newPassword} disabledReason="请填写原密码和新密码">修改密码</Button></div>
+      </form>
+    </DataCard>
+  )
+}
+
+function ProviderSection({
+  kind,
+  rows,
+  loading,
+  form,
+  busy,
+  testing,
+  results,
+  onAdd,
+  onEdit,
+  onCancel,
+  onChange,
+  onSubmit,
+  onTest,
+  onToggle,
+  onRemove,
+}: {
+  kind: ProviderKind
+  rows: ProviderView[]
+  loading: boolean
+  form: FormState | null
+  busy: boolean
+  testing: number | null
+  results: Record<number, ConnectionTestResult>
+  onAdd: () => void
+  onEdit: (row: ProviderView) => void
+  onCancel: () => void
+  onChange: (form: FormState) => void
+  onSubmit: (event: React.FormEvent) => void
+  onTest: (row: ProviderView) => void
+  onToggle: (row: ProviderView) => void
+  onRemove: (row: ProviderView) => void
+}) {
+  const copy = COPY[kind]
+  return (
+    <DataCard
+      title={copy.title}
+      actions={rows.length === 0 ? <Button size="sm" variant="primary" onClick={onAdd}>添加</Button> : undefined}
+    >
+      <p className="mb-3 text-[13px] text-ink-muted">{copy.test}</p>
+      {form && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/30 px-4" onClick={onCancel}>
+          <form
+            onSubmit={onSubmit}
+            onClick={(event) => event.stopPropagation()}
+            className="w-full max-w-lg space-y-3 rounded-[10px] border border-border bg-surface p-5 shadow-[0_16px_48px_rgb(15_23_42/0.18)]"
+          >
+            <h3 className="text-[16px] font-semibold text-ink">{form.id === null ? `添加${copy.title}` : `编辑${copy.title}`}</h3>
+            <Field label="名称" value={form.name} onChange={(event) => onChange({ ...form, name: event.target.value })} required />
+            {kind === 'llm' && (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="block">
+                  <span className="mb-1.5 block text-[13px] font-medium text-ink-secondary">协议</span>
+                  <select
+                    value={form.protocol}
+                    onChange={(event) => onChange({ ...form, protocol: event.target.value as FormState['protocol'] })}
+                    className="h-9 w-full rounded-[6px] border border-border bg-surface px-3"
+                  >
+                    <option value="openai">OpenAI Chat Completions</option>
+                    <option value="openai_responses">OpenAI Responses</option>
+                    <option value="anthropic">Anthropic Messages</option>
+                  </select>
+                </label>
+              </div>
+            )}
+            <Field
+              label={kind === 'llm' ? 'API Base URL' : '接口地址'}
+              value={form.endpoint_url}
+              onChange={(event) => onChange({ ...form, endpoint_url: event.target.value })}
+              required
+              placeholder={
+                kind === 'llm'
+                  ? form.protocol === 'anthropic'
+                    ? 'https://api.anthropic.com/v1'
+                    : 'https://api.openai.com/v1'
+                  : copy.address
+              }
+            />
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="模型" value={form.model} onChange={(event) => onChange({ ...form, model: event.target.value })} required placeholder={form.protocol === 'anthropic' ? 'claude-sonnet-4-5' : 'gpt-4o-mini'} />
+              <Field label="API Key" type="password" value={form.api_key} onChange={(event) => onChange({ ...form, api_key: event.target.value })} required={form.id === null} placeholder={form.id === null ? 'sk-...' : '留空则保持不变'} />
+            </div>
+            {kind === 'llm' && (
+              <details className="rounded-[8px] border border-border">
+                <summary className="cursor-pointer px-3 py-2 text-[13px] font-medium text-ink-secondary">高级配置</summary>
+                <div className="grid gap-3 border-t border-border p-3 sm:grid-cols-2">
+                  <div>
+                    <div className="mb-1.5 flex items-center justify-between">
+                      <span className="text-[13px] font-medium text-ink-secondary">上下文窗口</span>
+                      <span className="flex gap-1">
+                        {[['128K', 131072], ['256K', 262144], ['1M', 1048576]].map(([label, value]) => (
+                          <button key={label} type="button" className="rounded border border-border px-1.5 py-0.5 text-[11px] text-ink-muted hover:text-primary" onClick={() => onChange({ ...form, context_window_tokens: Number(value) })}>
+                            {label}
+                          </button>
+                        ))}
+                      </span>
+                    </div>
+                    <input
+                      type="number"
+                      value={form.context_window_tokens}
+                      onChange={(event) => onChange({ ...form, context_window_tokens: Number(event.target.value) || 64000 })}
+                      className="h-9 w-full rounded-[6px] border border-border bg-surface px-3"
+                    />
+                  </div>
+                  <label className="block">
+                    <span className="mb-1.5 block text-[13px] font-medium text-ink-secondary">图片输入</span>
+                    <select
+                      value={form.supports_vision ? 'yes' : 'no'}
+                      onChange={(event) => onChange({ ...form, supports_vision: event.target.value === 'yes' })}
+                      className="h-9 w-full rounded-[6px] border border-border bg-surface px-3"
+                    >
+                      <option value="no">不支持</option>
+                      <option value="yes">支持</option>
+                    </select>
+                  </label>
+                </div>
+              </details>
+            )}
+            <div className="flex justify-end gap-2 pt-1">
+              <Button type="button" onClick={onCancel}>取消</Button>
+              <Button type="submit" variant="primary" loading={busy}>保存</Button>
+            </div>
+          </form>
+        </div>
+      )}
+      {loading ? (
+        <p className="py-4 text-center text-[13px] text-ink-muted">加载中…</p>
+      ) : rows.length === 0 ? (
+        <EmptyState title={`还没有${copy.title}`} description="每种只能配置一个。" />
+      ) : (
+        <ul className="divide-y divide-border-subtle">
+          {rows.map((row) => {
+            const result = results[row.id]
+            return (
+              <li key={row.id} className="py-3 first:pt-0 last:pb-0">
+                <div>
+                  <div className="flex items-center gap-2">
+                      <span className="text-[14px] font-medium text-ink">{row.name}</span>
+                      <StatusTag tone={row.last_test_ok ? 'success' : row.last_tested_at ? 'danger' : 'info'}>
+                        {row.last_tested_at ? (row.last_test_ok ? '测试成功' : '测试失败') : '未测试'}
+                      </StatusTag>
+                    </div>
+                    <p className="mono mt-1 truncate text-[13px] text-ink-muted">{row.endpoint_url}</p>
+                    <p className="mono mt-0.5 text-[13px] text-ink-muted">
+                      {kind === 'llm' && `${{ openai: 'OpenAI', openai_responses: 'OpenAI Responses', anthropic: 'Anthropic' }[row.protocol] ?? 'OpenAI'} · `}
+                      {row.model}
+                      {kind === 'llm' && row.supports_vision ? ' · 可看图' : ''}
+                    </p>
+                </div>
+                <div className="mt-3 flex items-center justify-between border-t border-border-subtle pt-3">
+                  <span className="text-[13px] text-ink-secondary">{row.is_enabled ? '已启用' : '已停用'}</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={row.is_enabled}
+                    aria-label={row.is_enabled ? '停用' : '启用'}
+                    onClick={() => void onToggle(row)}
+                    className={`relative h-5 w-9 rounded-full transition-colors ${row.is_enabled ? 'bg-[#409eff]' : 'bg-slate-300'}`}
+                  >
+                    <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${row.is_enabled ? 'left-4' : 'left-0.5'}`} />
+                  </button>
+                </div>
+                <div className="mt-2 flex gap-2">
+                  <Button size="sm" loading={testing === row.id} onClick={() => void onTest(row)}>测试</Button>
+                  <Button size="sm" onClick={() => onEdit(row)}>编辑</Button>
+                  <Button size="sm" variant="danger" onClick={() => void onRemove(row)}>删除</Button>
+                </div>
+                {result && (
+                  <div className="mt-3 rounded-[6px] bg-surface-muted p-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <StatusTag tone={result.ok ? 'success' : 'danger'}>{result.ok ? '连接成功' : '连接失败'}</StatusTag>
+                      <span className="text-[13px] text-ink-secondary">耗时 {result.latency_ms} ms</span>
+                    </div>
+                    <p className="mt-2 text-[13px] leading-5 text-ink-secondary">{result.detail}</p>
+                    {result.smoke && (
+                      <p className="mt-2 text-[13px] text-ink-secondary">
+                        健康度 {result.smoke.health}%（{result.smoke.passed}/{result.smoke.total} 通过）
+                      </p>
+                    )}
+                  </div>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </DataCard>
   )
 }

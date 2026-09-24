@@ -18,6 +18,7 @@ MAX_CONTEXT_TOKENS = 2_000_000
 
 class ProviderCreate(StrictModel):
     kind: Literal["jev", "llm"]
+    protocol: Literal["openai", "openai_responses", "anthropic"] = "openai"
     name: str = Field(min_length=1, max_length=64)
     endpoint_url: str = Field(min_length=1, max_length=512)
     api_key: str = Field(min_length=1, max_length=512)
@@ -36,6 +37,7 @@ class ProviderUpdate(StrictModel):
     （对齐 human-llm-gateway 的表单纪律）。
     """
 
+    protocol: Literal["openai", "openai_responses", "anthropic"] | None = None
     name: str | None = Field(default=None, min_length=1, max_length=64)
     endpoint_url: str | None = Field(default=None, min_length=1, max_length=512)
     api_key: str | None = Field(default=None, min_length=1, max_length=512)
@@ -45,17 +47,22 @@ class ProviderUpdate(StrictModel):
         default=None, ge=MIN_CONTEXT_TOKENS, le=MAX_CONTEXT_TOKENS
     )
     is_default: bool | None = None
+    is_enabled: bool | None = None
 
 
 class ProviderView(BaseModel):
     id: int
     kind: str
+    protocol: str = "openai"
     name: str
     endpoint_url: str
     model: str
     supports_vision: bool
     context_window_tokens: int
     is_default: bool
+    is_enabled: bool = True
+    last_test_ok: bool | None = None
+    last_tested_at: str = ""
     # 只回掩码：形如 sk-…abcd；**绝不回明文**
     api_key_masked: str
     created_at: str

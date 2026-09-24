@@ -11,11 +11,7 @@ const TYPE_LABELS: Record<QuestionType, string> = {
   score: '评分题',
 }
 
-interface Props {
-  onBack: () => void
-}
-
-export default function DecisionPage({ onBack }: Props) {
+export default function DecisionPage() {
   const [kind, setKind] = useState<QuestionType>('choice')
   const [question, setQuestion] = useState('')
   const [options, setOptions] = useState(['', ''])
@@ -68,7 +64,6 @@ export default function DecisionPage({ onBack }: Props) {
         <PageHeader
           title="决策工作台"
           description="自由编一道题：是非、选项或评分，交给 Jev 判断。"
-          actions={<Button onClick={onBack}>返回</Button>}
         />
         {error && <Notice tone="danger">{error}</Notice>}
         <div className="space-y-4">

@@ -4,14 +4,14 @@
 
 - ``User.password_hash`` 存 Argon2id（PHC 编码）
 - ``AuthSession.token_hash`` 只存 SHA256，**明文 token 只在登录响应里出现一次**
-- ``InvitationCode`` 同样只存 hash + 前缀，明文只在创建响应里出现一次
+- ``InvitationCode`` 存明文以支持管理员重复复制；应限制数据库访问。
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ...core.db import Base
@@ -32,6 +32,7 @@ class User(Base, TimestampMixin):
     disabled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     disabled_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    avatar_base64: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
     sessions: Mapped[list["AuthSession"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
@@ -63,8 +64,9 @@ class InvitationCode(Base, TimestampMixin):
     __tablename__ = "invitation_codes"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
-    code_prefix: Mapped[str] = mapped_column(String(16), index=True, nullable=False)
+    code: Mapped[str] = mapped_column(String(32), unique=True, index=True, nullable=False)
+    code_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    code_prefix: Mapped[str] = mapped_column(String(16), nullable=False, default="")
     note: Mapped[str | None] = mapped_column(String(255), nullable=True)
     max_uses: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     used_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

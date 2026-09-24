@@ -13,8 +13,6 @@ from app.core.security import (
     generate_session_token,
     hash_password,
     hash_token,
-    normalize_invitation_code,
-    verify_invitation_code,
     verify_password,
 )
 
@@ -83,18 +81,8 @@ def test_session_token_shape() -> None:
 
 
 # ------------------------------------------------------------------ 邀请码
-def test_invitation_code_roundtrip() -> None:
-    display, prefix, code_hash = generate_invitation_code()
-    assert "-" in display
-    assert len(prefix) == 8
-    assert verify_invitation_code(display, code_hash)
-    # 归一化（无分隔符）后也应通过
-    assert verify_invitation_code(normalize_invitation_code(display), code_hash)
-    # 小写输入也应通过
-    assert verify_invitation_code(display.lower(), code_hash)
-
-
-def test_invitation_code_rejects_wrong() -> None:
-    _display, _prefix, code_hash = generate_invitation_code()
-    assert not verify_invitation_code("WRONGCODE12345678", code_hash)
-    assert not verify_invitation_code("", code_hash)
+def test_invitation_code_format() -> None:
+    code = generate_invitation_code()
+    assert code.startswith("JEV-")
+    parts = code.split("-")
+    assert parts[0] == "JEV" and len(parts) == 4 and all(len(part) == 4 for part in parts[1:])

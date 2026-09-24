@@ -79,11 +79,7 @@ const SELF_FORMS: Record<PersonaContext, SelfItem[]> = {
 
 const CONTEXT_LABELS: Record<PersonaContext, string> = { romance: '恋爱', workplace: '职场' }
 
-interface Props {
-  onBack: () => void
-}
-
-export default function PersonaPage({ onBack }: Props) {
+export default function PersonaPage() {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [currentId, setCurrentId] = useState<number | null>(null)
   const [subject, setSubject] = useState<'me' | 'other'>('other')
@@ -213,7 +209,6 @@ export default function PersonaPage({ onBack }: Props) {
         <PageHeader
           title="人设档案"
           description="按情境分档：恋爱与职场各一份，互不覆盖。这不是临床诊断。"
-          actions={<Button onClick={onBack}>返回</Button>}
         />
         {error && <Notice tone="danger">{error}</Notice>}
         {notice && <div className="mb-3"><Notice tone="info">{notice}</Notice></div>}

@@ -11,7 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import account, auth, chat, conversations, decide, logs, personas, providers, scenarios
+from .api import account, admin, auth, chat, conversations, decide, logs, personas, providers, scenarios
 from .core.config import get_settings
 from .domain.errors import DomainError, DomainErrorCode
 from .services.bootstrap import bootstrap
@@ -80,6 +80,7 @@ def health() -> dict[str, object]:
 
 app.include_router(auth.router)
 app.include_router(account.router)
+app.include_router(admin.router)
 app.include_router(providers.router)
 app.include_router(scenarios.router)
 app.include_router(conversations.router)

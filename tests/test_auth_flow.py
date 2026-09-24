@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi.testclient import TestClient
+import pytest
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -45,19 +48,18 @@ def _activate_admin(client: TestClient, db: Session) -> str:
 
 
 def _new_invitation(db: Session, admin_id: int, *, max_uses: int = 1) -> str:
-    display, prefix, code_hash = generate_invitation_code()
+    code = generate_invitation_code()
     InvitationRepository().add(
         db,
         InvitationCode(
-            code_hash=code_hash,
-            code_prefix=prefix,
+            code=code,
             max_uses=max_uses,
             used_count=0,
             created_by_user_id=admin_id,
         ),
     )
     db.commit()
-    return display
+    return code
 
 
 # ------------------------------------------------------------------ 基础
@@ -131,6 +133,29 @@ def test_after_password_change_capabilities_expand(client: TestClient, db: Sessi
     assert not any("log" in cap and "own" not in cap for cap in body["capabilities"])
 
 
+def test_admin_delete_user_removes_uploaded_files(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from app.services import image_service
+
+    headers = {"Authorization": f"Bearer {_activate_admin(client, db)}"}
+    created = client.post(
+        "/api/admin/users",
+        json={"username": "fileowner", "display_name": "文件用户", "password": "FileOwner!123"},
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    user_id = created.json()["id"]
+    monkeypatch.setattr(image_service, "MATERIALS_DIR", tmp_path)
+    folder = tmp_path / str(user_id)
+    folder.mkdir()
+    (folder / "image.png").write_bytes(b"image")
+
+    deleted = client.delete(f"/api/admin/users/{user_id}", headers=headers)
+    assert deleted.status_code == 204, deleted.text
+    assert not folder.exists()
+
+
 # ------------------------------------------------------------------ 登录
 def test_login_wrong_password(client: TestClient, db: Session) -> None:
     _activate_admin(client, db)
@@ -165,6 +190,26 @@ def test_register_with_invitation_code(client: TestClient, db: Session) -> None:
 
     # 新用户可正常登录
     assert _login(client, "alice", "Al1ce!Passw0rd").status_code == 200
+
+
+def test_blank_display_name_does_not_consume_invitation(client: TestClient, db: Session) -> None:
+    headers = {"Authorization": f"Bearer {_activate_admin(client, db)}"}
+    invitation = client.post("/api/admin/invitations", json={}, headers=headers)
+    assert invitation.status_code == 201, invitation.text
+    code = invitation.json()["code"]
+
+    rejected = client.post(
+        "/api/auth/register",
+        json={
+            "invitation_code": code,
+            "username": "blankname",
+            "display_name": "   ",
+            "password": "BlankName!123",
+        },
+    )
+
+    assert rejected.status_code == 422
+    assert client.get("/api/admin/invitations", headers=headers).json()[0]["used_count"] == 0
 
 
 def test_invitation_cannot_be_reused_beyond_max_uses(client: TestClient, db: Session) -> None:

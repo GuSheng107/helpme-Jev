@@ -16,6 +16,27 @@ from .deps import require_active_user
 router = APIRouter(prefix="/api/logs", tags=["logs"])
 
 
+@router.get("/stats")
+def log_stats(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_active_user),
+) -> dict[str, int]:
+    """首页只取成功的聊天分析和通用决策数量。"""
+    count = db.scalar(
+        select(func.count())
+        .select_from(CallLog)
+        .where(
+            CallLog.owner_user_id == user.id,
+            CallLog.kind == "jev",
+            CallLog.phase.in_(("analyze", "decide")),
+            CallLog.level == "info",
+            CallLog.status_code >= 200,
+            CallLog.status_code < 400,
+        )
+    )
+    return {"judgment_count": int(count or 0)}
+
+
 def _maybe_json(raw: str):
     """body 存的是 JSON 字符串；解析失败（截断等）原样返回。"""
     try:
@@ -28,15 +49,15 @@ def _maybe_json(raw: str):
 def list_logs(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    kind: str | None = Query(default=None, pattern="^(jev|llm)$"),
+    level: str = Query(default="", pattern="^(|info|error)$"),
     trace_id: str = Query(default="", max_length=64),
     db: Session = Depends(get_db),
     user: User = Depends(require_active_user),
 ) -> dict:
-    """按时间倒序；可按 trace_id / kind 过滤。"""
+    """按时间倒序；只按级别和 traceId 过滤。"""
     conditions = [CallLog.owner_user_id == user.id]
-    if kind:
-        conditions.append(CallLog.kind == kind)
+    if level:
+        conditions.append(CallLog.level == level)
     if trace_id.strip():
         conditions.append(CallLog.trace_id == trace_id.strip())
 
@@ -59,6 +80,7 @@ def list_logs(
                 "id": row.id,
                 "trace_id": row.trace_id,
                 "kind": row.kind,
+                "level": row.level,
                 "phase": row.phase,
                 "model": row.model,
                 "status_code": row.status_code,

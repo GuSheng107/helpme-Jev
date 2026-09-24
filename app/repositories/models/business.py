@@ -26,6 +26,7 @@ class ProviderConfig(Base, TimestampMixin):
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     kind: Mapped[str] = mapped_column(String(8), nullable=False)  # jev | llm
+    protocol: Mapped[str] = mapped_column(String(16), nullable=False, default="openai")
     name: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     endpoint_url: Mapped[str] = mapped_column(String(512), nullable=False)
     api_key_enc: Mapped[str] = mapped_column(Text, nullable=False)
@@ -33,6 +34,9 @@ class ProviderConfig(Base, TimestampMixin):
     supports_vision: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     context_window_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=64000)
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    last_test_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    last_tested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class Scenario(Base, TimestampMixin):
