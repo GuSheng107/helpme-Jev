@@ -198,6 +198,100 @@ def test_decide_choice_requires_two_options(client: TestClient, db: Session) -> 
     assert bad.status_code == 422
 
 
+# ------------------------------------------------------------------ 流式阶段
+def _events(response) -> list[dict]:
+    return [
+        json.loads(line.removeprefix("data: "))
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+
+
+def test_decide_stream_reports_real_stages(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    headers = _user(client, db, "decidestream")
+    _configure(client, headers)
+    router = _DecideRouter()
+    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: router)
+
+    streamed = client.post(
+        "/api/decide/stream",
+        headers=headers,
+        json={"question": "现在适合提加薪吗？", "question_type": "noul", "context": "老板刚夸过我"},
+    )
+    assert streamed.status_code == 200, streamed.text
+    events = _events(streamed)
+    # 中文输入走翻译桥：plan 先交代两步，翻译完成后再出决策结果
+    assert [event["stage"] for event in events] == ["plan", "translate_done", "done"]
+    assert events[0]["steps"] == ["translate", "decide"]
+    assert events[-1]["payload"]["kind"] == "noul"
+    assert events[-1]["payload"]["result"]["percent"] == 72
+
+
+def test_decide_stream_skips_bridge_for_ascii(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    headers = _user(client, db, "decideascii")
+    _configure(client, headers)
+    router = _DecideRouter()
+    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: router)
+
+    streamed = client.post(
+        "/api/decide/stream",
+        headers=headers,
+        json={"question": "Is now a good time to ask for a raise?", "question_type": "noul"},
+    )
+    assert streamed.status_code == 200, streamed.text
+    events = _events(streamed)
+    # 纯英文输入没有翻译桥，只剩决策一步
+    assert [event["stage"] for event in events] == ["plan", "done"]
+    assert events[0]["steps"] == ["decide"]
+    assert all("systemone" in call["url"] for call in router.calls)
+
+
+def test_decide_stream_validates_before_opening_stream(
+    client: TestClient, db: Session
+) -> None:
+    headers = _user(client, db, "decideprecheck")
+    _configure(client, headers)
+    bad = client.post(
+        "/api/decide/stream",
+        headers=headers,
+        json={"question": "选哪个？", "question_type": "choice", "options": ["只有一个"]},
+    )
+    # 开流前校验，仍是普通 422，而不是 200 + error 事件
+    assert bad.status_code == 422
+    assert bad.json()["error"]["code"] == "VALIDATION_FAILED"
+
+
+def test_decide_stream_reports_upstream_failure_as_event(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    headers = _user(client, db, "decidefail")
+    _configure(client, headers)
+
+    class _BrokenRouter(_DecideRouter):
+        def post(self, url, json=None, headers=None):  # noqa: A002
+            self.calls.append({"url": url, "json": json})
+            if "systemone" in url:
+                raise httpx.ConnectError("boom")
+            return super().post(url, json=json, headers=headers)
+
+    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: _BrokenRouter())
+    streamed = client.post(
+        "/api/decide/stream",
+        headers=headers,
+        json={"question": "Is now a good time?", "question_type": "noul"},
+    )
+    # 状态码已经发出去了，失败只能走 error 事件
+    assert streamed.status_code == 200
+    events = _events(streamed)
+    assert events[-1]["stage"] == "error"
+    assert events[-1]["error"]["code"] == "JEV_UPSTREAM_ERROR"
+    assert events[-1]["error"]["retryable"] is True
+
+
 # ------------------------------------------------------------------ 自定义场景
 def test_copy_edit_and_use_custom_scenario(
     client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
