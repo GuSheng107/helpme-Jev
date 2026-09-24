@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { UNAUTHORIZED_EVENT, ApiError, clearToken, getToken } from './api/client'
 import { fetchMe, logout, type UserSummary } from './api/auth'
 import AppShell, { type AppPage } from './components/AppShell'
+import { ConfirmHost } from './components/confirm'
 import { ToastHost } from './components/toast'
 import ChangePasswordPage from './pages/ChangePasswordPage'
 import ChatPage from './pages/ChatPage'
@@ -75,6 +76,7 @@ export default function App() {
   const shell = (
     <>
       <ToastHost />
+      <ConfirmHost />
       {body()}
     </>
   )

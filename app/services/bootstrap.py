@@ -181,10 +181,12 @@ def ensure_builtin_scenarios(db: Session) -> None:
                     is_builtin=True,
                 )
             )
-        elif row.judge_questions != judge:
-            # 代码里的题目改了 → 刷新快照（内置场景只读，不会丢用户编辑）
-            row.judge_questions = judge
-            row.persona_questions = persona
+        else:
+            # 内置题目以代码为准，分别刷新判断题和人设题快照。
+            if row.judge_questions != judge:
+                row.judge_questions = judge
+            if row.persona_questions != persona:
+                row.persona_questions = persona
     db.commit()
 
 

@@ -78,10 +78,12 @@ def ensure_summary(
     db: Session,
     *,
     conversation_id: int,
+    owner_user_id: int,
     endpoint_url: str,
     api_key: str,
     model: str,
     protocol: str = "openai",
+    trace_id: str = "",
 ) -> str:
     """最近 10 条之外积压超过阈值时，把更早的内容压成一条摘要。失败则沿用旧摘要。"""
     current = _summaries.latest(db, conversation_id=conversation_id)
@@ -108,6 +110,16 @@ def ensure_summary(
         ],
     )
     text = str(result.payload.get("summary") or "").strip() if result.ok else ""
+    _log_summary(
+        db,
+        owner_user_id=owner_user_id,
+        trace_id=trace_id,
+        endpoint_url=endpoint_url,
+        model=model,
+        payload=payload,
+        result=result,
+        kept=bool(text),
+    )
     if not text:
         return current.summary if current else ""
     _summaries.add(
@@ -119,3 +131,43 @@ def ensure_summary(
         ),
     )
     return text[:500]
+
+
+def _log_summary(
+    db: Session,
+    *,
+    owner_user_id: int,
+    trace_id: str,
+    endpoint_url: str,
+    model: str,
+    payload: dict,
+    result,
+    kept: bool,
+) -> None:
+    """摘要调用也进调用日志（phase=summarize）。
+
+    摘要失败只是沿用旧摘要、主流程照常，所以**不记 error**：拿不到新摘要即 warn。
+    """
+    from ..core.logging import dump_body, pick_level
+    from ..repositories.models import CallLog
+
+    request_body, request_cut = dump_body(payload)
+    response_body, response_cut = dump_body(result.payload)
+    truncated = request_cut or response_cut
+    db.add(
+        CallLog(
+            owner_user_id=owner_user_id,
+            trace_id=trace_id,
+            kind="llm",
+            phase="summarize",
+            level=pick_level(ok=True, degraded=not kept or truncated),
+            endpoint_url=endpoint_url,
+            model=model,
+            request_body=request_body,
+            response_body=response_body,
+            truncated=truncated,
+            status_code=result.status_code,
+            latency_ms=result.latency_ms,
+            error="" if kept else (result.detail or "摘要未生成，沿用旧摘要"),
+        )
+    )

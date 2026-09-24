@@ -198,10 +198,14 @@ def explain(
 @router.post("/polish")
 def polish(
     payload: PolishRequest,
+    request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(require_active_user),
 ) -> dict:
-    return _reply.polish(db, owner_user_id=user.id, text=payload.text, kind=payload.kind)
+    return _reply.polish(
+        db, owner_user_id=user.id, text=payload.text, kind=payload.kind,
+        trace_id=getattr(request.state, "trace_id", ""),
+    )
 
 
 def _reflection_view(row) -> dict:

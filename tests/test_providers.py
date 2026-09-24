@@ -116,15 +116,19 @@ def test_update_without_api_key_keeps_original(client: TestClient, db: Session) 
     assert updated.json()["api_key_masked"] == created["api_key_masked"]
 
 
-def test_replace_api_key(client: TestClient, db: Session) -> None:
-    token = _make_user(client, db, "repluser")
-    headers = _auth(token)
+def test_update_rejects_key_and_model_changes(client: TestClient, db: Session) -> None:
+    """更新只开放名称 / 上下文窗口 / 启停；改 Key 或模型一律 422。
+
+    ``ProviderUpdate`` 不声明这些字段，``StrictModel`` 会直接拒绝而不是静默吞掉。
+    """
+    headers = _auth(_make_user(client, db, "repluser"))
     created = _create_llm(client, headers)
 
-    updated = client.patch(
-        f"/api/providers/{created['id']}", json={"api_key": "sk-ZZZZzzzz9999"}, headers=headers
-    )
-    assert updated.json()["api_key_masked"].startswith("sk-Z")
+    for payload in ({"api_key": "sk-ZZZZzzzz9999"}, {"model": "new-model"}):
+        rejected = client.patch(
+            f"/api/providers/{created['id']}", json=payload, headers=headers
+        )
+        assert rejected.status_code == 422, rejected.text
 
 
 def test_only_one_provider_per_kind(client: TestClient, db: Session) -> None:
@@ -193,7 +197,7 @@ def test_llm_connection_ok(client: TestClient, db: Session, monkeypatch: pytest.
     assert provider["last_test_ok"] is True
 
 
-def test_connection_change_clears_old_test_result(
+def test_update_keeps_test_result_and_gates_enable(
     client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _patch_httpx(
@@ -203,23 +207,32 @@ def test_connection_change_clears_old_test_result(
     headers = _auth(_make_user(client, db, "retestuser"))
     created = _create_llm(client, headers)
     provider_id = created["id"]
+
+    # 没测通之前不允许启用
+    blocked = client.patch(
+        f"/api/providers/{provider_id}", json={"is_enabled": True}, headers=headers
+    )
+    assert blocked.status_code == 422
+
     assert client.post(f"/api/providers/{provider_id}/test", headers=headers).json()["ok"] is True
 
+    # 改名不改变连通性结论
     renamed = client.patch(
         f"/api/providers/{provider_id}", json={"name": "新名称"}, headers=headers
     ).json()
     assert renamed["is_enabled"] is True
     assert renamed["last_test_ok"] is True
 
-    changed = client.patch(
-        f"/api/providers/{provider_id}", json={"model": "new-model"}, headers=headers
+    # 可显式停用；测通结论还在，所以还能再启用
+    stopped = client.patch(
+        f"/api/providers/{provider_id}", json={"is_enabled": False}, headers=headers
     ).json()
-    assert changed["is_enabled"] is False
-    assert changed["last_test_ok"] is None
-    enable = client.patch(
+    assert stopped["is_enabled"] is False
+    assert stopped["last_test_ok"] is True
+    enabled = client.patch(
         f"/api/providers/{provider_id}", json={"is_enabled": True}, headers=headers
     )
-    assert enable.status_code == 422
+    assert enabled.status_code == 200
 
 
 def test_llm_connection_auth_failure(client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch) -> None:

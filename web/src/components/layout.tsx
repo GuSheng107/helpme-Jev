@@ -39,20 +39,24 @@ export function DataCard({
   title,
   actions,
   children,
+  className = '',
+  bodyClassName = '',
 }: {
   title?: string
   actions?: ReactNode
   children: ReactNode
+  className?: string
+  bodyClassName?: string
 }) {
   return (
-    <section className="rounded-[8px] border border-border bg-surface shadow-[0_1px_3px_rgb(0_0_0/0.06)]">
+    <section className={'rounded-[8px] border border-border bg-surface shadow-[0_1px_3px_rgb(0_0_0/0.06)] ' + className}>
       {(title || actions) && (
         <header className="flex items-center justify-between border-b border-border-subtle px-4 py-3">
           {title && <h2 className="text-[16px] font-semibold leading-6 text-ink">{title}</h2>}
           {actions}
         </header>
       )}
-      <div className="p-4">{children}</div>
+      <div className={"p-4 " + bodyClassName}>{children}</div>
     </section>
   )
 }

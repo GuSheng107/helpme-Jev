@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -12,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.core.security import hash_password
 from app.domain.enums import UserRole
 from app.repositories.auth_repo import UserRepository
-from app.repositories.models import ProviderConfig, User
+from app.repositories.models import CallLog, ProviderConfig, User
 
 
 def _user(client: TestClient, db: Session, username: str) -> tuple[dict[str, str], str]:
@@ -150,6 +151,47 @@ def test_logs_list_and_trace_filter(
 
     by_level = client.get("/api/logs", headers=headers, params={"level": "info"})
     assert all(item["level"] == "info" for item in by_level.json()["items"])
+    by_kind_and_phase = client.get(
+        "/api/logs", headers=headers, params={"kind": "llm", "phase": "translate"}
+    )
+    assert by_kind_and_phase.status_code == 200
+    assert all(
+        item["kind"] == "llm" and item["phase"] == "translate"
+        for item in by_kind_and_phase.json()["items"]
+    )
+
+    logged_at = datetime.fromisoformat(translate["created_at"].replace("Z", "+00:00"))
+    local_time = logged_at.astimezone(timezone(timedelta(hours=8))).isoformat()
+    exact_window = client.get(
+        "/api/logs",
+        headers=headers,
+        params={
+            "kind": "llm",
+            "phase": "translate",
+            "trace_id": trace_id,
+            "start_time": local_time,
+            "end_time": local_time,
+        },
+    )
+    assert exact_window.json()["total"] == 1
+    assert client.get(
+        "/api/logs", headers=headers,
+        params={"start_time": (logged_at + timedelta(days=1)).isoformat()},
+    ).json()["total"] == 0
+    assert client.get(
+        "/api/logs", headers=headers,
+        params={"end_time": (logged_at - timedelta(days=1)).isoformat()},
+    ).json()["total"] == 0
+    assert client.get(
+        "/api/logs", headers=headers,
+        params={"start_time": (logged_at + timedelta(days=1)).isoformat(), "end_time": local_time},
+    ).status_code == 422
+
+    first_page = client.get("/api/logs", headers=headers, params={"limit": 1, "offset": 0}).json()
+    second_page = client.get("/api/logs", headers=headers, params={"limit": 1, "offset": 1}).json()
+    assert first_page["total"] == second_page["total"]
+    assert first_page["items"][0]["id"] != second_page["items"][0]["id"]
+
     stats = client.get("/api/logs/stats", headers=headers)
     assert stats.status_code == 200
     assert stats.json()["judgment_count"] == 1
@@ -158,8 +200,22 @@ def test_logs_list_and_trace_filter(
 def test_logs_isolated_between_users(client: TestClient, db: Session) -> None:
     headers_a, _ = _user(client, db, "logsisa")
     headers_b, _ = _user(client, db, "logsisb")
-    listed = client.get("/api/logs", headers=headers_b)
-    assert listed.json()["total"] == 0
+    owner = UserRepository().by_username(db, "logsisa")
+    assert owner is not None
+    db.add(CallLog(
+        owner_user_id=owner.id,
+        trace_id="private-trace",
+        kind="llm",
+        phase="translate",
+        request_body="{}",
+        response_body="{}",
+    ))
+    db.commit()
+
+    own = client.get("/api/logs", headers=headers_a, params={"trace_id": "private-trace"})
+    assert own.json()["total"] == 1
+    other = client.get("/api/logs", headers=headers_b, params={"trace_id": "private-trace"})
+    assert other.json()["total"] == 0
 
 
 def test_export_contains_personal_data(

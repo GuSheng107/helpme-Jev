@@ -22,7 +22,7 @@ from ..scenarios.persona_questions import (
 from .analyze_service import RECENT_MESSAGE_LIMIT, AnalyzeService
 from .image_service import image_context_contents
 from .provider_service import ProviderService
-from .scenario_service import kind_of
+from .scenario_service import kind_of, strip_meta
 
 _messages = MessageRepository()
 _providers = ProviderService()
@@ -80,12 +80,15 @@ class PersonaService:
     ) -> dict:
         if subject not in {"me", "other"}:
             raise DomainError(DomainErrorCode.VALIDATION_FAILED, "对象只能是我或对方", status_code=422)
-        # 情境优先取请求；没带就从会话挂的场景推断 —— 同一个人在恋爱与职场各一份档案
-        kind = context or kind_of(db, conversation)
-        custom_questions = None
+        # 档案情境可以由用户选择；题集始终取会话挂载的自定义场景。
+        scenario_kind = kind_of(db, conversation)
+        kind = context or scenario_kind
+        custom_source = (
+            self._custom_persona_questions(db, conversation)
+            if scenario_kind == "custom" else None
+        )
+        custom_questions = strip_meta(custom_source) if custom_source else None
         if kind == "custom":
-            # 自定义场景：人设题用场景存的题集；档案情境按内容判（依恋爱 / 依职场）
-            custom_questions = self._custom_persona_questions(db, conversation)
             kind = "workplace" if custom_questions and "disc" in custom_questions else "romance"
         if kind not in {"romance", "workplace"}:
             kind = "romance"
@@ -129,7 +132,7 @@ class PersonaService:
             subject=subject,
             context=kind,
         )
-        row.traits = json.dumps(traits, ensure_ascii=False)
+        row.traits = json.dumps(_stored_traits(traits, custom_source), ensure_ascii=False)
         row.evidence = json.dumps(_evidence(rows, self_report), ensure_ascii=False)
         row.confidence = confidence
         row.version = (existing.version + 1) if existing else 1
@@ -155,8 +158,8 @@ class PersonaService:
         return {"adopted": adopted, "rewritten": rewritten}
 
     def _custom_persona_questions(self, db, conversation) -> dict | None:
-        """自定义场景存的人设题集（剥掉展示性字段）；取不到返回 None。"""
-        from ..services.scenario_service import _load_questions, strip_meta
+        """读取自定义场景的人设题集，保留展示字段供档案使用。"""
+        from ..services.scenario_service import _load_questions
 
         if conversation.scenario_id is None:
             return None
@@ -166,7 +169,7 @@ class PersonaService:
         raw = _load_questions(scenario.persona_questions or "{}")
         if not raw:
             return None
-        return strip_meta(raw)
+        return raw
 
     def _state(self, db, owner_user_id, conversation, rows, self_report) -> dict:
         llm = _analyze._require_provider(db, owner_user_id=owner_user_id, kind="llm")
@@ -226,15 +229,26 @@ class PersonaService:
                 "updated_at": None,
             }
         stored = _load(row.traits, {})
+        if isinstance(stored, dict) and stored.get("_schema") == "custom_v1":
+            values = stored.get("values", {})
+            metadata = stored.get("meta", {})
+        else:
+            values = stored
+            metadata = {}
+        if not isinstance(values, dict):
+            values = {}
+        if not isinstance(metadata, dict):
+            metadata = {}
         traits = [
             {
                 "key": key,
-                "title": TRAIT_LABELS.get(key, key),
-                "text": trait_text(key, value),
+                "title": str(meta.get("title") or TRAIT_LABELS.get(key, key)),
+                "text": _trait_text_with_meta(key, value, meta),
                 "value": value,
                 "weak_science": key in WEAK_SCIENCE_TRAITS,
             }
-            for key, value in stored.items()
+            for key, value in values.items()
+            for meta in [metadata.get(key) if isinstance(metadata.get(key), dict) else {}]
         ]
         return {
             "counterpart_key": row.counterpart_key,
@@ -245,6 +259,36 @@ class PersonaService:
             "version": row.version,
             "updated_at": iso_utc(row.updated_at),
         }
+
+
+def _stored_traits(traits: dict, questions: dict | None) -> dict:
+    if not questions:
+        return traits
+    meta = {
+        key: {
+            field: question[field]
+            for field in ("title", "labels", "level_labels")
+            if field in question
+        }
+        for key in traits
+        if isinstance(question := questions.get(key), dict)
+    }
+    return {"_schema": "custom_v1", "values": traits, "meta": meta}
+
+
+def _trait_text_with_meta(key: str, value: object, meta: dict) -> str:
+    labels = meta.get("labels")
+    if isinstance(labels, dict) and str(value) in labels:
+        return str(labels[str(value)])
+    levels = meta.get("level_labels")
+    if isinstance(levels, list):
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            index = -1
+        if 0 <= index < len(levels):
+            return str(levels[index])
+    return trait_text(key, value)
 
 
 def _read_answers(answers: dict) -> tuple[dict, float, bool]:

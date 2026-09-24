@@ -1,235 +1,168 @@
 import { useEffect, useState } from 'react'
 import { ApiError } from '../api/client'
-import {
-  createScenario,
-  deleteScenario,
-  listAllScenarios,
-  updateScenario,
-  type CustomScenario,
-} from '../api/scenarios'
+import { deleteScenario, listAllScenarios, type CustomScenario } from '../api/scenarios'
 import Button from '../components/Button'
-import { DataCard, EmptyState, Notice, PageBody, PageHeader, PageShell } from '../components/layout'
+import { confirmAction } from '../components/confirm'
+import { DataCard, Notice, PageBody, PageHeader, PageShell } from '../components/layout'
+import Modal from '../components/Modal'
+import ScenarioEditor from './ScenarioEditor'
+import { questionCount, QuestionSetView } from './ScenarioQuestions'
 
-const KIND_LABELS: Record<string, string> = {
-  romance: '恋爱',
-  workplace: '职场',
-  custom: '自定义',
-  general: '通用',
-}
+type EditorTarget = { mode: 'new' | 'copy' | 'edit'; source?: CustomScenario }
+type ViewTab = 'prompt' | 'judge' | 'persona'
+const viewTabs: { key: ViewTab; label: string }[] = [
+  { key: 'prompt', label: '回复提示词' },
+  { key: 'judge', label: '判断题集' },
+  { key: 'persona', label: '人设题集' },
+]
 
 export default function ScenarioPage() {
   const [rows, setRows] = useState<CustomScenario[]>([])
-  const [editingId, setEditingId] = useState<number | null>(null)
-  const [name, setName] = useState('')
-  const [description, setDescription] = useState('')
-  const [questionsJson, setQuestionsJson] = useState('')
-  const [copyingId, setCopyingId] = useState<number | null>(null)
-  const [copyName, setCopyName] = useState('')
-  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [editor, setEditor] = useState<EditorTarget | null>(null)
+  const [view, setView] = useState<CustomScenario | null>(null)
   const [notice, setNotice] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [deletingId, setDeletingId] = useState<number | null>(null)
 
-  function reload() {
-    listAllScenarios()
-      .then(setRows)
-      .catch((err: unknown) => setError(err instanceof ApiError ? err.message : '场景未能载入'))
-  }
-
-  useEffect(reload, [])
-
-  function startEdit(row: CustomScenario) {
-    setEditingId(row.id)
-    setName(row.name)
-    setDescription(row.description)
-    setQuestionsJson(row.judge_questions ?? '')
-    setError(null)
-    setNotice('')
-  }
-
-  function startCopy(row: CustomScenario) {
-    setCopyingId(row.id)
-    setCopyName(`${row.name}（副本）`)
-    setError(null)
-  }
-
-  async function copy() {
-    if (copyingId === null || !copyName.trim()) return
-    setBusy(true)
-    setError(null)
+  async function reload() {
     try {
-      await createScenario(copyName.trim(), copyingId)
-      reload()
-      setNotice('已复制，现在可以自由改题')
-      setCopyingId(null)
+      setRows(await listAllScenarios())
+      setError('')
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : '复制未完成')
+      setError(err instanceof ApiError ? err.message : '场景未能载入')
     } finally {
-      setBusy(false)
+      setLoading(false)
     }
   }
 
-  async function save() {
-    if (editingId === null) return
-    setBusy(true)
-    setError(null)
-    try {
-      await updateScenario(editingId, {
-        name: name.trim(),
-        description: description.trim(),
-        judge_questions: questionsJson.trim(),
-      })
-      reload()
-      setNotice('题集已保存')
-      setEditingId(null)
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : '保存未完成')
-    } finally {
-      setBusy(false)
-    }
-  }
+  useEffect(() => { void reload() }, [])
 
-  async function remove() {
-    if (confirmDeleteId === null) return
-    setBusy(true)
-    setError(null)
+  async function remove(row: CustomScenario) {
+    if (!await confirmAction({
+      title: '删除场景',
+      message: `删除「${row.name}」？使用它的会话将回到默认场景。`,
+      confirmText: '确认删除',
+      tone: 'danger',
+    })) return
+    setDeletingId(row.id)
+    setError('')
     try {
-      await deleteScenario(confirmDeleteId)
-      reload()
+      await deleteScenario(row.id)
+      if (editor?.source?.id === row.id) setEditor(null)
+      if (view?.id === row.id) setView(null)
       setNotice('场景已删除；使用它的会话回到默认场景')
-      setConfirmDeleteId(null)
-      if (editingId === confirmDeleteId) setEditingId(null)
+      await reload()
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '删除未完成')
     } finally {
-      setBusy(false)
+      setDeletingId(null)
     }
   }
 
-  const editing = rows.find((row) => row.id === editingId) ?? null
+  const builtins = rows.filter((row) => row.is_builtin)
+  const customs = rows.filter((row) => !row.is_builtin)
+  const openEditor = (target: EditorTarget) => { setEditor(target); setNotice('') }
 
   return (
     <PageShell>
       <PageBody>
         <PageHeader
-          title="自定义场景"
-          description="复制任一预设场景后自由改题；新建会话时就能选它。"
+          title="场景"
+          description="查看系统内置场景，或创建自己的场景。"
+          actions={<Button size="sm" variant="primary" onClick={() => openEditor({ mode: 'new' })}>新建场景</Button>}
         />
-        {error && <Notice tone="danger">{error}</Notice>}
-        {notice && (
-          <div className="mb-3">
-            <Notice tone="info">{notice}</Notice>
-          </div>
-        )}
-        {rows.length === 0 ? (
-          <EmptyState title="还没有场景" description="刷新一下，或联系管理员。" />
-        ) : (
-          <div className="space-y-3">
-            {rows.map((row) => (
-              <DataCard key={row.id} title={row.name}>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="rounded-[4px] bg-surface-muted px-1.5 py-0.5 text-[11px] text-ink-muted">
-                    {row.is_builtin ? '内置' : KIND_LABELS[row.kind] ?? row.kind}
-                  </span>
-                  <span className="text-[13px] text-ink-secondary">{row.description}</span>
-                </div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {copyingId === row.id ? (
-                    <>
-                      <input
-                        className="w-44 rounded-[6px] border border-border px-2 py-1 text-[14px]"
-                        value={copyName}
-                        onChange={(event) => setCopyName(event.target.value)}
-                        placeholder="新场景的名字"
-                      />
-                      <Button size="sm" variant="primary" loading={busy} disabled={!copyName.trim()} disabledReason="请输入名字" onClick={() => void copy()}>
-                        复制
-                      </Button>
-                      <Button size="sm" onClick={() => setCopyingId(null)}>
-                        取消
-                      </Button>
-                    </>
-                  ) : (
-                    <>
-                      <Button size="sm" onClick={() => startCopy(row)}>
-                        复制
-                      </Button>
-                      {!row.is_builtin && (
-                        <>
-                          {editingId === row.id ? (
-                            <Button size="sm" onClick={() => setEditingId(null)}>
-                              收起编辑
-                            </Button>
-                          ) : (
-                            <Button size="sm" onClick={() => startEdit(row)}>
-                              改题
-                            </Button>
-                          )}
-                          {confirmDeleteId === row.id ? (
-                            <>
-                              <Button size="sm" variant="danger" loading={busy} onClick={() => void remove()}>
-                                确认删除
-                              </Button>
-                              <Button size="sm" onClick={() => setConfirmDeleteId(null)}>
-                                手滑了
-                              </Button>
-                            </>
-                          ) : (
-                            <Button size="sm" variant="danger" onClick={() => setConfirmDeleteId(row.id)}>
-                              删除
-                            </Button>
-                          )}
-                        </>
-                      )}
-                    </>
-                  )}
-                </div>
-                {editingId === row.id && editing && (
-                  <div className="mt-3 space-y-2 border-t border-border-subtle pt-3">
-                    <div>
-                      <span className="mb-1 block text-[12px] text-ink-muted">名字</span>
-                      <input
-                        className="w-full rounded-[6px] border border-border px-2 py-1.5 text-[14px]"
-                        value={name}
-                        onChange={(event) => setName(event.target.value)}
-                      />
-                    </div>
-                    <div>
-                      <span className="mb-1 block text-[12px] text-ink-muted">描述</span>
-                      <input
-                        className="w-full rounded-[6px] border border-border px-2 py-1.5 text-[14px]"
-                        value={description}
-                        onChange={(event) => setDescription(event.target.value)}
-                      />
-                    </div>
-                    <div>
-                      <span className="mb-1 block text-[12px] text-ink-muted">判断题集（JSON）</span>
-                      <textarea
-                        className="mono min-h-56 w-full rounded-[6px] border border-border p-2 text-[12px] leading-5"
-                        value={questionsJson}
-                        onChange={(event) => setQuestionsJson(event.target.value)}
-                        spellCheck={false}
-                      />
-                      <p className="mt-1 text-[12px] leading-5 text-ink-muted">
-                        每道题：{'{ type: "noul|choice|score", instructions: 英文判别说明, criteria: …, title: 中文标题, labels: { 枚举值: 中文 } }'}。
-                        title / labels 只用于展示，发给 Jev 前会剥掉。内置场景复制时已自动带上中文。
-                      </p>
-                    </div>
-                    <div className="flex justify-end gap-2">
-                      <Button size="sm" onClick={() => startEdit(row)}>
-                        重置
-                      </Button>
-                      <Button size="sm" variant="primary" loading={busy} onClick={() => void save()}>
-                        保存
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </DataCard>
-            ))}
-          </div>
-        )}
+        {error && <div className="mb-3"><Notice tone="danger">{error}</Notice></div>}
+        {notice && <div className="mb-3"><Notice tone="success">{notice}</Notice></div>}
+        <div className="space-y-4">
+          <ScenarioGroup title="系统内置" rows={builtins} loading={loading} empty="还没有内置场景"
+            onView={setView} onCopy={(row) => openEditor({ mode: 'copy', source: row })} />
+          <ScenarioGroup title="我的场景" rows={customs} loading={loading} empty="还没有场景，可以新建或复制一个系统内置场景"
+            onView={setView} onCopy={(row) => openEditor({ mode: 'copy', source: row })}
+            onEdit={(row) => openEditor({ mode: 'edit', source: row })}
+            onDelete={(row) => void remove(row)} deletingId={deletingId} />
+        </div>
+        {view && <ScenarioView key={view.id} row={view} onClose={() => setView(null)}
+          onCopy={() => { setView(null); openEditor({ mode: 'copy', source: view }) }}
+          onEdit={!view.is_builtin ? () => { setView(null); openEditor({ mode: 'edit', source: view }) } : undefined} />}
+        {editor && <ScenarioEditor key={`${editor.mode}-${editor.source?.id ?? 'blank'}`}
+          mode={editor.mode} source={editor.source} onCancel={() => setEditor(null)}
+          onSaved={(message) => { setEditor(null); setNotice(message); void reload() }} />}
       </PageBody>
     </PageShell>
+  )
+}
+
+function ScenarioGroup({ title, rows, loading, empty, onView, onCopy, onEdit, onDelete, deletingId }: {
+  title: string
+  rows: CustomScenario[]
+  loading: boolean
+  empty: string
+  onView: (row: CustomScenario) => void
+  onCopy: (row: CustomScenario) => void
+  onEdit?: (row: CustomScenario) => void
+  onDelete?: (row: CustomScenario) => void
+  deletingId?: number | null
+}) {
+  return (
+    <DataCard title={title}>
+      {rows.length === 0 && <p className="py-2 text-[13px] text-ink-muted">{loading ? '载入中…' : empty}</p>}
+      <div className="divide-y divide-border-subtle">
+        {rows.map((row) => (
+          <div key={row.id} className="flex flex-col gap-3 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-baseline gap-x-2">
+                <h3 className="text-[14px] font-semibold text-ink">{row.name}</h3>
+                <span className="text-[11px] text-ink-muted">判断题 {questionCount(row.judge_questions)} · 人设题 {questionCount(row.persona_questions)}</span>
+              </div>
+              {row.description && <p className="mt-0.5 line-clamp-2 text-[12px] leading-5 text-ink-secondary">{row.description}</p>}
+            </div>
+            <div className="flex shrink-0 flex-wrap gap-2">
+              <Button size="sm" onClick={() => onView(row)}>查看</Button>
+              {onEdit && <Button size="sm" onClick={() => onEdit(row)}>编辑</Button>}
+              <Button size="sm" onClick={() => onCopy(row)}>复制</Button>
+              {onDelete && <Button size="sm" variant="text" loading={deletingId === row.id} onClick={() => onDelete(row)}>删除</Button>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </DataCard>
+  )
+}
+
+function ScenarioView({ row, onClose, onCopy, onEdit }: {
+  row: CustomScenario
+  onClose: () => void
+  onCopy: () => void
+  onEdit?: () => void
+}) {
+  const [tab, setTab] = useState<ViewTab>('prompt')
+  return (
+    <Modal size="lg" scroll="hidden" onClose={onClose} labelledBy="scenario-view-title" className="flex flex-col">
+      <div className="flex shrink-0 items-start justify-between gap-3 border-b border-border-subtle px-4 py-3 sm:px-5">
+        <div className="min-w-0">
+          <h2 id="scenario-view-title" className="truncate text-[17px] font-semibold text-ink">{row.name}</h2>
+          {row.description && <p className="mt-0.5 text-[12px] leading-5 text-ink-muted">{row.description}</p>}
+        </div>
+        <Button size="sm" variant="text" onClick={onClose} aria-label="关闭场景查看弹窗">关闭</Button>
+      </div>
+      <div role="tablist" aria-label="场景内容" className="flex shrink-0 gap-1 overflow-x-auto border-b border-border-subtle px-3 sm:px-5">
+        {viewTabs.map((item) => (
+          <button key={item.key} type="button" role="tab" aria-selected={tab === item.key} onClick={() => setTab(item.key)}
+            className={`shrink-0 border-b-2 px-3 py-3 text-[13px] ${tab === item.key ? 'border-primary font-semibold text-primary' : 'border-transparent text-ink-secondary hover:text-ink'}`}>
+            {item.label}
+          </button>
+        ))}
+      </div>
+      <div role="tabpanel" className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5">
+        {tab === 'prompt' && <p className="whitespace-pre-wrap break-words rounded-[8px] bg-surface-muted p-4 text-[13px] leading-6 text-ink">{row.system_prompt || '未设置'}</p>}
+        {tab === 'judge' && <QuestionSetView raw={row.judge_questions} />}
+        {tab === 'persona' && <QuestionSetView raw={row.persona_questions} />}
+      </div>
+      <div className="flex shrink-0 justify-end gap-2 border-t border-border-subtle px-4 py-3 sm:px-5">
+        <Button size="sm" onClick={onCopy}>复制</Button>
+        {onEdit && <Button size="sm" variant="primary" onClick={onEdit}>编辑</Button>}
+      </div>
+    </Modal>
   )
 }

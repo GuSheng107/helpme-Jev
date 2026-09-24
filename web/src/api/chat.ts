@@ -183,7 +183,7 @@ export function analyze(conversationId: number) {
 
 export function draftReplies(conversationId: number, decision: AnalyzeResult) {
   const picked = Object.fromEntries(
-    [...decision.panel, ...decision.more].map((item) => [item.key, { text: item.text }]),
+    [...decision.panel, ...decision.more].map((item) => [item.key, { text: item.text, value: item.value }]),
   )
   return api.post<{ candidates: Candidate[] }>('/api/chat/reply', {
     conversation_id: conversationId,

@@ -8,11 +8,12 @@ noul 概率条 / choice 概率条形图 / score 刻度条。
 from __future__ import annotations
 
 import json
+import math
 
 from sqlalchemy.orm import Session
 
 from ..clients import jev_client
-from ..clients.llm_client import chat_json
+from ..clients.llm_client import UpstreamResult, chat_json
 from ..domain.errors import DomainError, DomainErrorCode
 from ..repositories.models import CallLog
 from ..scenarios.builders import choice, noul, score
@@ -22,10 +23,24 @@ from .provider_service import ProviderService
 _providers = ProviderService()
 _analyze = AnalyzeService()
 
-_TRANSLATE_PROMPT = """Translate a decision question into precise English for a decision model.
-Return JSON: {"question": "...", "context": "...", "options": ["...", ...]}
-Translate the question and context faithfully, preserving nuance; keep the options
-in the same order and return an empty list when there are none. "context" is "" when not given."""
+_TRANSLATE_PROMPT = """Translate the supplied decision question, context, and options into precise English.
+Return exactly ONE valid JSON object and no other text, markdown, or code fence.
+The object must contain exactly these fields:
+{"question":"English question","context":"English context or empty string","options":["English option 1"]}
+All three fields are required. question and context must be strings; options must be an array of strings.
+Keep every option in the original order, without adding or removing any option.
+If context is empty, return "". If options is empty, return [].
+Preserve meaning and nuance. Do not answer the question or add commentary."""
+
+
+_POLISH_PROMPT = """Polish a decision form in the original language of each field.
+Return exactly ONE valid JSON object with exactly these fields and no other text:
+{"question":"polished question","options":["polished option"],"context":"polished context"}
+Keep the question answerable without answering it. Correct wording and ambiguity, but preserve intent.
+Preserve every option's meaning, order, count, and mutual exclusivity. Do not turn one choice into another.
+Keep short categorical answers such as 是/不是 or yes/no unchanged.
+Do not invent facts or add background. Keep every empty option and empty context empty.
+Do not translate or add markdown. All fields must be strings except options, which is an array of strings."""
 
 # 评分题默认 10 档（与危险度刻度一致，用户不必自己编档位）
 DEFAULT_SCORE_LEVELS = [
@@ -45,6 +60,85 @@ _QUESTION_KEY = "decision"
 
 
 class DecideService:
+    def polish(
+        self,
+        db: Session,
+        *,
+        owner_user_id: int,
+        question: str,
+        question_type: str,
+        options: list[str],
+        context: str,
+        trace_id: str,
+    ) -> dict:
+        if question_type != "choice" and options:
+            raise DomainError(
+                DomainErrorCode.VALIDATION_FAILED, "仅选择题可提交选项", status_code=422
+            )
+        source = {"question": question, "options": options, "context": context}
+        llm = _analyze._require_provider(db, owner_user_id=owner_user_id, kind="llm")
+        result: UpstreamResult | None = None
+        polished: dict | None = None
+        for attempt in range(2):
+            result = chat_json(
+                endpoint_url=llm.endpoint_url,
+                api_key=_providers.decrypt_key(llm),
+                model=llm.model,
+                protocol=llm.protocol,
+                messages=[
+                    {"role": "system", "content": _POLISH_PROMPT},
+                    {"role": "user", "content": json.dumps(source, ensure_ascii=False)},
+                    *(
+                        [{"role": "user", "content": "The previous response was invalid. Return only the required JSON object."}]
+                        if attempt else []
+                    ),
+                ],
+            )
+            if result.ok:
+                polished = self._polish_fields(result.payload, source)
+                if polished is not None:
+                    break
+                result.ok = False
+                result.detail = "润色结果字段不完整或选项数量不匹配"
+                result.error_code = "PROTOCOL_MISMATCH"
+            if result.error_code != "PROTOCOL_MISMATCH":
+                break
+        if result is None:
+            raise DomainError(DomainErrorCode.LLM_UPSTREAM_ERROR, "润色未完成，请重试。", status_code=502)
+        self._log(
+            db, owner_user_id=owner_user_id, trace_id=trace_id,
+            kind="llm", phase="polish", provider=llm, result=result,
+            request={"question_type": question_type, **source},
+        )
+        db.commit()
+        if polished is None:
+            raise DomainError(DomainErrorCode.LLM_UPSTREAM_ERROR, "润色未完成，请重试。", status_code=502)
+        return polished
+
+    @staticmethod
+    def _polish_fields(data: dict, source: dict) -> dict | None:
+        if set(data) != {"question", "options", "context"}:
+            return None
+        question, options, context = data["question"], data["options"], data["context"]
+        if not isinstance(question, str) or not question.strip() or len(question) > 2000:
+            return None
+        if not isinstance(context, str) or len(context) > 2000:
+            return None
+        if bool(source["context"].strip()) != bool(context.strip()):
+            return None
+        if not isinstance(options, list) or len(options) != len(source["options"]):
+            return None
+        for original, revised in zip(source["options"], options):
+            if not isinstance(revised, str) or len(revised) > 2000:
+                return None
+            if bool(original.strip()) != bool(revised.strip()):
+                return None
+        return {
+            "question": question.strip(),
+            "options": [item.strip() for item in options],
+            "context": context.strip(),
+        }
+
     def decide(
         self,
         db: Session,
@@ -67,41 +161,64 @@ class DecideService:
                     DomainErrorCode.VALIDATION_FAILED, "选项不能重复", status_code=422
                 )
 
-        llm = _analyze._require_provider(db, owner_user_id=owner_user_id, kind="llm")
         jev = _analyze._require_provider(db, owner_user_id=owner_user_id, kind="jev")
 
-        payload = {"question": question.strip(), "context": context.strip(), "options": cleaned}
-        translated = chat_json(
-            endpoint_url=llm.endpoint_url,
-            api_key=_providers.decrypt_key(llm),
-            model=llm.model,
-            protocol=llm.protocol,
-            messages=[
-                {"role": "system", "content": _TRANSLATE_PROMPT},
-                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-            ],
-        )
-        question_en = context_en = ""
-        options_en: list[str] = []
-        if translated.ok:
-            question_en = str(translated.payload.get("question") or "").strip()
-            context_en = str(translated.payload.get("context") or "").strip()
-            raw_options = translated.payload.get("options")
-            if isinstance(raw_options, list):
-                options_en = [str(item).strip() for item in raw_options]
-        if not question_en or (question_type == "choice" and len(options_en) < len(cleaned)):
-            self._log(
-                db,
-                owner_user_id=owner_user_id,
-                trace_id=trace_id,
-                kind="llm",
-                phase="translate",
-                provider=llm,
-                result=translated,
-                request=payload,
-            )
-            db.commit()
-            raise DomainError(DomainErrorCode.LLM_UPSTREAM_ERROR, "问题转换未完成，请重试。", status_code=502)
+        payload = {
+            "question": question.strip(),
+            "context": context.strip(),
+            "options": cleaned,
+            "question_type": question_type,
+        }
+        bridge_input = {key: payload[key] for key in ("question", "context", "options")}
+        # 英文输入直接交给 JEV；无意义的翻译请求曾产生多次 200 + 非 JSON 错误。
+        needs_bridge = any(not text.isascii() for text in (
+            payload["question"], payload["context"], *cleaned
+        ))
+        translated: UpstreamResult | None = None
+        if needs_bridge:
+            llm = _analyze._require_provider(db, owner_user_id=owner_user_id, kind="llm")
+            question_en = context_en = ""
+            options_en: list[str] = []
+            for attempt in range(2):
+                translated = chat_json(
+                    endpoint_url=llm.endpoint_url,
+                    api_key=_providers.decrypt_key(llm),
+                    model=llm.model,
+                    protocol=llm.protocol,
+                    messages=[
+                        {"role": "system", "content": _TRANSLATE_PROMPT},
+                        {"role": "user", "content": json.dumps(bridge_input, ensure_ascii=False)},
+                        *(
+                            [{"role": "user", "content": "The previous answer was invalid. Return only the exact JSON object with all required fields."}]
+                            if attempt else []
+                        ),
+                    ],
+                )
+                if translated.ok:
+                    valid = self._translation_fields(translated.payload, bridge_input)
+                    if valid is not None:
+                        question_en, context_en, options_en = valid
+                        break
+                    translated.ok = False
+                    translated.detail = "翻译结果字段不完整或类型不正确"
+                    translated.error_code = "PROTOCOL_MISMATCH"
+                if translated.error_code != "PROTOCOL_MISMATCH":
+                    break
+            if not question_en:
+                self._log(
+                    db, owner_user_id=owner_user_id, trace_id=trace_id,
+                    kind="llm", phase="translate", provider=llm,
+                    result=translated, request=payload,
+                )
+                db.commit()
+                raise DomainError(
+                    DomainErrorCode.LLM_UPSTREAM_ERROR,
+                    "问题转换未完成，请重试。", status_code=502,
+                )
+        else:
+            question_en = payload["question"]
+            context_en = payload["context"]
+            options_en = cleaned
 
         state: dict = {"question": question_en}
         if context_en:
@@ -114,25 +231,26 @@ class DecideService:
             state=state,
             questions=questions,
         )
+        presented: dict | None = None
+        if result.ok:
+            try:
+                answer = result.answers.get(_QUESTION_KEY) or {}
+                presented = self._present(question_type, answer, cleaned)
+            except DomainError as exc:
+                result.ok = False
+                result.error_code = "PROTOCOL_MISMATCH"
+                result.detail = exc.message
+        if translated is not None:
+            self._log(
+                db, owner_user_id=owner_user_id, trace_id=trace_id,
+                kind="llm", phase="translate", provider=llm,
+                result=translated, request=payload,
+            )
         self._log(
-            db,
-            owner_user_id=owner_user_id,
-            trace_id=trace_id,
-            kind="llm",
-            phase="translate",
-            provider=llm,
-            result=translated,
-            request=payload,
-        )
-        self._log(
-            db,
-            owner_user_id=owner_user_id,
-            trace_id=trace_id,
-            kind="jev",
-            phase="decide",
-            provider=jev,
-            result=result,
-            request={"state": state, "questions": questions},
+            db, owner_user_id=owner_user_id, trace_id=trace_id,
+            kind="jev", phase="decide", provider=jev, result=result,
+            request={"state": state, "questions": questions, "user_input": payload},
+            presented=presented,
         )
         db.commit()
 
@@ -144,14 +262,30 @@ class DecideService:
             )
             raise DomainError(code, "判断未完成，请重试。", status_code=502)
 
-        answer = result.answers.get(_QUESTION_KEY) or {}
         return {
             "trace_id": trace_id,
             "model": result.model_reported,
             "latency_ms": result.latency_ms,
             "kind": question_type,
-            "result": self._present(question_type, answer, cleaned),
+            "result": presented,
         }
+
+    @staticmethod
+    def _translation_fields(
+        data: dict, source: dict
+    ) -> tuple[str, str, list[str]] | None:
+        question = data.get("question")
+        context = data.get("context")
+        options = data.get("options")
+        if not isinstance(question, str) or not question.strip():
+            return None
+        if not isinstance(context, str) or (source["context"] and not context.strip()):
+            return None
+        if not isinstance(options, list) or len(options) != len(source["options"]):
+            return None
+        if any(not isinstance(option, str) or not option.strip() for option in options):
+            return None
+        return question.strip(), context.strip(), [option.strip() for option in options]
 
     def _build_question(self, question_type: str, question_en: str, options_en: list[str]) -> dict:
         if question_type == "noul":
@@ -167,75 +301,105 @@ class DecideService:
             )
         return score(f"Rate the answer on the scale: {question_en}", DEFAULT_SCORE_LEVELS)
 
-    def _present(self, question_type: str, answer: dict, options: list[str]) -> dict:
+    def _present(
+        self, question_type: str, answer: dict, options: list[str],
+    ) -> dict:
         if not isinstance(answer, dict) or not answer:
             raise DomainError(DomainErrorCode.PROTOCOL_MISMATCH, "判断结果无法解析", status_code=502)
         if question_type == "noul":
             try:
-                prob = float(answer.get("noul") or 0.0)
-            except (TypeError, ValueError):
-                prob = 0.0
+                prob = float(answer["noul"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise DomainError(DomainErrorCode.PROTOCOL_MISMATCH, "是非结果无法解析", status_code=502) from exc
+            if not math.isfinite(prob) or not 0 <= prob <= 1:
+                raise DomainError(DomainErrorCode.PROTOCOL_MISMATCH, "是非概率超出范围", status_code=502)
             return {
                 "kind": "noul",
                 "probability": prob,
-                "percent": round(max(0.0, min(1.0, prob)) * 100),
+                "percent": round(prob * 100),
                 "text": "是" if prob >= 0.5 else "否",
             }
         if question_type == "choice":
             probabilities = answer.get("probabilities")
             bars = []
             if isinstance(probabilities, dict):
-                for key, value in probabilities.items():
-                    index = int(str(key).rsplit("_", 1)[-1]) if str(key).startswith("option_") else -1
-                    label = options[index] if 0 <= index < len(options) else str(key)
-                    bars.append({"key": str(key), "label": label, "value": float(value or 0)})
-            elif isinstance(answer.get("choice"), str):
-                chosen = str(answer["choice"])
-                index = int(chosen.rsplit("_", 1)[-1]) if chosen.startswith("option_") else -1
-                bars = [
-                    {
-                        "key": chosen,
-                        "label": options[index] if 0 <= index < len(options) else chosen,
-                        "value": 1.0,
-                    }
-                ]
+                for key, raw in probabilities.items():
+                    suffix = str(key).removeprefix("option_")
+                    if not str(key).startswith("option_") or not suffix.isdigit():
+                        continue
+                    index = int(suffix)
+                    if not 0 <= index < len(options):
+                        continue
+                    try:
+                        value = float(raw)
+                    except (TypeError, ValueError):
+                        continue
+                    if math.isfinite(value) and 0 <= value <= 1:
+                        bars.append({"key": str(key), "label": options[index], "value": value})
+            if not bars and isinstance(answer.get("choice"), str):
+                chosen = answer["choice"]
+                suffix = chosen.removeprefix("option_")
+                if chosen.startswith("option_") and suffix.isdigit():
+                    index = int(suffix)
+                    if 0 <= index < len(options):
+                        bars = [{"key": chosen, "label": options[index], "value": 1.0}]
             if not bars:
-                raise DomainError(DomainErrorCode.PROTOCOL_MISMATCH, "判断结果无法解析", status_code=502)
+                raise DomainError(DomainErrorCode.PROTOCOL_MISMATCH, "选择结果无法解析", status_code=502)
             bars.sort(key=lambda item: item["value"], reverse=True)
             return {"kind": "choice", "bars": bars, "top": bars[0]["label"]}
-        # score
+
+        raw_max = len(DEFAULT_SCORE_LEVELS) - 1
         try:
-            value = float(answer.get("score") or 0.0)
-        except (TypeError, ValueError):
-            value = 0.0
-        level = int(round(max(0.0, min(9.0, value))))
+            value = float(answer["score"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise DomainError(DomainErrorCode.PROTOCOL_MISMATCH, "评分结果无法解析", status_code=502) from exc
+        if not math.isfinite(value) or not 0 <= value <= raw_max:
+            raise DomainError(DomainErrorCode.PROTOCOL_MISMATCH, "评分超出档位范围", status_code=502)
+        converted = round(value / raw_max * 10, 2)
         return {
             "kind": "score",
-            "value": level,
-            "scale_max": len(DEFAULT_SCORE_LEVELS) - 1,
-            "text": f"{level}/{len(DEFAULT_SCORE_LEVELS) - 1}",
+            "value": value,
+            "scale_max": raw_max,
+            "display_value": converted,
+            "display_max": 10,
+            "text": f"{converted:.2f}",
         }
 
-    def _log(self, db, *, owner_user_id, trace_id, kind, phase, provider, result, request) -> None:
-        from ..core.logging import sanitize_log_value
+    def _log(
+        self, db, *, owner_user_id, trace_id, kind, phase, provider, result, request,
+        presented: dict | None = None,
+    ) -> None:
+        from ..core.logging import dump_body, pick_level
 
         if kind == "jev":
             response = {"answers": getattr(result, "answers", {})}
+            if presented is not None:
+                response["presented"] = presented
+            degradation = str(getattr(result, "degradation", ""))
+            if degradation:
+                response["degradation"] = degradation
             model = getattr(result, "model_reported", "") or provider.model
         else:
             response = getattr(result, "payload", {})
             model = provider.model
+        request_body, request_cut = dump_body(request)
+        response_body, response_cut = dump_body(response)
+        truncated = request_cut or response_cut
         db.add(
             CallLog(
                 owner_user_id=owner_user_id,
                 trace_id=trace_id,
                 kind=kind,
                 phase=phase,
-                level="info" if result.ok else "error",
+                level=pick_level(
+                    ok=result.ok,
+                    degraded=truncated or bool(getattr(result, "degraded", False)),
+                ),
                 endpoint_url=provider.endpoint_url,
                 model=model,
-                request_body=json.dumps(sanitize_log_value(request), ensure_ascii=False)[:65536],
-                response_body=json.dumps(sanitize_log_value(response), ensure_ascii=False)[:65536],
+                request_body=request_body,
+                response_body=response_body,
+                truncated=truncated,
                 status_code=result.status_code,
                 latency_ms=result.latency_ms,
                 error="" if getattr(result, "ok", False) else str(getattr(result, "detail", "")),

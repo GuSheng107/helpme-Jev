@@ -31,22 +31,12 @@ class ProviderCreate(StrictModel):
 
 
 class ProviderUpdate(StrictModel):
-    """更新配置。``api_key`` 传 ``None`` 表示**保持原值**。
+    """现有模型只允许修改显示名称、LLM 上下文窗口和启停状态。"""
 
-    刻意不提供"清空 Key"的语义 —— 避免空字符串承担隐含含义
-    （对齐 human-llm-gateway 的表单纪律）。
-    """
-
-    protocol: Literal["openai", "openai_responses", "anthropic"] | None = None
     name: str | None = Field(default=None, min_length=1, max_length=64)
-    endpoint_url: str | None = Field(default=None, min_length=1, max_length=512)
-    api_key: str | None = Field(default=None, min_length=1, max_length=512)
-    model: str | None = Field(default=None, min_length=1, max_length=128)
-    supports_vision: bool | None = None
     context_window_tokens: int | None = Field(
         default=None, ge=MIN_CONTEXT_TOKENS, le=MAX_CONTEXT_TOKENS
     )
-    is_default: bool | None = None
     is_enabled: bool | None = None
 
 

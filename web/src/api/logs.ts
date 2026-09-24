@@ -1,14 +1,17 @@
 import { api, request } from './client'
+import { formatLocalMinute } from '../utils/datetime'
 
 export function getLogStats(): Promise<{ judgment_count: number }> {
   return api.get('/api/logs/stats')
 }
 
+export type LogLevel = 'info' | 'warn' | 'error'
+
 export interface LogItem {
   id: number
   trace_id: string
   kind: 'jev' | 'llm'
-  level: 'info' | 'error'
+  level: LogLevel
   phase: string
   model: string
   status_code: number | null
@@ -29,13 +32,21 @@ export interface LogLine {
 export function listLogs(params: {
   limit?: number
   offset?: number
-  level?: 'info' | 'error' | ''
+  level?: LogLevel | ''
+  kind?: 'jev' | 'llm' | ''
+  phase?: string
   trace_id?: string
+  start_time?: string
+  end_time?: string
 } = {}) {
   const search = new URLSearchParams()
   if (params.limit) search.set('limit', String(params.limit))
   if (params.offset) search.set('offset', String(params.offset))
   if (params.level) search.set('level', params.level)
+  if (params.kind) search.set('kind', params.kind)
+  if (params.phase) search.set('phase', params.phase)
+  if (params.start_time) search.set('start_time', params.start_time)
+  if (params.end_time) search.set('end_time', params.end_time)
   if (params.trace_id) search.set('trace_id', params.trace_id)
   const suffix = search.toString() ? `?${search.toString()}` : ''
   return api.get<{ total: number; items: LogItem[] }>(`/api/logs${suffix}`)
@@ -75,7 +86,7 @@ function toMarkdown(data: ExportPayload): string {
   const lines: string[] = [
     '# HelpMe Jev 数据导出',
     '',
-    `导出时间：${data.exported_at}`,
+    `导出时间：${formatLocalMinute(data.exported_at)}`,
     '',
     '这份文档是你在 HelpMe Jev 里的个人数据，包含账号、会话、记忆、人设和调用记录。不含模型密钥。',
     '',
@@ -83,7 +94,7 @@ function toMarkdown(data: ExportPayload): string {
     '',
     `- 用户名：${data.user.username}`,
     `- 昵称：${data.user.display_name}`,
-    `- 注册时间：${data.user.created_at}`,
+    `- 注册时间：${formatLocalMinute(data.user.created_at)}`,
     '',
     '## 会话',
     '',
@@ -91,10 +102,10 @@ function toMarkdown(data: ExportPayload): string {
   if (data.conversations.length === 0) lines.push('还没有会话。', '')
   for (const chat of data.conversations) {
     lines.push(`### ${chat.counterpart_name || chat.title}`, '')
-    lines.push(`关系：${chat.relationship || '未填写'}　创建于 ${chat.created_at}`, '')
+    lines.push(`关系：${chat.relationship || '未填写'}　创建于 ${formatLocalMinute(chat.created_at)}`, '')
     if (chat.messages.length === 0) lines.push('这条会话还没有消息。', '')
     for (const message of chat.messages) {
-      lines.push(`**${message.role === 'me' ? '我' : '对方'}** ${message.created_at}`, '', message.content || '（无文字）', '')
+      lines.push(`**${message.role === 'me' ? '我' : '对方'}** ${formatLocalMinute(message.created_at)}`, '', message.content || '（无文字）', '')
     }
   }
   lines.push('## 记忆', '')
@@ -125,19 +136,16 @@ function toMarkdown(data: ExportPayload): string {
   lines.push('', '## 调用记录', '')
   if (data.call_logs.length === 0) lines.push('还没有调用记录。', '')
   for (const log of data.call_logs) {
-    lines.push(`- ${log.created_at}　${log.kind} / ${log.phase}　${log.model}　${log.status_code ?? '—'}　${log.latency_ms} ms`)
+    lines.push(`- ${formatLocalMinute(log.created_at)}　${log.kind} / ${log.phase}　${log.model}　${log.status_code ?? '—'}　${log.latency_ms} ms`)
   }
   lines.push('')
   return lines.join('\n')
 }
 
-/** JSON 保留服务端返回的全部字段；Markdown 仅供阅读。 */
-export async function exportAccountData(format: 'json' | 'markdown' = 'json'): Promise<Blob> {
+/** 下载个人数据的 Markdown 文件。 */
+export async function exportAccountData(): Promise<Blob> {
   const payload = await api.get<ExportPayload>('/api/account/export')
-  if (format === 'markdown') {
-    return new Blob([toMarkdown(payload)], { type: 'text/markdown;charset=utf-8' })
-  }
-  return new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' })
+  return new Blob([toMarkdown(payload)], { type: 'text/markdown;charset=utf-8' })
 }
 
 /** 注销账号：密码确认，删除后 204。 */

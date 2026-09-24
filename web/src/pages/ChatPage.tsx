@@ -28,6 +28,7 @@ import Button from '../components/Button'
 import DecisionPanel from '../components/DecisionPanel'
 import Field from '../components/Field'
 import { EmptyState, Notice } from '../components/layout'
+import Modal from '../components/Modal'
 
 interface Props {
   currentId: number | null
@@ -358,9 +359,18 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                     setScenarioId(event.target.value === '' ? null : Number(event.target.value))
                   }
                 >
-                  {scenarios.map((item) => (
-                    <option key={item.id} value={item.id}>{item.name}</option>
-                  ))}
+                  <optgroup label="系统内置">
+                    {scenarios.filter((item) => item.is_builtin).map((item) => (
+                      <option key={item.id} value={item.id}>{item.name}</option>
+                    ))}
+                  </optgroup>
+                  {scenarios.some((item) => !item.is_builtin) && (
+                    <optgroup label="我的场景">
+                      {scenarios.filter((item) => !item.is_builtin).map((item) => (
+                        <option key={item.id} value={item.id}>{item.name}</option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
               </div>
               <Field
@@ -396,6 +406,9 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                       <span className="truncate">{item.counterpart_name || item.title}</span>
                       {item.scenario_kind === 'workplace' && (
                         <span className="shrink-0 rounded-[4px] bg-surface-muted px-1 text-[11px] text-ink-muted">职场</span>
+                      )}
+                      {item.scenario_kind === 'custom' && (
+                        <span className="shrink-0 rounded-[4px] bg-surface-muted px-1 text-[11px] text-ink-muted">自定义</span>
                       )}
                     </span>
                     <span className="block truncate text-[12px] text-ink-muted">{item.relationship}</span>
@@ -730,39 +743,24 @@ function AttachmentThumb({
   )
 }
 
-/** 大图查看：点击任意处或按 Esc 关闭。 */
+/** 大图查看：沿用全站弹窗的遮罩与键盘行为。 */
 function Lightbox({ url, onClose }: { url: string; onClose: () => void }) {
-  useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-      aria-label="图片预览"
-    >
+    <Modal size="full" surface="media" scroll="visible" ariaLabel="图片预览" overlayClassName="bg-black/80" onClose={onClose}>
       <img
         src={url}
         alt=""
         className="max-h-[85vh] max-w-full rounded-[8px] object-contain"
-        onClick={(event) => event.stopPropagation()}
       />
       <button
         type="button"
-        className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-[18px] leading-none text-ink"
+        className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-[18px] leading-none text-ink"
         onClick={onClose}
         aria-label="关闭"
       >
         ×
       </button>
-    </div>
+    </Modal>
   )
 }
 

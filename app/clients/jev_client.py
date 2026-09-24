@@ -44,6 +44,9 @@ class JevResult:
     answers: dict = field(default_factory=dict)
     model_reported: str = ""
     error_code: str = ""
+    # 调用成功但被降级（如去掉 background/history 后重试成功）：结果可用但判断依据不全
+    degraded: bool = False
+    degradation: str = ""
 
 
 @dataclass
@@ -306,6 +309,8 @@ def call_with_fallback(
         timeout=timeout,
     )
     if retried.ok:
+        retried.degraded = True
+        retried.degradation = "上游拒绝 background/history，已去掉后重试成功（判断缺少记忆与摘要）"
         retried.detail = f"{retried.detail}；已去掉 background/history 后重试成功"
     return retried
 

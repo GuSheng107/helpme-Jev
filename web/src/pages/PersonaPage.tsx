@@ -210,6 +210,9 @@ export default function PersonaPage() {
           title="人设档案"
           description="按情境分档：恋爱与职场各一份，互不覆盖。这不是临床诊断。"
         />
+        {current?.scenario_kind === 'custom' && (
+          <div className="mb-3"><Notice>此会话使用我的场景中的人设题；恋爱 / 职场用于区分档案和自评表。</Notice></div>
+        )}
         {error && <Notice tone="danger">{error}</Notice>}
         {notice && <div className="mb-3"><Notice tone="info">{notice}</Notice></div>}
         {conversations.length === 0 ? (

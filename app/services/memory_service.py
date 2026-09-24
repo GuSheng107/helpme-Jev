@@ -214,22 +214,24 @@ class MemoryService:
         )
 
     def _log(self, db: Session, *, owner_user_id: int, trace_id: str, llm, request: dict, result) -> None:
-        import json as _json
-
-        from ..core.logging import sanitize_log_value
+        from ..core.logging import dump_body, pick_level
         from ..repositories.models import CallLog
 
+        request_body, request_cut = dump_body(request)
+        response_body, response_cut = dump_body(result.payload)
+        truncated = request_cut or response_cut
         db.add(
             CallLog(
                 owner_user_id=owner_user_id,
                 trace_id=trace_id,
                 kind="llm",
                 phase="reflect",
-                level="info" if result.ok else "error",
+                level=pick_level(ok=result.ok, degraded=truncated),
                 endpoint_url=llm.endpoint_url,
                 model=llm.model,
-                request_body=_json.dumps(sanitize_log_value(request), ensure_ascii=False)[:65536],
-                response_body=_json.dumps(sanitize_log_value(result.payload), ensure_ascii=False)[:65536],
+                request_body=request_body,
+                response_body=response_body,
+                truncated=truncated,
                 status_code=result.status_code,
                 latency_ms=result.latency_ms,
                 error="" if result.ok else result.detail,

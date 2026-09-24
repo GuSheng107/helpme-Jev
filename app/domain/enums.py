@@ -40,6 +40,19 @@ class CallKind(StrEnum):
     LLM = "llm"
 
 
+class CallLogLevel(StrEnum):
+    """调用日志级别。
+
+    - ``INFO``：调用成功且结果完整
+    - ``WARN``：流程没断、结果可用，但已被降级（缺上下文 / 缺图 / 缺题 / 正文截断 / 健康度偏低）
+    - ``ERROR``：调用失败，流程中断
+    """
+
+    INFO = "info"
+    WARN = "warn"
+    ERROR = "error"
+
+
 class MemoryOp(StrEnum):
     """记忆写入决策（借鉴 Mem0）。"""
 
