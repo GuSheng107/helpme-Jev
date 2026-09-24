@@ -179,8 +179,12 @@ def test_decide_noul_and_score(
         headers=headers,
         json={"question": "发布会翻车风险多大？", "question_type": "score"},
     )
-    assert score.json()["result"]["value"] == 6
-    assert score.json()["result"]["text"] == "6/9"
+    # 评分题给原始档位值 + 换算到 10 分制的展示值（6.4 / 9 → 7.11 / 10）
+    assert score.json()["result"]["value"] == pytest.approx(6.4)
+    assert score.json()["result"]["scale_max"] == 9
+    assert score.json()["result"]["display_value"] == pytest.approx(7.11)
+    assert score.json()["result"]["display_max"] == 10
+    assert score.json()["result"]["text"] == "7.11"
 
 
 def test_decide_choice_requires_two_options(client: TestClient, db: Session) -> None:
