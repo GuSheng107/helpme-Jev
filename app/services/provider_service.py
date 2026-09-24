@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
+from uuid import uuid4
+
 from sqlalchemy.orm import Session
 
 from ..clients import jev_client, llm_client
 from ..core.constants import PURPOSE_PROVIDER_APIKEY
 from ..core.security import SecretCryptoError, decrypt_secret, encrypt_secret
-from ..core.time import iso_utc
+from ..core.time import iso_utc, utc_now
 from ..domain.errors import DomainError, DomainErrorCode
 from ..domain.schemas.provider import (
     ConnectionTestResult,
@@ -69,12 +72,19 @@ class ProviderService:
     def create(
         self, db: Session, *, owner_user_id: int, payload: ProviderCreate
     ) -> ProviderConfig:
+        existing = self.repo.list_all(db, owner_user_id=owner_user_id, kind=payload.kind)
+        if existing:
+            label = "表达模型" if payload.kind == "llm" else "决策模型"
+            raise DomainError(
+                DomainErrorCode.CONFLICT, f"{label}只能配置一个，请直接修改现有的", status_code=409
+            )
         if payload.is_default:
             self.repo.clear_default(db, owner_user_id=owner_user_id, kind=payload.kind)
 
         row = ProviderConfig(
             owner_user_id=owner_user_id,
             kind=payload.kind,
+            protocol=payload.protocol if payload.kind == "llm" else "openai",
             name=payload.name.strip(),
             endpoint_url=payload.endpoint_url.strip(),
             api_key_enc=encrypt_secret(payload.api_key, PURPOSE_PROVIDER_APIKEY),
@@ -82,6 +92,7 @@ class ProviderService:
             supports_vision=payload.supports_vision,
             context_window_tokens=payload.context_window_tokens,
             is_default=payload.is_default,
+            is_enabled=False,
         )
         self.repo.add(db, row)
         db.commit()
@@ -97,10 +108,21 @@ class ProviderService:
     ) -> ProviderConfig:
         row = self.get_or_404(db, owner_user_id=owner_user_id, provider_id=provider_id)
         fields = payload.model_dump(exclude_unset=True)
+        connection_changed = bool(fields.get("api_key")) or any(
+            fields.get(name) is not None and fields[name] != getattr(row, name)
+            for name in ("protocol", "endpoint_url", "model", "supports_vision")
+            if name != "protocol" or row.kind == "llm"
+        )
+        if fields.get("is_enabled") is True and (connection_changed or row.last_test_ok is not True):
+            raise DomainError(
+                DomainErrorCode.VALIDATION_FAILED, "连通性测试通过后才能启用", status_code=422
+            )
 
         if fields.get("is_default") is True:
             self.repo.clear_default(db, owner_user_id=owner_user_id, kind=row.kind)
 
+        if "protocol" in fields and fields["protocol"] and row.kind == "llm":
+            row.protocol = fields["protocol"]
         if "name" in fields and fields["name"] is not None:
             row.name = fields["name"].strip()
         if "endpoint_url" in fields and fields["endpoint_url"] is not None:
@@ -113,9 +135,16 @@ class ProviderService:
             row.context_window_tokens = fields["context_window_tokens"]
         if "is_default" in fields and fields["is_default"] is not None:
             row.is_default = fields["is_default"]
+        if "is_enabled" in fields and fields["is_enabled"] is not None:
+            row.is_enabled = fields["is_enabled"]
         # api_key 传了才替换；传 None 视为保持原值
         if fields.get("api_key"):
             row.api_key_enc = encrypt_secret(fields["api_key"], PURPOSE_PROVIDER_APIKEY)
+        # 只有实际改动连接内容才清除旧测试结果；仅改名称不影响可用性。
+        if connection_changed:
+            row.is_enabled = False
+            row.last_test_ok = None
+            row.last_tested_at = None
 
         db.commit()
         return row
@@ -134,9 +163,30 @@ class ProviderService:
         api_key = self.decrypt_key(row)
 
         if row.kind == "llm":
+            trace_id = uuid4().hex
             result = llm_client.test_connection(
-                endpoint_url=row.endpoint_url, api_key=api_key, model=row.model
+                endpoint_url=row.endpoint_url,
+                api_key=api_key,
+                model=row.model,
+                protocol=row.protocol,
+                timeout=llm_client.TIMEOUT_SECONDS,
             )
+            self._log_test(db, owner_user_id=owner_user_id, row=row, trace_id=trace_id, phase="connect", result=result)
+            if result.ok and row.supports_vision:
+                vision = llm_client.test_connection(
+                    endpoint_url=row.endpoint_url,
+                    api_key=api_key,
+                    model=row.model,
+                    protocol=row.protocol,
+                    vision=True,
+                    timeout=llm_client.VISION_TIMEOUT_SECONDS,
+                )
+                self._log_test(db, owner_user_id=owner_user_id, row=row, trace_id=trace_id, phase="vision", result=vision)
+                result = vision
+            row.last_test_ok = result.ok
+            row.last_tested_at = utc_now()
+            row.is_enabled = result.ok
+            db.commit()
             return ConnectionTestResult(
                 ok=result.ok,
                 detail=result.detail,
@@ -144,11 +194,14 @@ class ProviderService:
                 error_code=result.error_code,
             )
 
-        # JEV：先连通，再冒烟
+        # JEV：先连通，再冒烟；每条返回路径都写回测试状态。
+        trace_id = uuid4().hex
         conn = jev_client.test_connection(
             endpoint_url=row.endpoint_url, api_key=api_key, model=row.model
         )
+        self._log_test(db, owner_user_id=owner_user_id, row=row, trace_id=trace_id, phase="connect", result=conn)
         if not conn.ok:
+            self._record_test_state(db, row, ok=False)
             return ConnectionTestResult(
                 ok=False,
                 detail=conn.detail,
@@ -157,6 +210,7 @@ class ProviderService:
             )
 
         if not with_smoke:
+            self._record_test_state(db, row, ok=True)
             return ConnectionTestResult(
                 ok=True,
                 detail=conn.detail,
@@ -168,6 +222,7 @@ class ProviderService:
             endpoint_url=row.endpoint_url, api_key=api_key, model=row.model
         )
         if report is None:
+            self._record_test_state(db, row, ok=False)
             return ConnectionTestResult(
                 ok=False,
                 detail=f"协议连通，但冒烟测试无法完成：{last.detail}",
@@ -178,6 +233,7 @@ class ProviderService:
 
         health = report.health
         verdict = "达标" if health >= SMOKE_HEALTH_THRESHOLD else "偏低"
+        self._record_test_state(db, row, ok=True)
         return ConnectionTestResult(
             ok=True,
             detail=(
@@ -202,18 +258,56 @@ class ProviderService:
             ),
         )
 
+    @staticmethod
+    def _record_test_state(db: Session, row: ProviderConfig, *, ok: bool) -> None:
+        row.last_test_ok = ok
+        row.last_tested_at = utc_now()
+        row.is_enabled = ok
+        db.commit()
+
+    def _log_test(self, db, *, owner_user_id: int, row: ProviderConfig, trace_id: str, phase: str, result) -> None:
+        """连通测试写入调用日志，凭据不入库。"""
+        from ..repositories.models import CallLog
+
+        db.add(
+            CallLog(
+                owner_user_id=owner_user_id,
+                trace_id=trace_id,
+                kind=row.kind,
+                phase=phase,
+                level="info" if result.ok else "error",
+                endpoint_url=row.endpoint_url,
+                model=row.model,
+                request_body=json.dumps(
+                    {"protocol": row.protocol, "model": row.model, "vision": phase == "vision"},
+                    ensure_ascii=False,
+                ),
+                response_body=json.dumps(
+                    {"detail": result.detail, "reply": getattr(result, "payload", {}).get("reply", "")},
+                    ensure_ascii=False,
+                )[:65536],
+                status_code=result.status_code,
+                latency_ms=result.latency_ms,
+                error="" if result.ok else result.detail,
+            )
+        )
+
 
 def to_view(row: ProviderConfig, plaintext_key: str | None) -> dict:
     """转成响应字典。``plaintext_key`` 仅用于生成掩码后即丢弃。"""
     return {
         "id": row.id,
         "kind": row.kind,
+        "protocol": row.protocol,
         "name": row.name,
         "endpoint_url": row.endpoint_url,
         "model": row.model,
         "supports_vision": row.supports_vision,
         "context_window_tokens": row.context_window_tokens,
         "is_default": row.is_default,
+        "is_enabled": row.is_enabled,
+        "last_test_ok": row.last_test_ok,
+        "last_tested_at": iso_utc(row.last_tested_at) or "",
         "api_key_masked": mask_api_key(plaintext_key or ""),
         "created_at": iso_utc(row.created_at) or "",
         "updated_at": iso_utc(row.updated_at) or "",

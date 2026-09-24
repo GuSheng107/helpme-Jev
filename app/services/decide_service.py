@@ -75,6 +75,7 @@ class DecideService:
             endpoint_url=llm.endpoint_url,
             api_key=_providers.decrypt_key(llm),
             model=llm.model,
+            protocol=llm.protocol,
             messages=[
                 {"role": "system", "content": _TRANSLATE_PROMPT},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
@@ -230,6 +231,7 @@ class DecideService:
                 trace_id=trace_id,
                 kind=kind,
                 phase=phase,
+                level="info" if result.ok else "error",
                 endpoint_url=provider.endpoint_url,
                 model=model,
                 request_body=json.dumps(sanitize_log_value(request), ensure_ascii=False)[:65536],

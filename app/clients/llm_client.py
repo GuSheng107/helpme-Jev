@@ -1,8 +1,4 @@
-"""OpenAI 兼容 LLM 客户端：连通测试与 JSON chat。
-
-约定：请求走 ``POST {endpoint_url}``（用户填完整 URL），
-``Authorization: Bearer <key>``；**不做 provider 推断、不拼路径**。
-"""
+"""LLM 客户端：按 OpenAI Chat Completions、Responses 或 Anthropic Messages 协议请求。"""
 
 from __future__ import annotations
 
@@ -15,8 +11,9 @@ import httpx
 from .retry import post_with_backoff
 
 TIMEOUT_SECONDS = 60
-# 连通测试只花极少的 token
-PROBE_MAX_TOKENS = 1
+# Anthropic Messages 要求 max_tokens；64 覆盖这次实测中 33 个推理 token 加最终答案。
+ANTHROPIC_PROBE_MAX_TOKENS = 64
+VISION_TIMEOUT_SECONDS = 75
 
 
 @dataclass
@@ -32,11 +29,48 @@ class UpstreamResult:
     error_code: str = ""
 
 
-def _auth_headers(api_key: str) -> dict[str, str]:
-    return {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
+def _root(base_url: str) -> str:
+    """用户填到 /v1 即可，去掉已经带上的具体路径。"""
+    cleaned = base_url.rstrip("/")
+    for suffix in ("/chat/completions", "/responses", "/v1/messages", "/messages"):
+        if cleaned.endswith(suffix):
+            cleaned = cleaned[: -len(suffix)]
+    return cleaned.rstrip("/")
+
+
+def endpoint_for(base_url: str, protocol: str) -> str:
+    root = _root(base_url)
+    if protocol == "anthropic":
+        return root + "/messages" if root.endswith("/v1") else root + "/v1/messages"
+    if protocol == "openai_responses":
+        return root + "/responses"
+    return root + "/chat/completions"
+
+
+def _headers(api_key: str, protocol: str) -> dict[str, str]:
+    if protocol == "anthropic":
+        return {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        }
+    return {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+
+def _post_with_protocol_headers(
+    client: httpx.Client,
+    url: str,
+    *,
+    body: dict,
+    api_key: str,
+    protocol: str,
+    retry_transient: bool = False,
+) -> httpx.Response:
+    """仅使用所选 API 协议定义的认证头和请求格式。"""
+    headers = _headers(api_key, protocol)
+    if retry_transient:
+        return post_with_backoff(client, url, json=body, headers=headers)
+    return client.post(url, json=body, headers=headers)
 
 
 def _explain_status(status: int, body_text: str) -> str:
@@ -58,27 +92,102 @@ def _explain_status(status: int, body_text: str) -> str:
     return f"HTTP {status}：{hint}" + (f"；响应摘要：{snippet}" if snippet else "")
 
 
+# 1x1 纯红 PNG，用来确认模型真的能看图
+_RED_PIXEL = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ"
+    "/pLvAAAAAElFTkSuQmCC"
+)
+
+
+def _probe_body(protocol: str, model: str, *, vision: bool) -> dict:
+    """连通试题：OpenAI 协议不设输出 token 上限；Anthropic 使用必填的 max_tokens。"""
+    if vision:
+        ask = "What color is this image? Reply with the color word only."
+        if protocol == "anthropic":
+            return {
+                "model": model,
+                "max_tokens": ANTHROPIC_PROBE_MAX_TOKENS,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": ask},
+                            {
+                                "type": "image",
+                                "source": {"type": "base64", "media_type": "image/png", "data": _RED_PIXEL},
+                            },
+                        ],
+                    }
+                ],
+            }
+        if protocol == "openai_responses":
+            return {
+                "model": model,
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": ask},
+                            {
+                                "type": "input_image",
+                                "image_url": f"data:image/png;base64,{_RED_PIXEL}",
+                                "detail": "low",
+                            },
+                        ],
+                    }
+                ],
+            }
+        return {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": ask},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{_RED_PIXEL}", "detail": "low"},
+                        },
+                    ],
+                }
+            ],
+        }
+    ask = "Reply with exactly: ok"
+    if protocol == "anthropic":
+        return {
+            "model": model,
+            "max_tokens": ANTHROPIC_PROBE_MAX_TOKENS,
+            "messages": [{"role": "user", "content": ask}],
+        }
+    if protocol == "openai_responses":
+        return {"model": model, "input": ask}
+    return {"model": model, "messages": [{"role": "user", "content": ask}]}
+
+
 def test_connection(
     *,
     endpoint_url: str,
     api_key: str,
     model: str,
+    protocol: str = "openai",
+    vision: bool = False,
     timeout: int = TIMEOUT_SECONDS,
 ) -> UpstreamResult:
-    """发一个最小 chat 请求，验证 URL / Key / 模型三者是否可用。"""
+    """发一道固定试题，验证 URL / Key / 模型是否真能用。"""
     import time
 
     started = time.perf_counter()
-    body = {
-        "model": model,
-        "messages": [{"role": "user", "content": "ping"}],
-        "max_tokens": PROBE_MAX_TOKENS,
-    }
+    url = endpoint_for(endpoint_url, protocol)
+    body = _probe_body(protocol, model, vision=vision)
 
     try:
         with httpx.Client(timeout=timeout) as client:
-            response = post_with_backoff(
-                client, endpoint_url, json=body, headers=_auth_headers(api_key)
+            response = _post_with_protocol_headers(
+                client,
+                url,
+                body=body,
+                api_key=api_key,
+                protocol=protocol,
             )
     except httpx.TimeoutException:
         return UpstreamResult(
@@ -117,13 +226,59 @@ def test_connection(
             error_code="PROTOCOL_MISMATCH",
         )
 
-    if not isinstance(data, dict) or "choices" not in data:
+    if not isinstance(data, dict):
+        return UpstreamResult(
+            ok=False,
+            status_code=response.status_code,
+            latency_ms=latency,
+            detail="响应不是 JSON 对象",
+            error_code="PROTOCOL_MISMATCH",
+        )
+
+    if protocol == "anthropic" and (not isinstance(data, dict) or "content" not in data):
+        return UpstreamResult(
+            ok=False,
+            status_code=response.status_code,
+            latency_ms=latency,
+            detail="响应不是 Anthropic Messages 格式",
+            error_code="PROTOCOL_MISMATCH",
+        )
+
+    if protocol == "openai" and (not isinstance(data, dict) or "choices" not in data):
         return UpstreamResult(
             ok=False,
             status_code=response.status_code,
             latency_ms=latency,
             detail="响应缺少 choices 字段 —— 该端点可能不是 OpenAI 兼容接口",
             error_code="PROTOCOL_MISMATCH",
+        )
+
+    if protocol == "openai_responses":
+        reply = _responses_text(data) if isinstance(data, dict) else ""
+    elif protocol == "anthropic":
+        reply = _anthropic_text(data) if isinstance(data, dict) else ""
+    else:
+        reply = _message_text(data if isinstance(data, dict) else {})
+
+    reply_lower = reply.lower()
+    passed = ("red" in reply_lower or "红" in reply) if vision else "ok" in reply_lower
+    if not passed:
+        if not reply:
+            detail = "上游请求成功但没有可见文本；请检查模型输出或响应内容"
+            error_code = "EMPTY_MODEL_RESPONSE"
+        elif vision:
+            detail = "模型未能从图片中识别出要求的颜色"
+            error_code = "PROTOCOL_MISMATCH"
+        else:
+            detail = "模型没有按要求作答"
+            error_code = "PROTOCOL_MISMATCH"
+        return UpstreamResult(
+            ok=False,
+            status_code=response.status_code,
+            latency_ms=latency,
+            detail=detail,
+            error_code=error_code,
+            payload={"reply": reply},
         )
 
     usage = data.get("usage") or {}
@@ -157,12 +312,103 @@ def _message_text(data: dict) -> str:
     return ""
 
 
+def _to_anthropic(messages: list[dict]) -> tuple[str, list[dict]]:
+    """OpenAI 风格消息转成 Anthropic：system 单独抽出，图片块改写。"""
+    system: list[str] = []
+    converted: list[dict] = []
+    for message in messages:
+        role = message.get("role")
+        content = message.get("content")
+        if role == "system":
+            system.append(content if isinstance(content, str) else "")
+            continue
+        if isinstance(content, list):
+            blocks = []
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") == "text":
+                    blocks.append({"type": "text", "text": item.get("text", "")})
+                elif item.get("type") == "image_url":
+                    url = str((item.get("image_url") or {}).get("url") or "")
+                    if url.startswith("data:") and "," in url:
+                        header, payload = url.split(",", 1)
+                        media = header.split(";")[0].removeprefix("data:") or "image/png"
+                        blocks.append(
+                            {
+                                "type": "image",
+                                "source": {"type": "base64", "media_type": media, "data": payload},
+                            }
+                        )
+            content = blocks
+        converted.append({"role": "user" if role != "assistant" else "assistant", "content": content})
+    return "\n".join(part for part in system if part), converted
+
+
+def _to_responses(messages: list[dict]) -> tuple[str, list[dict]]:
+    """保留系统指令，并把 Chat 图片块转换为 Responses 输入块。"""
+    system: list[str] = []
+    converted: list[dict] = []
+    for message in messages:
+        role = message.get("role")
+        content = message.get("content")
+        if role == "system":
+            if isinstance(content, str):
+                system.append(content)
+            continue
+        if role not in {"user", "assistant"}:
+            continue
+        if isinstance(content, list):
+            blocks: list[dict] = []
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") == "text":
+                    blocks.append({"type": "input_text", "text": str(item.get("text") or "")})
+                elif item.get("type") == "image_url":
+                    image = item.get("image_url") or {}
+                    if isinstance(image, dict) and image.get("url"):
+                        block = {"type": "input_image", "image_url": image["url"]}
+                        if image.get("detail"):
+                            block["detail"] = image["detail"]
+                        blocks.append(block)
+            content = blocks
+        converted.append({"role": role, "content": content})
+    return "\n".join(system), converted
+
+
+def _responses_text(data: dict) -> str:
+    output_text = data.get("output_text")
+    if isinstance(output_text, str) and output_text.strip():
+        return output_text.strip()
+    parts: list[str] = []
+    for item in data.get("output") or []:
+        if not isinstance(item, dict):
+            continue
+        for block in item.get("content") or []:
+            if isinstance(block, dict) and isinstance(block.get("text"), str):
+                parts.append(block["text"])
+    return "\n".join(parts).strip()
+
+
+def _anthropic_text(data: dict) -> str:
+    blocks = data.get("content")
+    if not isinstance(blocks, list):
+        return ""
+    return "\n".join(
+        block.get("text", "")
+        for block in blocks
+        if isinstance(block, dict) and block.get("type") == "text"
+    ).strip()
+
+
 def chat_json(
     *,
     endpoint_url: str,
     api_key: str,
     model: str,
     messages: list[dict],
+    protocol: str = "openai",
     timeout: int = TIMEOUT_SECONDS,
 ) -> UpstreamResult:
     """一次 chat 调用，要求返回 JSON 对象。
@@ -171,17 +417,42 @@ def chat_json(
     成功时 ``payload`` 是解析后的 JSON 对象，不是原始响应。
     """
     started = time.perf_counter()
-    body: dict = {
-        "model": model,
-        "messages": messages,
-        "temperature": 0,
-        "response_format": {"type": "json_object"},
-    }
+    url = endpoint_for(endpoint_url, protocol)
+    if protocol == "anthropic":
+        system, converted = _to_anthropic(messages)
+        body = {
+            "model": model,
+            "max_tokens": 1024,
+            "system": system + "\nReply with a single JSON object and nothing else.",
+            "messages": converted,
+        }
+    elif protocol == "openai_responses":
+        system, converted = _to_responses(messages)
+        body = {
+            "model": model,
+            "max_output_tokens": 1024,
+            "instructions": "\n".join(
+                part for part in (system, "Reply with a single JSON object and nothing else.") if part
+            ),
+            "input": converted,
+        }
+    else:
+        body = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
+        }
 
     def _post(payload: dict) -> httpx.Response:
         with httpx.Client(timeout=timeout) as client:
-            return post_with_backoff(
-                client, endpoint_url, json=payload, headers=_auth_headers(api_key)
+            return _post_with_protocol_headers(
+                client,
+                url,
+                body=payload,
+                api_key=api_key,
+                protocol=protocol,
+                retry_transient=True,
             )
 
     try:
@@ -225,7 +496,12 @@ def chat_json(
             error_code="PROTOCOL_MISMATCH",
         )
 
-    text = _message_text(data if isinstance(data, dict) else {})
+    if protocol == "anthropic" and isinstance(data, dict):
+        text = _anthropic_text(data)
+    elif protocol == "openai_responses" and isinstance(data, dict):
+        text = _responses_text(data)
+    else:
+        text = _message_text(data if isinstance(data, dict) else {})
     try:
         parsed = json.loads(text) if text else None
     except json.JSONDecodeError:

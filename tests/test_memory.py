@@ -12,8 +12,9 @@ from sqlalchemy.orm import Session
 from app.core.security import hash_password
 from app.domain.enums import UserRole
 from app.repositories.auth_repo import UserRepository
-from app.repositories.models import Memory, User
+from app.repositories.models import Memory, ProviderConfig, User
 from app.services.context_service import dropped_count, render_background
+from tests.provider_setup import mark_provider_tested
 
 
 def _make_user(client: TestClient, db: Session, username: str) -> tuple[str, int]:
@@ -100,6 +101,7 @@ def _configure(client: TestClient, headers: dict) -> None:
         headers=headers,
     )
     assert resp.status_code == 201, resp.text
+    mark_provider_tested(resp.json()["id"])
 
 
 def _conversation(client: TestClient, headers: dict, name: str = "小美") -> int:
@@ -141,6 +143,21 @@ def test_revert_requires_latest_first(
             first_body = reflected.json()
     blocked = client.post(f"/api/chat/reflect/{first_body['id']}/revert", headers=headers)
     assert blocked.status_code == 409
+
+
+def test_reflect_rejects_disabled_llm(client: TestClient, db: Session) -> None:
+    token, _user_id = _make_user(client, db, "disabledmemory")
+    headers = _auth(token)
+    _configure(client, headers)
+    conv_id = _conversation(client, headers)
+    provider = db.query(ProviderConfig).filter_by(owner_user_id=_user_id, kind="llm").one()
+    provider.is_enabled = False
+    db.commit()
+
+    reflected = client.post("/api/chat/reflect", json={"conversation_id": conv_id}, headers=headers)
+
+    assert reflected.status_code == 409
+    assert reflected.json()["error"]["code"] == "NOT_CONFIGURED"
 
 
 def test_forget_hides_one_memory(client: TestClient, db: Session) -> None:
@@ -286,7 +303,7 @@ def test_other_memory_does_not_leak_across_counterparts(
     token, user_id = _make_user(client, db, "leakuser")
     headers = _auth(token)
     _configure(client, headers)
-    client.post(
+    jev = client.post(
         "/api/providers",
         json={
             "kind": "jev",
@@ -298,6 +315,8 @@ def test_other_memory_does_not_leak_across_counterparts(
         },
         headers=headers,
     )
+    assert jev.status_code == 201, jev.text
+    mark_provider_tested(jev.json()["id"])
     db.add(
         Memory(
             owner_user_id=user_id,

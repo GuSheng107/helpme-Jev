@@ -13,6 +13,7 @@ from app.core.security import hash_password
 from app.domain.enums import UserRole
 from app.repositories.auth_repo import UserRepository
 from app.repositories.models import User
+from tests.provider_setup import mark_provider_tested
 from app.scenarios.persona_questions import romance_persona_questions
 
 
@@ -50,6 +51,7 @@ def _ready(client: TestClient, headers: dict, *, vision: bool = False) -> int:
             },
         )
         assert created.status_code == 201, created.text
+        mark_provider_tested(created.json()["id"])
     conv = client.post(
         "/api/conversations",
         headers=headers,

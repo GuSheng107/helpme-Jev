@@ -33,6 +33,7 @@ class CallLog(Base, TimestampMixin):
     request_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     kind: Mapped[str] = mapped_column(String(8), nullable=False)  # jev | llm
     phase: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    level: Mapped[str] = mapped_column(String(8), nullable=False, default="info")
     endpoint_url: Mapped[str] = mapped_column(String(512), nullable=False, default="")
     model: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     request_body: Mapped[str] = mapped_column(Text, nullable=False, default="")

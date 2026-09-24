@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import json
+import shutil
 import time
 from pathlib import Path
 from uuid import uuid4
@@ -23,6 +24,7 @@ from ..repositories.models import Material
 ALLOWED_MIME = {"image/png", "image/jpeg", "image/webp"}
 MAX_IMAGE_BYTES = 4 * 1024 * 1024
 MAX_IMAGES_PER_MESSAGE = 9
+MATERIALS_DIR = Path("data") / "materials"
 
 _DESCRIBE_PROMPT = """You read chat screenshots for a decision model that only reads English.
 Describe what is visible: who is talking (if determinable), the key readable content translated
@@ -49,7 +51,7 @@ def save_image(
         )
     if len(content) > MAX_IMAGE_BYTES:
         raise DomainError(DomainErrorCode.PAYLOAD_TOO_LARGE, "图片超过 4MB", status_code=413)
-    folder = Path("data") / "materials" / str(owner_user_id)
+    folder = MATERIALS_DIR / str(owner_user_id)
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{uuid4().hex}{_extension(mime)}"
     path.write_bytes(content)
@@ -66,6 +68,11 @@ def save_image(
     db.commit()
     db.refresh(row)
     return row
+
+
+def delete_user_materials(owner_user_id: int) -> None:
+    """账号删除后移除该用户的图片文件。"""
+    shutil.rmtree(MATERIALS_DIR / str(owner_user_id), ignore_errors=True)
 
 
 def _data_url(content: bytes, mime: str) -> str:
@@ -126,6 +133,7 @@ def image_context_contents(
             endpoint_url=llm.endpoint_url,
             api_key=api_key,
             model=llm.model,
+            protocol=llm.protocol,
             messages=[
                 {"role": "system", "content": _DESCRIBE_PROMPT},
                 {
@@ -167,6 +175,7 @@ def _write_describe_log(db: Session, *, owner_user_id: int, trace_id: str, llm, 
             trace_id=trace_id,
             kind="llm",
             phase="describe",
+            level="info" if result.ok else "error",
             endpoint_url=llm.endpoint_url,
             model=llm.model,
             request_body=json.dumps(

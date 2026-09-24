@@ -108,6 +108,7 @@ class MemoryService:
             endpoint_url=llm.endpoint_url,
             api_key=_providers.decrypt_key(llm),
             model=llm.model,
+            protocol=llm.protocol,
             messages=[
                 {"role": "system", "content": _PROMPT},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
@@ -224,6 +225,7 @@ class MemoryService:
                 trace_id=trace_id,
                 kind="llm",
                 phase="reflect",
+                level="info" if result.ok else "error",
                 endpoint_url=llm.endpoint_url,
                 model=llm.model,
                 request_body=_json.dumps(sanitize_log_value(request), ensure_ascii=False)[:65536],
@@ -294,6 +296,12 @@ class MemoryService:
             raise DomainError(
                 DomainErrorCode.LLM_NOT_CONFIGURED,
                 "尚未配置语言模型，请前往设置填写地址与密钥。",
+                status_code=409,
+            )
+        if not chosen.is_enabled:
+            raise DomainError(
+                DomainErrorCode.NOT_CONFIGURED,
+                "表达模型已停用，请在设置里启用。",
                 status_code=409,
             )
         return chosen

@@ -44,6 +44,7 @@ def annotate(
     api_key: str,
     model: str,
     lines: list[tuple[str, str]],
+    protocol: str = "openai",
 ) -> tuple[dict[str, str], UpstreamResult | None]:
     """把 ``(id, 原文)`` 译成注释英文。
 
@@ -63,6 +64,7 @@ def annotate(
         endpoint_url=endpoint_url,
         api_key=api_key,
         model=model,
+        protocol=protocol,
         messages=[
             {"role": "system", "content": _SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},

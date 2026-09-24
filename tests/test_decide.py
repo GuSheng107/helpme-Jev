@@ -13,6 +13,7 @@ from app.core.security import hash_password
 from app.domain.enums import UserRole
 from app.repositories.auth_repo import UserRepository
 from app.repositories.models import User
+from tests.provider_setup import mark_provider_tested
 
 
 def _user(client: TestClient, db: Session, username: str) -> dict[str, str]:
@@ -52,6 +53,7 @@ def _configure(client: TestClient, headers: dict) -> None:
             },
         )
         assert created.status_code == 201, created.text
+        mark_provider_tested(created.json()["id"])
 
 
 def _scenario_id(client: TestClient, headers: dict, kind: str) -> int:

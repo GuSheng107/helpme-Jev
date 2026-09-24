@@ -182,6 +182,7 @@ class PersonaService:
             endpoint_url=llm.endpoint_url,
             api_key=_providers.decrypt_key(llm),
             model=llm.model,
+            protocol=llm.protocol,
             lines=[(str(row.seq), text) for row, text in zip(rows, contents)],
         )
         if translated is not None and not translated.ok:

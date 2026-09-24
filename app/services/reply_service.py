@@ -122,6 +122,7 @@ class ReplyService:
             endpoint_url=llm.endpoint_url,
             api_key=_providers.decrypt_key(llm),
             model=llm.model,
+            protocol=llm.protocol,
             messages=[
                 {"role": "system", "content": _DRAFT_PROMPTS.get(pack.kind, _DRAFT_PROMPTS["romance"])},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
@@ -135,6 +136,7 @@ class ReplyService:
             endpoint_url=llm.endpoint_url,
             api_key=_providers.decrypt_key(llm),
             model=llm.model,
+            protocol=llm.protocol,
             lines=[(str(index), text) for index, text in enumerate(replies)],
         )
         if translated is not None and not translated.ok:
@@ -173,6 +175,7 @@ class ReplyService:
             endpoint_url=llm.endpoint_url,
             api_key=_providers.decrypt_key(llm),
             model=llm.model,
+            protocol=llm.protocol,
             lines=[("0", text)],
         )
         if translated is not None and not translated.ok:
@@ -211,6 +214,7 @@ class ReplyService:
             endpoint_url=llm.endpoint_url,
             api_key=_providers.decrypt_key(llm),
             model=llm.model,
+            protocol=llm.protocol,
             messages=[
                 {"role": "system", "content": _CLARIFY_PROMPT},
                 {
@@ -237,6 +241,7 @@ class ReplyService:
             endpoint_url=llm.endpoint_url,
             api_key=_providers.decrypt_key(llm),
             model=llm.model,
+            protocol=llm.protocol,
             messages=[
                 {"role": "system", "content": _EXPLAIN_PROMPT},
                 {
@@ -262,6 +267,7 @@ class ReplyService:
             endpoint_url=llm.endpoint_url,
             api_key=_providers.decrypt_key(llm),
             model=llm.model,
+            protocol=llm.protocol,
             messages=[
                 {"role": "system", "content": _POLISH_PROMPTS.get(kind, _POLISH_PROMPTS["chat"])},
                 {"role": "user", "content": text},

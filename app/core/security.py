@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import hmac
 import os
 import secrets
 from functools import lru_cache
@@ -30,8 +29,9 @@ from .constants import (
     AES_GCM_NONCE_BYTES,
     APP_SECRET_B64_LENGTH,
     APP_SECRET_BYTES,
-    INVITATION_CODE_LENGTH,
-    INVITATION_CODE_PREFIX_LEN,
+    INVITATION_CODE_PREFIX,
+    INVITATION_CODE_SEGMENT_LENGTH,
+    INVITATION_CODE_SEGMENTS,
     SECRET_AAD_PREFIX,
     SECRET_AAD_VERSION,
     SECRET_ENVELOPE_PREFIX,
@@ -169,23 +169,12 @@ def generate_session_token() -> tuple[str, str, str]:
 _INVITATION_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 
 
-def normalize_invitation_code(plaintext: str) -> str:
-    """归一化：大写、只保留字母数字（丢掉分隔符与空白）。"""
-    return "".join(ch for ch in (plaintext or "").upper() if ch.isalnum())
-
-
-def generate_invitation_code() -> tuple[str, str, str]:
-    """返回 (展示用明文邀请码, 前缀, 哈希)。
-
-    哈希基于**归一化形式**，展示形式带分隔符便于抄写。
-    """
-    raw = "".join(secrets.choice(_INVITATION_ALPHABET) for _ in range(INVITATION_CODE_LENGTH))
-    display = "-".join(raw[i : i + 4] for i in range(0, INVITATION_CODE_LENGTH, 4))
-    return display, raw[:INVITATION_CODE_PREFIX_LEN], hash_token(raw)
-
-
-def verify_invitation_code(plaintext: str, code_hash: str) -> bool:
-    normalized = normalize_invitation_code(plaintext)
-    if not normalized:
-        return False
-    return hmac.compare_digest(hash_token(normalized), code_hash)
+def generate_invitation_code() -> str:
+    """固定前缀的明文邀请码，形如 ``JEV-XXXX-XXXX-XXXX``。明文落库，便于反复复制。"""
+    length = INVITATION_CODE_SEGMENT_LENGTH * INVITATION_CODE_SEGMENTS
+    raw = "".join(secrets.choice(_INVITATION_ALPHABET) for _ in range(length))
+    groups = (
+        raw[index : index + INVITATION_CODE_SEGMENT_LENGTH]
+        for index in range(0, length, INVITATION_CODE_SEGMENT_LENGTH)
+    )
+    return INVITATION_CODE_PREFIX + "-" + "-".join(groups)

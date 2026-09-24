@@ -13,6 +13,7 @@ from app.core.security import hash_password
 from app.domain.enums import UserRole
 from app.repositories.auth_repo import UserRepository
 from app.repositories.models import User
+from tests.provider_setup import mark_provider_tested
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"0" * 64
 
@@ -55,6 +56,7 @@ def _configure(client: TestClient, headers: dict, *, vision: bool) -> None:
             },
         )
         assert created.status_code == 201, created.text
+        mark_provider_tested(created.json()["id"])
 
 
 def _conversation(client: TestClient, headers: dict) -> int:

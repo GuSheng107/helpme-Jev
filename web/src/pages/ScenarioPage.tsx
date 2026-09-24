@@ -17,11 +17,7 @@ const KIND_LABELS: Record<string, string> = {
   general: '通用',
 }
 
-interface Props {
-  onBack: () => void
-}
-
-export default function ScenarioPage({ onBack }: Props) {
+export default function ScenarioPage() {
   const [rows, setRows] = useState<CustomScenario[]>([])
   const [editingId, setEditingId] = useState<number | null>(null)
   const [name, setName] = useState('')
@@ -118,7 +114,6 @@ export default function ScenarioPage({ onBack }: Props) {
         <PageHeader
           title="自定义场景"
           description="复制任一预设场景后自由改题；新建会话时就能选它。"
-          actions={<Button onClick={onBack}>返回</Button>}
         />
         {error && <Notice tone="danger">{error}</Notice>}
         {notice && (

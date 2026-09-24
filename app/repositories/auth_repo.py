@@ -29,6 +29,11 @@ class UserRepository:
     def count(self, db: Session) -> int:
         return int(db.scalar(select(func.count()).select_from(User)) or 0)
 
+    def count_admins(self, db: Session) -> int:
+        return int(
+            db.scalar(select(func.count()).select_from(User).where(User.role == "admin")) or 0
+        )
+
 
 class SessionRepository:
     def add(self, db: Session, row: AuthSession) -> AuthSession:
@@ -70,13 +75,8 @@ class InvitationRepository:
     def get(self, db: Session, invitation_id: int) -> InvitationCode | None:
         return db.get(InvitationCode, invitation_id)
 
-    def find_candidates(self, db: Session, prefix: str) -> list[InvitationCode]:
-        """按前缀找候选（明文不落库，无法直接按明文查）。"""
-        stmt = select(InvitationCode).where(
-            InvitationCode.code_prefix == prefix,
-            InvitationCode.revoked_at.is_(None),
-        )
-        return list(db.scalars(stmt))
+    def by_code(self, db: Session, code: str) -> InvitationCode | None:
+        return db.scalars(select(InvitationCode).where(InvitationCode.code == code)).first()
 
     def list_page(self, db: Session, *, page: int, page_size: int) -> tuple[list[InvitationCode], int]:
         total = int(db.scalar(select(func.count()).select_from(InvitationCode)) or 0)

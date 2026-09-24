@@ -81,6 +81,7 @@ def ensure_summary(
     endpoint_url: str,
     api_key: str,
     model: str,
+    protocol: str = "openai",
 ) -> str:
     """最近 10 条之外积压超过阈值时，把更早的内容压成一条摘要。失败则沿用旧摘要。"""
     current = _summaries.latest(db, conversation_id=conversation_id)
@@ -100,6 +101,7 @@ def ensure_summary(
         endpoint_url=endpoint_url,
         api_key=api_key,
         model=model,
+        protocol=protocol,
         messages=[
             {"role": "system", "content": _SUMMARY_PROMPT},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},

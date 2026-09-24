@@ -8,7 +8,7 @@
 
 <p align="center">
   A small, self-hosted helper for tricky conversations and everyday decisions.<br>
-  <strong>JEV makes the decision. An optional LLM helps with wording. You choose what happens next.</strong>
+  <strong>JEV makes the decision. An LLM handles language tasks. You choose what happens next.</strong>
 </p>
 
 <p align="center">
@@ -39,7 +39,7 @@ Paste the message, a screenshot, or the situation. HelpMe JEV turns it into a fe
 
 > **JEV decides. LLM explains. You decide.**
 
-JEV (TypeSafe System One) answers typed questions such as yes/no probability, option probability, and scores. It does not write the final message. An optional OpenAI-compatible LLM can translate, clarify, draft, or polish text when you ask it to.
+JEV (TypeSafe System One) answers typed questions such as yes/no probability, option probability, and scores. It does not write the final message. An LLM translates input for JEV and can clarify, draft, or polish text when you ask it to. The app supports OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages protocols.
 
 ## What it can do
 
@@ -75,7 +75,7 @@ Nothing is sent automatically. The final action stays with you.
 - Python 3.12 or newer
 - [uv](https://docs.astral.sh/uv/)
 - Node.js 20 or newer for the web development server/build
-- A JEV System One-compatible endpoint and an OpenAI-compatible chat endpoint when you want live analysis
+- A JEV System One-compatible endpoint and an LLM endpoint using one of the supported protocols when you want live analysis
 
 ### 1. Clone and install
 
@@ -149,12 +149,13 @@ After signing in, open **Settings → Providers**.
    - Enter its API key and model name.
    - Run the connection test and the JEV smoke test.
 2. Add a provider with kind <code>llm</code>.
-   - Use the full <code>POST</code> URL for an OpenAI-compatible chat endpoint; the app does not guess or append a provider path.
+   - Select OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages.
+   - Enter the API base URL (for example, <code>https://api.openai.com/v1</code>); the app appends the path for the selected protocol. Existing full endpoint URLs are also accepted.
    - Enter its API key and model name.
    - Mark it as vision-capable if it should read screenshots.
-3. Choose the default provider of each kind.
+3. Run the connection test for each provider. New providers are enabled after a successful test.
 
-The LLM is used only where the workflow needs language work: translation, clarification, image description, reply drafts, and polishing. JEV remains the structured decision layer.
+The LLM is used where the workflow needs language work: translation, clarification, image description, reply drafts, and polishing. JEV remains the structured decision layer. Admins can create invitation codes and copy any visible code repeatedly from the invitation page.
 
 ## Environment variables
 

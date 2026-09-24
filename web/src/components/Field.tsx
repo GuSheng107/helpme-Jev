@@ -1,4 +1,4 @@
-import type { InputHTMLAttributes, ReactNode } from 'react'
+import { useState, type InputHTMLAttributes, ReactNode } from 'react'
 
 interface FieldProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'className'> {
   label: string
@@ -24,10 +24,13 @@ export default function Field({
   hint,
   required,
   id,
+  type,
   ...rest
 }: FieldProps) {
   const inputId = id ?? `field-${label}`
   const describedBy = error ? `${inputId}-error` : hint ? `${inputId}-hint` : undefined
+  const secret = type === 'password'
+  const [visible, setVisible] = useState(false)
 
   return (
     <div>
@@ -36,19 +39,33 @@ export default function Field({
         {required && <span className="ml-0.5 text-danger">*</span>}
       </label>
 
-      <input
-        {...rest}
-        id={inputId}
-        aria-invalid={Boolean(error)}
-        aria-describedby={describedBy}
-        className={
-          'h-9 w-full rounded-[6px] border bg-surface px-3 text-ink transition-colors ' +
-          'placeholder:text-ink-muted focus:outline-none ' +
-          (error
-            ? 'border-danger focus:border-danger'
-            : 'border-border focus:border-primary')
-        }
-      />
+      <span className="relative block">
+        <input
+          {...rest}
+          id={inputId}
+          type={secret && visible ? 'text' : type}
+          aria-invalid={Boolean(error)}
+          aria-describedby={describedBy}
+          className={
+            'h-9 w-full rounded-[6px] border bg-surface px-3 text-ink transition-colors ' +
+            'placeholder:text-ink-muted focus:outline-none ' +
+            (secret ? 'pr-9 ' : '') +
+            (error
+              ? 'border-danger focus:border-danger'
+              : 'border-border focus:border-primary')
+          }
+        />
+        {secret && (
+          <button
+            type="button"
+            aria-label={visible ? '隐藏密码' : '显示密码'}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-ink-muted hover:text-primary"
+            onClick={() => setVisible((value) => !value)}
+          >
+            <EyeIcon open={visible} />
+          </button>
+        )}
+      </span>
 
       {error ? (
         <p id={`${inputId}-error`} className="mt-1 text-[13px] leading-5 text-danger">
@@ -60,5 +77,15 @@ export default function Field({
         </p>
       ) : null}
     </div>
+  )
+}
+
+function EyeIcon({ open }: { open: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+      <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z" />
+      <circle cx="12" cy="12" r="2.5" />
+      {open && <path d="M4 20 20 4" />}
+    </svg>
   )
 }
