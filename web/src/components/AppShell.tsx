@@ -46,14 +46,15 @@ export default function AppShell({ page, user, onNavigate, onLogout, children }:
     return () => document.removeEventListener('mousedown', close)
   }, [menuOpen])
 
+  const naturalScroll = page === 'decide'
   return (
-    <div className="flex h-screen bg-page text-ink">
-      <aside className="hidden w-44 shrink-0 flex-col border-r border-border bg-surface lg:flex">
+    <div className={`flex bg-page text-ink ${naturalScroll ? 'min-h-screen' : 'h-screen'}`}>
+      <aside className={`hidden w-44 shrink-0 flex-col border-r border-border bg-surface lg:flex ${naturalScroll ? 'sticky top-0 h-screen self-start' : ''}`}>
         <div className="flex h-14 items-center gap-2 px-4">
           <Mark />
           <span className="text-[15px] font-semibold">HelpMe Jev</span>
         </div>
-        <nav className="flex flex-1 flex-col gap-0.5 overflow-auto px-2 py-2">
+        <nav className={`flex flex-1 flex-col gap-0.5 px-2 py-2 ${naturalScroll ? '' : 'overflow-auto'}`}>
           {NAV.filter((item) => !item.admin || user.role === 'admin').map((item) => (
             <button
               key={item.page}
@@ -72,7 +73,7 @@ export default function AppShell({ page, user, onNavigate, onLogout, children }:
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 shrink-0 items-center justify-between border-b border-border bg-surface px-4">
+        <header className={`flex h-14 shrink-0 items-center justify-between border-b border-border bg-surface px-4 ${naturalScroll ? 'sticky top-0 z-20' : ''}`}>
           <span className="text-[14px] text-ink-muted lg:hidden">HelpMe Jev</span>
           <span className="hidden lg:block" />
           <div className="relative" ref={menuRef}>
@@ -119,9 +120,9 @@ export default function AppShell({ page, user, onNavigate, onLogout, children }:
           </div>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-auto">{children}</div>
+        <div className={naturalScroll ? 'flex-1' : 'min-h-0 flex-1 overflow-auto'}>{children}</div>
 
-        <nav className="flex shrink-0 overflow-x-auto border-t border-border bg-surface lg:hidden">
+        <nav className={`flex shrink-0 overflow-x-auto border-t border-border bg-surface lg:hidden ${naturalScroll ? 'sticky bottom-0 z-20' : ''}`}>
           {NAV.filter((item) => !item.admin || user.role === 'admin').map((item) => (
             <button
               key={item.page}

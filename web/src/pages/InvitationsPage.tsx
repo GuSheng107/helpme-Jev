@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { ApiError } from '../api/client'
 import { createInvitation, listInvitations, revokeInvitation, type Invitation } from '../api/admin'
 import Button from '../components/Button'
+import { confirmAction } from '../components/confirm'
 import Field from '../components/Field'
 import { toast } from '../components/toast'
 import { DataCard, EmptyState, Notice, PageBody, PageHeader, PageShell, StatusTag } from '../components/layout'
@@ -59,7 +60,12 @@ export default function InvitationsPage() {
   }
 
   async function revoke(row: Invitation) {
-    if (!window.confirm(`作废 ${row.code}？已发出去的链接将不能再注册。`)) return
+    if (!await confirmAction({
+      title: '作废邀请码',
+      message: `作废 ${row.code}？已发出去的链接将不能再注册。`,
+      confirmText: '确认作废',
+      tone: 'danger',
+    })) return
     try {
       await revokeInvitation(row.id)
       await reload()

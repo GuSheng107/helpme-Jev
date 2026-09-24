@@ -9,8 +9,10 @@ import {
   type ManagedUser,
 } from '../api/admin'
 import Button from '../components/Button'
+import { confirmAction } from '../components/confirm'
 import Field from '../components/Field'
 import { DataCard, EmptyState, Notice, PageBody, PageHeader, PageShell, StatusTag } from '../components/layout'
+import { formatLocalMinute } from '../utils/datetime'
 
 /** 管理员的用户页：只管账号，不看任何人的聊天、人设和日志。 */
 export default function UsersPage() {
@@ -66,7 +68,12 @@ export default function UsersPage() {
   }
 
   async function reset(row: ManagedUser) {
-    if (!window.confirm(`重置「${row.username}」的密码？对方当前登录会失效。`)) return
+    if (!await confirmAction({
+      title: '重置密码',
+      message: `重置「${row.username}」的密码？对方当前登录会失效。`,
+      confirmText: '确认重置',
+      tone: 'danger',
+    })) return
     setError(null)
     try {
       const result = await resetUserPassword(row.id)
@@ -78,7 +85,12 @@ export default function UsersPage() {
   }
 
   async function remove(row: ManagedUser) {
-    if (!window.confirm(`删除「${row.username}」？该账号的全部数据一并删除，不可恢复。`)) return
+    if (!await confirmAction({
+      title: '删除账号',
+      message: `删除「${row.username}」？该账号的全部数据一并删除，不可恢复。`,
+      confirmText: '确认删除',
+      tone: 'danger',
+    })) return
     setError(null)
     try {
       await deleteUser(row.id)
@@ -135,7 +147,7 @@ export default function UsersPage() {
                     </div>
                     <p className="mt-1 text-[13px] text-ink-muted">
                       {row.username}
-                      {row.last_login_at ? ` · 最近登录 ${row.last_login_at.slice(0, 16).replace('T', ' ')}` : ' · 还没登录过'}
+                      {row.last_login_at ? ` · 最近登录 ${formatLocalMinute(row.last_login_at)}` : ' · 还没登录过'}
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2">
