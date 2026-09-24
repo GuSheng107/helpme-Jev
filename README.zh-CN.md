@@ -12,8 +12,8 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/GuSheng107/helpme-jev/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/GuSheng107/helpme-jev/ci.yml?style=flat-square&label=ci" alt="CI"></a>
   <a href="https://github.com/GuSheng107/helpme-jev"><img src="https://img.shields.io/github/stars/GuSheng107/helpme-jev?style=flat-square" alt="GitHub stars"></a>
-  <a href="https://github.com/GuSheng107/helpme-jev/network/members"><img src="https://img.shields.io/github/forks/GuSheng107/helpme-jev?style=flat-square" alt="GitHub forks"></a>
   <a href="https://github.com/GuSheng107/helpme-jev/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square" alt="AGPL-3.0"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.12%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+"></a>
   <a href="https://react.dev/"><img src="https://img.shields.io/badge/react-19-61DAFB?style=flat-square&logo=react&logoColor=black" alt="React 19"></a>
@@ -142,7 +142,7 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8790
 
 ## 配置 JEV 和 LLM
 
-登录后打开 **Settings → Providers**：
+登录后打开 **设置**：
 
 1. 添加 <code>jev</code> 类型的提供方。
    - 填写完整的 System One 兼容接口 URL。
@@ -231,17 +231,11 @@ npm run typecheck
 npm run build
 ~~~
 
-当前基线：后端 105 项测试通过，前端类型检查通过，生产构建通过。
+当前基线由 CI 校验：后端测试、前端类型检查和生产构建。
 
 ## 参与贡献
 
-欢迎小而集中的 Pull Request：
-
-1. 为改动创建独立分支。
-2. 不要把密钥、本地数据库和 <code>web/dist</code> 提交进仓库。
-3. 运行上面的后端测试和前端检查。
-4. 开 Pull Request 前运行 <code>git diff --check</code>。
-5. 在描述中写清行为变化和对上游提供方的假设。
+见 [CONTRIBUTING.md](CONTRIBUTING.md)。安全问题请按 [SECURITY.md](SECURITY.md) 私下报告，不要开公开 Issue。社区规范见 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。
 
 ## 致谢
 

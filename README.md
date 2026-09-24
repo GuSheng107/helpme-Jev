@@ -12,8 +12,8 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/GuSheng107/helpme-jev/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/GuSheng107/helpme-jev/ci.yml?style=flat-square&label=ci" alt="CI"></a>
   <a href="https://github.com/GuSheng107/helpme-jev"><img src="https://img.shields.io/github/stars/GuSheng107/helpme-jev?style=flat-square" alt="GitHub stars"></a>
-  <a href="https://github.com/GuSheng107/helpme-jev/network/members"><img src="https://img.shields.io/github/forks/GuSheng107/helpme-jev?style=flat-square" alt="GitHub forks"></a>
   <a href="https://github.com/GuSheng107/helpme-jev/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square" alt="AGPL-3.0"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.12%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+"></a>
   <a href="https://react.dev/"><img src="https://img.shields.io/badge/react-19-61DAFB?style=flat-square&logo=react&logoColor=black" alt="React 19"></a>
@@ -231,17 +231,13 @@ npm run typecheck
 npm run build
 ~~~
 
-The current baseline passes 105 backend tests, frontend type checking, and a production build.
+The current baseline is checked in CI: backend tests, frontend type checking, and a production build.
 
 ## Contributing
 
-Small, focused pull requests are welcome.
-
-1. Create a branch for your change.
-2. Keep secrets, local databases, and <code>web/dist</code> out of commits.
-3. Run the backend tests and frontend checks above.
-4. Use <code>git diff --check</code> before opening a pull request.
-5. Explain behavior changes and provider assumptions in the pull request.
+See [CONTRIBUTING.md](CONTRIBUTING.md). Security issues go through
+[SECURITY.md](SECURITY.md), not a public issue. Community standards are in
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
 ## Thanks
 
