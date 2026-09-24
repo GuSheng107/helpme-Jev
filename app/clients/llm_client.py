@@ -410,6 +410,7 @@ def chat_json(
     messages: list[dict],
     protocol: str = "openai",
     timeout: int = TIMEOUT_SECONDS,
+    max_output_tokens: int = 1024,
 ) -> UpstreamResult:
     """一次 chat 调用，要求返回 JSON 对象。
 
@@ -422,7 +423,7 @@ def chat_json(
         system, converted = _to_anthropic(messages)
         body = {
             "model": model,
-            "max_tokens": 1024,
+            "max_tokens": max_output_tokens,
             "system": system + "\nReply with a single JSON object and nothing else.",
             "messages": converted,
         }
@@ -430,7 +431,7 @@ def chat_json(
         system, converted = _to_responses(messages)
         body = {
             "model": model,
-            "max_output_tokens": 1024,
+            "max_output_tokens": max_output_tokens,
             "instructions": "\n".join(
                 part for part in (system, "Reply with a single JSON object and nothing else.") if part
             ),
@@ -457,6 +458,7 @@ def chat_json(
 
     try:
         response = _post(body)
+        # 兼容网关：少数端点不接受 response_format，摘掉该字段再试。
         if response.status_code == 400 and "response_format" in body:
             body.pop("response_format")
             response = _post(body)
@@ -502,17 +504,26 @@ def chat_json(
         text = _responses_text(data)
     else:
         text = _message_text(data if isinstance(data, dict) else {})
+    candidate = text.strip()
+    if candidate.startswith("```") and candidate.endswith("```"):
+        candidate = candidate.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
     try:
-        parsed = json.loads(text) if text else None
+        parsed = json.loads(candidate) if candidate else None
     except json.JSONDecodeError:
         parsed = None
     if not isinstance(parsed, dict):
+        choices = data.get("choices") if isinstance(data, dict) else None
+        first = choices[0] if isinstance(choices, list) and choices else {}
         return UpstreamResult(
             ok=False,
             status_code=response.status_code,
             latency_ms=latency,
             detail="模型没有返回 JSON 对象",
             error_code="PROTOCOL_MISMATCH",
+            payload={
+                "response_excerpt": text[:1000],
+                "finish_reason": first.get("finish_reason") if isinstance(first, dict) else None,
+            },
         )
 
     return UpstreamResult(
