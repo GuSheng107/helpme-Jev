@@ -8,14 +8,26 @@
 from __future__ import annotations
 
 import json
+import math
 
 from sqlalchemy.orm import Session
 
 from ..repositories.models import Conversation, Scenario
 from ..scenarios.packs import DEFAULT_KIND, JudgePack, pack_for
+from ..scenarios.reply_prompts import builtin_draft_prompt
 
-# 自定义题集里允许的展示性字段（发送 JEV 前剥掉）
-_META_KEYS = ("title", "labels", "level_labels")
+# 发给 JEV 的题目字段；展示字段和导入时的其他元数据不进入协议请求。
+_JEV_KEYS = ("type", "instructions", "criteria")
+
+
+def effective_prompt(scenario: Scenario) -> str:
+    """返回场景实际用于生成回复的提示词。旧自定义场景按人设题回退。"""
+    if scenario.is_builtin:
+        return builtin_draft_prompt(scenario.kind)
+    if scenario.system_prompt.strip():
+        return scenario.system_prompt.strip()
+    persona = _load_questions(scenario.persona_questions)
+    return builtin_draft_prompt("workplace" if "disc" in persona else "romance")
 
 
 def kind_of(db: Session, conversation: Conversation) -> str:
@@ -48,7 +60,7 @@ def custom_pack(scenario: Scenario) -> JudgePack:
     labels: dict[str, dict[str, str]] = {}
     level_labels: dict[str, tuple[str, ...]] = {}
     for key, question in raw.items():
-        questions[key] = {k: v for k, v in question.items() if k not in _META_KEYS}
+        questions[key] = {k: question[k] for k in _JEV_KEYS if k in question}
         titles[key] = str(question.get("title") or key)
         if isinstance(question.get("labels"), dict):
             labels[key] = {str(k): str(v) for k, v in question["labels"].items()}
@@ -59,11 +71,18 @@ def custom_pack(scenario: Scenario) -> JudgePack:
         (
             key
             for key, question in questions.items()
-            if question.get("type") == "score" and ("danger" in key or "stakes" in key)
+            if question.get("type") == "score" and any(
+                word in key.lower() for word in ("danger", "stakes", "risk")
+            )
         ),
         "",
     )
-    needs_key = next((key for key in questions if "needs" in key), "")
+    needs_key = next((key for key in questions if "need" in key.lower()), "")
+    risk_levels = questions.get(risk_key, {}).get("criteria") if risk_key else None
+    risk_threshold = (
+        max(1, math.ceil((len(risk_levels) - 1) * 0.8))
+        if isinstance(risk_levels, list) else 8
+    )
 
     def _label_of(key: str, value: str) -> str:
         return labels.get(key, {}).get(value, value)
@@ -76,7 +95,7 @@ def custom_pack(scenario: Scenario) -> JudgePack:
         label_of=_label_of,
         intensity_labels=tuple(level_labels.get(next(iter(level_labels), ""), ())),
         risk_key=risk_key,
-        risk_threshold=8,
+        risk_threshold=risk_threshold,
         needs_key=needs_key,
         risk_word="风险",
         level_labels=level_labels,
@@ -120,23 +139,45 @@ def validate_questions(raw: str) -> dict:
         if qtype == "noul":
             if not isinstance(criteria, dict) or set(criteria) != {"true", "false"}:
                 raise ValueError(f"题目 {key}（noul）的 criteria 需要 true / false 两项")
+            if any(not isinstance(value, str) or not value.strip() for value in criteria.values()):
+                raise ValueError(f"题目 {key}（noul）的选项说明不能为空")
         elif qtype == "choice":
             if not isinstance(criteria, dict) or not 2 <= len(criteria) <= 255:
                 raise ValueError(f"题目 {key}（choice）的 criteria 需要 2 到 255 个选项")
-            if any(not str(v).strip() for v in criteria.values()):
-                raise ValueError(f"题目 {key}（choice）的选项说明不能为空")
+            if any(
+                not isinstance(name, str) or not name.strip()
+                or not isinstance(value, str) or not value.strip()
+                for name, value in criteria.items()
+            ):
+                raise ValueError(f"题目 {key}（choice）的选项名和说明不能为空")
         else:
             if not isinstance(criteria, list) or not 2 <= len(criteria) <= 10:
                 raise ValueError(f"题目 {key}（score）的 criteria 需要 2 到 10 个档位")
+            if any(not isinstance(value, str) or not value.strip() for value in criteria):
+                raise ValueError(f"题目 {key}（score）的档位说明不能为空")
         instructions = question.get("instructions")
         if not isinstance(instructions, str) or not instructions.strip():
             raise ValueError(f"题目 {key} 缺少 instructions（英文判别说明）")
     return parsed
 
 
+def validate_persona_questions(raw: str) -> dict:
+    """人设题必须包含证据充足度与至少一道可保存的特质题。"""
+    questions = validate_questions(raw)
+    sufficient = questions.get("evidence_sufficient")
+    if not isinstance(sufficient, dict) or sufficient.get("type") != "noul":
+        raise ValueError("人设题集需要 evidence_sufficient（noul）题")
+    if not any(
+        key != "evidence_sufficient" and question.get("type") in {"choice", "score"}
+        for key, question in questions.items()
+    ):
+        raise ValueError("人设题集至少需要一道 choice 或 score 特质题")
+    return questions
+
+
 def strip_meta(questions: dict) -> dict:
     """剥掉展示性字段，得到发给 JEV 的纯题集。"""
     return {
-        key: {k: v for k, v in question.items() if k not in _META_KEYS}
+        key: {k: question[k] for k in _JEV_KEYS if k in question}
         for key, question in questions.items()
     }

@@ -1,6 +1,6 @@
 """候选回复：母语起草，注释翻译后交给 Jev 排序，分数只以中文返回。
 
-恋爱与职场共用一条链路；起草提示词、利害题 key、拦截文案按场景包区分。
+恋爱、职场和用户场景共用一条链路；用户场景可自定义起草提示词。
 """
 
 from __future__ import annotations
@@ -14,38 +14,22 @@ from ..clients.llm_client import chat_json
 from ..clients.translation import annotate
 from ..domain.errors import DomainError, DomainErrorCode
 from ..repositories.conversations_repo import MessageRepository
-from ..repositories.models import Conversation
+from ..repositories.models import CallLog, Conversation, Scenario
 from ..scenarios.builders import choice
 from ..scenarios.packs import JudgePack
+from ..scenarios.reply_prompts import CUSTOM_REPLY_FORMAT, builtin_draft_prompt
 from .analyze_service import RECENT_MESSAGE_LIMIT, AnalyzeService
 from .provider_service import ProviderService
-from .scenario_service import pack_of
+from .scenario_service import effective_prompt, pack_of
 
 _messages = MessageRepository()
 _providers = ProviderService()
 _analyze = AnalyzeService()
 
-_DRAFT_PROMPTS: dict[str, str] = {
-    "romance": (
-        "Write exactly 3 reply candidates in the user's language (Chinese unless the chat is English). "
-        "They must follow the given decision. Do not decide a different action. "
-        "Sound like a caring partner, not a customer-service agent. "
-        "Return JSON: {\"replies\":[\"...\",\"...\",\"...\"]}\n"
-        "Each reply is one or two sentences, distinct in tone, no explanation, no English translation."
-    ),
-    "workplace": (
-        "Write exactly 3 reply candidates in the user's language (Chinese unless the chat is English). "
-        "They must follow the given decision. Do not decide a different action. "
-        "Keep a professional register: concrete, honest, no fluff, no over-apologizing, "
-        "no promises that were not decided. "
-        "Return JSON: {\"replies\":[\"...\",\"...\",\"...\"]}\n"
-        "Each reply is one or two sentences, distinct in tone, no explanation, no English translation."
-    ),
-}
-
 _HIGH_RISK_MESSAGES: dict[str, str] = {
     "romance": "此事不适合用文字处理，建议当面或电话沟通。",
     "workplace": "这件事利害不小，建议先电话或当面对齐，再落成文字。",
+    "custom": "这段沟通风险较高，建议先确认情况再回复。",
 }
 
 _CLARIFY_PROMPT = """The judgment lacks context. Ask the user 1 to 3 short questions in Chinese that would fill the gap.
@@ -57,10 +41,11 @@ Return JSON: {"reason":"..."}
 Do not suggest a reply. This is an interpretation, not a new decision."""
 
 _POLISH_PROMPTS = {
-    "chat": "Polish the pasted chat line in the same language. Fix typos and ambiguity, keep the tone. Return JSON: {\"text\":\"...\"}",
-    "reply": "Polish this reply in the same language. Keep the meaning, make it sound like the sender. Return JSON: {\"text\":\"...\"}",
-    "question": "Rewrite this into one decidable question in the same language. Return JSON: {\"text\":\"...\"}",
+    "chat": "Polish the pasted chat line in the same language. Fix typos and ambiguity, keep the tone.",
+    "reply": "Polish this reply in the same language. Keep the meaning, make it sound like the sender.",
+    "question": "Rewrite this into one decidable question in the same language, preserving the user's intent.",
 }
+_POLISH_FORMAT = 'Return exactly one valid JSON object: {"text":"polished text"}. No markdown or other text.'
 
 _RANK_KEYS = ("reply_a", "reply_b", "reply_c")
 
@@ -99,6 +84,10 @@ class ReplyService:
         if not rows:
             raise DomainError(DomainErrorCode.VALIDATION_FAILED, "暂无内容", status_code=422)
         pack = pack_of(db, conversation)
+        scenario = db.get(Scenario, conversation.scenario_id) if conversation.scenario_id else None
+        prompt = effective_prompt(scenario) if scenario else builtin_draft_prompt(pack.kind)
+        if scenario is not None and not scenario.is_builtin:
+            prompt += CUSTOM_REPLY_FORMAT
         if _high_risk(decision, pack):
             raise DomainError(
                 DomainErrorCode.VALIDATION_FAILED,
@@ -110,6 +99,9 @@ class ReplyService:
         payload = {
             "relationship": conversation.relationship,
             "scenario": pack.kind,
+            "scenario_name": scenario.name if scenario else "",
+            "scenario_description": scenario.description if scenario else "",
+            "judgments": decision,
             "decision": {
                 "intent": _text(decision, "true_intent"),
                 "action": _text(decision, "best_action"),
@@ -124,7 +116,7 @@ class ReplyService:
             model=llm.model,
             protocol=llm.protocol,
             messages=[
-                {"role": "system", "content": _DRAFT_PROMPTS.get(pack.kind, _DRAFT_PROMPTS["romance"])},
+                {"role": "system", "content": prompt},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ],
         )
@@ -261,21 +253,68 @@ class ReplyService:
             raise DomainError(DomainErrorCode.LLM_UPSTREAM_ERROR, "说明未生成，请重试。", status_code=502)
         return {"reason": reason}
 
-    def polish(self, db: Session, *, owner_user_id: int, text: str, kind: str) -> dict:
+    def polish(
+        self, db: Session, *, owner_user_id: int, text: str, kind: str,
+        trace_id: str = "",
+    ) -> dict:
+        from ..core.logging import dump_body, pick_level
+
         llm = _analyze._require_provider(db, owner_user_id=owner_user_id, kind="llm")
-        result = chat_json(
-            endpoint_url=llm.endpoint_url,
-            api_key=_providers.decrypt_key(llm),
-            model=llm.model,
-            protocol=llm.protocol,
-            messages=[
-                {"role": "system", "content": _POLISH_PROMPTS.get(kind, _POLISH_PROMPTS["chat"])},
+        prompt = _POLISH_PROMPTS.get(kind, _POLISH_PROMPTS["chat"]) + "\n" + _POLISH_FORMAT
+        polished = ""
+        for attempt in range(2):
+            messages = [
+                {"role": "system", "content": prompt},
                 {"role": "user", "content": text},
-            ],
-        )
-        polished = str(result.payload.get("text") or "").strip() if result.ok else ""
+            ]
+            if attempt:
+                messages.append({
+                    "role": "user",
+                    "content": "The previous answer was invalid. Return only the JSON object with a nonempty text string.",
+                })
+            result = chat_json(
+                endpoint_url=llm.endpoint_url,
+                api_key=_providers.decrypt_key(llm),
+                model=llm.model,
+                protocol=llm.protocol,
+                messages=messages,
+            )
+            polished = (
+                result.payload.get("text", "").strip()
+                if result.ok and isinstance(result.payload.get("text"), str) else ""
+            )
+            if polished:
+                break
+            if result.ok:
+                result.ok = False
+                result.detail = "润色结果缺少 text"
+                result.error_code = "PROTOCOL_MISMATCH"
+            if result.error_code != "PROTOCOL_MISMATCH":
+                break
+        request_body, request_cut = dump_body({"kind": kind, "text": text})
+        response_body, response_cut = dump_body(result.payload)
+        truncated = request_cut or response_cut
+        db.add(CallLog(
+            owner_user_id=owner_user_id,
+            trace_id=trace_id,
+            kind="llm",
+            phase="polish",
+            level=pick_level(ok=bool(polished), degraded=truncated),
+            endpoint_url=llm.endpoint_url,
+            model=llm.model,
+            request_body=request_body,
+            response_body=response_body,
+            truncated=truncated,
+            status_code=result.status_code,
+            latency_ms=result.latency_ms,
+            error="" if polished else result.detail,
+        ))
+        db.commit()
         if not polished:
-            raise DomainError(DomainErrorCode.LLM_UPSTREAM_ERROR, "润色未完成，请重试。", status_code=502)
+            raise DomainError(
+                DomainErrorCode.LLM_UPSTREAM_ERROR,
+                "润色未完成，请查看日志中的润色调用详情。", status_code=502,
+            )
         return {"text": polished}
 
     def _rank(self, *, jev, state: dict, annotated: list[str]) -> list[int]:

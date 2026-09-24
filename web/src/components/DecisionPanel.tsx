@@ -125,7 +125,9 @@ export default function DecisionPanel({
           <Notice tone="danger">
             {scenarioKind === 'workplace'
               ? '这件事利害不小，建议先电话或当面对齐，再落成文字。'
-              : '此事不适合用文字处理，建议当面或电话沟通。'}
+              : scenarioKind === 'custom'
+                ? '这段沟通风险较高，建议先确认情况再回复。'
+                : '此事不适合用文字处理，建议当面或电话沟通。'}
           </Notice>
         )}
         <p className="text-[13px] text-ink-secondary">信息充足度 {result.sufficiency_percent}%</p>
