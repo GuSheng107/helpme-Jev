@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .api import account, admin, auth, chat, conversations, decide, logs, personas, providers, scenarios
 from .core.config import get_settings
-from .domain.errors import DomainError, DomainErrorCode
+from .domain.errors import DomainError, error_body
 from .services.bootstrap import bootstrap
 
 logging.basicConfig(
@@ -23,13 +23,6 @@ logging.basicConfig(
 logger = logging.getLogger("helpme_jev")
 
 VERSION = "0.1.0"
-
-# 可重试的错误码（前端据此给出"稍后重试"按钮）
-RETRYABLE_CODES = {
-    DomainErrorCode.RATE_LIMIT_EXCEEDED,
-    DomainErrorCode.JEV_UPSTREAM_ERROR,
-    DomainErrorCode.LLM_UPSTREAM_ERROR,
-}
 
 
 @asynccontextmanager
@@ -62,14 +55,7 @@ async def handle_domain_error(request: Request, exc: DomainError) -> JSONRespons
     """统一错误模型：{error: {code, message, trace_id, retryable}}。"""
     return JSONResponse(
         status_code=exc.status_code,
-        content={
-            "error": {
-                "code": exc.code.value,
-                "message": exc.message,
-                "trace_id": getattr(request.state, "trace_id", ""),
-                "retryable": exc.code in RETRYABLE_CODES,
-            }
-        },
+        content={"error": error_body(exc, getattr(request.state, "trace_id", ""))},
     )
 
 
