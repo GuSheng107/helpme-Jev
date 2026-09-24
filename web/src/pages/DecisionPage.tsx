@@ -48,6 +48,7 @@ export default function DecisionPage() {
   const [beforePolish, setBeforePolish] = useState<DecisionDraft | null>(null)
   const [history, setHistory] = useState<DecisionHistoryItem[]>([])
   const [historyTotal, setHistoryTotal] = useState(0)
+  const [historyRetention, setHistoryRetention] = useState(15)
   const [historyPage, setHistoryPage] = useState(0)
   const [historyLoading, setHistoryLoading] = useState(false)
   const [historyError, setHistoryError] = useState('')
@@ -83,6 +84,7 @@ export default function DecisionPage() {
       const data = await listDecisionHistory(PAGE_SIZE, page * PAGE_SIZE)
       setHistory(data.items)
       setHistoryTotal(data.total)
+      setHistoryRetention(data.retention_days)
     } catch (err) {
       setHistoryError(err instanceof ApiError ? err.message : '历史任务未能载入')
     } finally {
@@ -250,12 +252,12 @@ export default function DecisionPage() {
           <DataCard title="历史任务" className="flex flex-1 flex-col" bodyClassName="flex flex-1 flex-col">
             {selectedHistory ? <HistoryDetail item={selectedHistory} onClose={() => setSelectedHistory(null)} /> : <>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-[12px] text-ink-muted">
-              <span>仅保留近 15 天的决策记录</span>
+              <span>仅保留近 {historyRetention} 天的决策记录</span>
               <span>共 {historyTotal} 条</span>
             </div>
             {historyError && <div className="mb-3"><Notice tone="danger">{historyError}</Notice></div>}
             {historyLoading && history.length === 0 ? <p className="py-4 text-center text-[13px] text-ink-muted">载入中…</p>
-              : history.length === 0 ? <p className="py-4 text-center text-[13px] text-ink-muted">近 15 天没有决策任务</p>
+              : history.length === 0 ? <p className="py-4 text-center text-[13px] text-ink-muted">近 {historyRetention} 天没有决策任务</p>
                 : <ul className="divide-y divide-border-subtle">
                   {history.map((item) => (
                     <li key={item.id}>
@@ -342,7 +344,7 @@ function ResultView({ result }: { result: DecideResult }) {
     const bars = result.bars ?? []
     return (
       <div>
-        <p className="text-[13px] text-ink-secondary">最可能：<span className="text-[14px] font-medium text-ink">{result.top ?? '—'}</span></p>
+        <p className="text-[13px] text-ink-secondary">Jev 判断：<span className="text-[14px] font-medium text-ink">{result.top ?? '—'}</span></p>
         <ul className="mt-3 space-y-2">
           {bars.map((bar) => (
             <li key={bar.key} className="flex items-center gap-2">
