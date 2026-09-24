@@ -34,14 +34,36 @@ def _confidence(value: object) -> float | None:
     return number if math.isfinite(number) and 0 <= number <= 1 else None
 
 
-_TRANSLATE_PROMPT = """Translate the supplied decision question, context, and options into precise English.
-Return exactly ONE valid JSON object and no other text, markdown, or code fence.
-The object must contain exactly these fields:
-{"question":"English question","context":"English context or empty string","options":["English option 1"]}
-All three fields are required. question and context must be strings; options must be an array of strings.
-Keep every option in the original order, without adding or removing any option.
-If context is empty, return "". If options is empty, return [].
-Preserve meaning and nuance. Do not answer the question or add commentary."""
+# 翻译桥提示词刻意写细：字段逐个交代、规则逐条列出、样例锚定格式。
+# 实测长/短提示词的稳态延迟相当（长版在配对比对中略快），砍输入 token 收益有限，
+# 而字段契约写得越显式，模型越少自由发挥，因此保留细化版。
+_TRANSLATE_PROMPT = """You translate a decision question into English for a downstream reasoning engine. You only translate: never answer the question, never judge it, never add explanation.
+
+Input: one JSON object with exactly these keys:
+- question: string, never empty
+- context: string, may be ""
+- options: array of strings, may be []
+
+Do this in order:
+1. question: translate into clear, literal English. Keep it a question and keep its meaning and scope unchanged.
+2. context: translate into English. If it is "", keep "".
+3. options: translate each item into English, one by one, in the given order.
+
+Rules:
+- Translate field by field. Never merge fields, never move text between them.
+- Keep the option count identical: never add, drop, reorder, or renumber options.
+- Never return an empty question or an empty option. If a source field has content, its translation must have content.
+- Keep short categorical answers short: 是/不是 translate to yes/no.
+- Keep proper nouns (people, places, brands) as they are, or use their common English spelling.
+- Keep numbers, units, and dates unchanged.
+- No extra keys, no markdown, no code fence, no notes.
+
+Output: exactly one JSON object with the same three keys in the same order, starting with { and ending with }:
+{"question":"English question","context":"English context","options":["English option 1"]}
+
+Example
+Input: {"question":"这两个方案哪个更好？","context":"预算有限","options":["先做原型","先写文档"]}
+Output: {"question":"Which of these two options is better?","context":"The budget is limited.","options":["Build a prototype first","Write the document first"]}"""
 
 
 _POLISH_PROMPT = """Polish a decision form in the original language of each field.
