@@ -35,6 +35,16 @@ class DomainErrorCode(StrEnum):
     SECRET_CRYPTO_ERROR = "SECRET_CRYPTO_ERROR"
 
 
+# 可重试的错误码（前端据此给出"稍后重试"按钮）
+RETRYABLE_CODES: frozenset[DomainErrorCode] = frozenset(
+    {
+        DomainErrorCode.RATE_LIMIT_EXCEEDED,
+        DomainErrorCode.JEV_UPSTREAM_ERROR,
+        DomainErrorCode.LLM_UPSTREAM_ERROR,
+    }
+)
+
+
 class DomainError(Exception):
     """业务异常：携带错误码与目标 HTTP 状态码。"""
 
@@ -52,3 +62,16 @@ class DomainError(Exception):
 
     def __str__(self) -> str:  # pragma: no cover - 便于日志
         return f"[{self.code}] {self.message}"
+
+
+def error_body(exc: DomainError, trace_id: str = "") -> dict:
+    """统一错误体，与全局异常处理器的响应结构一致。
+
+    流式响应里状态码已经发出去了，只能用同一份结构走事件通道。
+    """
+    return {
+        "code": exc.code.value,
+        "message": exc.message,
+        "trace_id": trace_id,
+        "retryable": exc.code in RETRYABLE_CODES,
+    }

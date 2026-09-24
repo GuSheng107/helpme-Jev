@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from datetime import timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import Field
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..core.config import get_settings
-from ..core.db import get_db
+from ..core.db import SessionLocal, get_db
 from ..core.time import iso_utc, utc_now
 from ..domain.enums import CallLogLevel
+from ..domain.errors import DomainError, error_body
 from ..domain.schemas.auth import StrictModel
 from ..repositories.models import CallLog, User
 from ..services.decide_service import DecideService
@@ -26,6 +29,11 @@ _decide = DecideService()
 
 # 出了结果的级别：warn 只是结果被降级，仍算成功（失败才是 error）
 _RESULT_LEVELS = (CallLogLevel.INFO.value, CallLogLevel.WARN.value)
+
+
+def _frame(payload: dict) -> str:
+    """SSE 单帧：一行 data 加一个空行。"""
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
 class PolishDecisionRequest(StrictModel):
@@ -57,6 +65,48 @@ def decide(
         options=payload.options,
         context=payload.context,
         trace_id=getattr(request.state, "trace_id", ""),
+    )
+
+
+@router.post("/stream")
+def decide_stream(
+    payload: DecideRequest,
+    request: Request,
+    user: User = Depends(require_active_user),
+) -> StreamingResponse:
+    """流式判断：把翻译桥 / JEV 的真实阶段变化实时推给前端。
+
+    校验类错误在开流前抛出，仍是普通 422 JSON；开流后的上游错误已经改不了
+    状态码，改用 error 事件下发。
+    """
+    _decide.validate(payload.question_type, payload.options)
+    trace_id = getattr(request.state, "trace_id", "")
+    owner_user_id = user.id
+
+    def events() -> Iterator[str]:
+        # 会话在生成器内自建：生成器的执行时机与请求依赖的清理时机无关，
+        # 不依赖请求作用域会话的生命周期。
+        db = SessionLocal()
+        try:
+            for event in _decide.decide_events(
+                db,
+                owner_user_id=owner_user_id,
+                question=payload.question,
+                question_type=payload.question_type,
+                options=payload.options,
+                context=payload.context,
+                trace_id=trace_id,
+            ):
+                yield _frame(event)
+        except DomainError as exc:
+            yield _frame({"stage": "error", "error": error_body(exc, trace_id)})
+        finally:
+            db.close()
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

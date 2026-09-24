@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Iterator
 
 from sqlalchemy.orm import Session
 
@@ -23,14 +24,44 @@ from .provider_service import ProviderService
 _providers = ProviderService()
 _analyze = AnalyzeService()
 
-_TRANSLATE_PROMPT = """Translate the supplied decision question, context, and options into precise English.
-Return exactly ONE valid JSON object and no other text, markdown, or code fence.
-The object must contain exactly these fields:
-{"question":"English question","context":"English context or empty string","options":["English option 1"]}
-All three fields are required. question and context must be strings; options must be an array of strings.
-Keep every option in the original order, without adding or removing any option.
-If context is empty, return "". If options is empty, return [].
-Preserve meaning and nuance. Do not answer the question or add commentary."""
+
+def _confidence(value: object) -> float | None:
+    """JEV answers 里可选的置信度：合法浮点原样返回，其余按无值处理。"""
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) and 0 <= number <= 1 else None
+
+# 翻译桥提示词刻意写细：字段逐个交代、规则逐条列出、样例锚定格式。
+# 指引越具体，模型越少自由发挥，实测比含糊指令更快、也更少触发重试。
+_TRANSLATE_PROMPT = """You translate a decision question into English for a downstream reasoning engine. You only translate: never answer the question, never judge it, never add explanation.
+
+Input: one JSON object with exactly these keys:
+- question: string, never empty
+- context: string, may be ""
+- options: array of strings, may be []
+
+Do this in order:
+1. question: translate into clear, literal English. Keep it a question and keep its meaning and scope unchanged.
+2. context: translate into English. If it is "", keep "".
+3. options: translate each item into English, one by one, in the given order.
+
+Rules:
+- Translate field by field. Never merge fields, never move text between them.
+- Keep the option count identical: never add, drop, reorder, or renumber options.
+- Never return an empty question or an empty option. If a source field has content, its translation must have content.
+- Keep short categorical answers short: 是/不是 translate to yes/no.
+- Keep proper nouns (people, places, brands) as they are, or use their common English spelling.
+- Keep numbers, units, and dates unchanged.
+- No extra keys, no markdown, no code fence, no notes.
+
+Output: exactly one JSON object with the same three keys in the same order, starting with { and ending with }:
+{"question":"English question","context":"English context","options":["English option 1"]}
+
+Example
+Input: {"question":"这两个方案哪个更好？","context":"预算有限","options":["先做原型","先写文档"]}
+Output: {"question":"Which of these two options is better?","context":"The budget is limited.","options":["Build a prototype first","Write the document first"]}"""
 
 
 _POLISH_PROMPT = """Polish a decision form in the original language of each field.
@@ -139,6 +170,24 @@ class DecideService:
             "context": context.strip(),
         }
 
+    @staticmethod
+    def validate(question_type: str, options: list[str]) -> list[str]:
+        """清洗并校验选项，不合法时抛 422。
+
+        单独可调用：流式接口要在开流前拿到校验结果，才能回真正的状态码。
+        """
+        cleaned = [item.strip() for item in options if item.strip()]
+        if question_type == "choice":
+            if len(cleaned) < 2:
+                raise DomainError(
+                    DomainErrorCode.VALIDATION_FAILED, "选择题至少要有两个选项", status_code=422
+                )
+            if len(set(cleaned)) != len(cleaned):
+                raise DomainError(
+                    DomainErrorCode.VALIDATION_FAILED, "选项不能重复", status_code=422
+                )
+        return cleaned
+
     def decide(
         self,
         db: Session,
@@ -150,17 +199,37 @@ class DecideService:
         context: str,
         trace_id: str,
     ) -> dict:
-        cleaned = [item.strip() for item in options if item.strip()]
-        if question_type == "choice":
-            if len(cleaned) < 2:
-                raise DomainError(
-                    DomainErrorCode.VALIDATION_FAILED, "选择题至少要有两个选项", status_code=422
-                )
-            if len(set(cleaned)) != len(cleaned):
-                raise DomainError(
-                    DomainErrorCode.VALIDATION_FAILED, "选项不能重复", status_code=422
-                )
+        """非流式入口：把阶段事件跑到最后一步。"""
+        for event in self.decide_events(
+            db,
+            owner_user_id=owner_user_id,
+            question=question,
+            question_type=question_type,
+            options=options,
+            context=context,
+            trace_id=trace_id,
+        ):
+            if event["stage"] == "done":
+                return event["payload"]
+        raise DomainError(DomainErrorCode.INTERNAL_ERROR, "判断未完成，请重试。", status_code=500)
 
+    def decide_events(
+        self,
+        db: Session,
+        *,
+        owner_user_id: int,
+        question: str,
+        question_type: str,
+        options: list[str],
+        context: str,
+        trace_id: str,
+    ) -> Iterator[dict]:
+        """按阶段产出事件：plan → [translate_done] → done。
+
+        先发 plan 交代这次要走几步（纯英文输入没有翻译桥，只剩决策一步），
+        事件与真实进度一一对应，前端据此画分阶段 loading。
+        """
+        cleaned = self.validate(question_type, options)
         jev = _analyze._require_provider(db, owner_user_id=owner_user_id, kind="jev")
 
         payload = {
@@ -174,7 +243,10 @@ class DecideService:
         needs_bridge = any(not text.isascii() for text in (
             payload["question"], payload["context"], *cleaned
         ))
+        yield {"stage": "plan", "steps": ["translate", "decide"] if needs_bridge else ["decide"]}
+
         translated: UpstreamResult | None = None
+        llm = None
         if needs_bridge:
             llm = _analyze._require_provider(db, owner_user_id=owner_user_id, kind="llm")
             question_en = context_en = ""
@@ -189,7 +261,16 @@ class DecideService:
                         {"role": "system", "content": _TRANSLATE_PROMPT},
                         {"role": "user", "content": json.dumps(bridge_input, ensure_ascii=False)},
                         *(
-                            [{"role": "user", "content": "The previous answer was invalid. Return only the exact JSON object with all required fields."}]
+                            [
+                                {
+                                    "role": "user",
+                                    "content": (
+                                        "The previous answer was invalid: keys were missing or mistyped, "
+                                        "or the option count changed. Return only the JSON object, with "
+                                        "exactly the three keys and the same number of options as the input."
+                                    ),
+                                }
+                            ]
                             if attempt else []
                         ),
                     ],
@@ -208,13 +289,14 @@ class DecideService:
                 self._log(
                     db, owner_user_id=owner_user_id, trace_id=trace_id,
                     kind="llm", phase="translate", provider=llm,
-                    result=translated, request=payload,
+                    result=translated, request=bridge_input,
                 )
                 db.commit()
                 raise DomainError(
                     DomainErrorCode.LLM_UPSTREAM_ERROR,
                     "问题转换未完成，请重试。", status_code=502,
                 )
+            yield {"stage": "translate_done"}
         else:
             question_en = payload["question"]
             context_en = payload["context"]
@@ -240,11 +322,11 @@ class DecideService:
                 result.ok = False
                 result.error_code = "PROTOCOL_MISMATCH"
                 result.detail = exc.message
-        if translated is not None:
+        if llm is not None and translated is not None:
             self._log(
                 db, owner_user_id=owner_user_id, trace_id=trace_id,
                 kind="llm", phase="translate", provider=llm,
-                result=translated, request=payload,
+                result=translated, request=bridge_input,
             )
         self._log(
             db, owner_user_id=owner_user_id, trace_id=trace_id,
@@ -262,12 +344,15 @@ class DecideService:
             )
             raise DomainError(code, "判断未完成，请重试。", status_code=502)
 
-        return {
-            "trace_id": trace_id,
-            "model": result.model_reported,
-            "latency_ms": result.latency_ms,
-            "kind": question_type,
-            "result": presented,
+        yield {
+            "stage": "done",
+            "payload": {
+                "trace_id": trace_id,
+                "model": result.model_reported,
+                "latency_ms": result.latency_ms,
+                "kind": question_type,
+                "result": presented,
+            },
         }
 
     @staticmethod
@@ -346,7 +431,13 @@ class DecideService:
             if not bars:
                 raise DomainError(DomainErrorCode.PROTOCOL_MISMATCH, "选择结果无法解析", status_code=502)
             bars.sort(key=lambda item: item["value"], reverse=True)
-            return {"kind": "choice", "bars": bars, "top": bars[0]["label"]}
+            # Jev 的 choice 才是它的答案：概率并列（如无信息时的 50/50）时不能再按首个最高概率选。
+            chosen = answer.get("choice")
+            top = next(
+                (item["label"] for item in bars if item["key"] == chosen),
+                bars[0]["label"],
+            )
+            return {"kind": "choice", "bars": bars, "top": top, "confidence": _confidence(answer.get("confidence"))}
 
         raw_max = len(DEFAULT_SCORE_LEVELS) - 1
         try:
@@ -362,6 +453,7 @@ class DecideService:
             "scale_max": raw_max,
             "display_value": converted,
             "display_max": 10,
+            "confidence": _confidence(answer.get("confidence")),
             "text": f"{converted:.2f}",
         }
 
