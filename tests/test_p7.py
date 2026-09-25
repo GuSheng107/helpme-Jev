@@ -84,7 +84,7 @@ class _FullRouter:
     def __exit__(self, *args):
         return False
 
-    def post(self, url, json=None, headers=None):  # noqa: A002
+    def post(self, url, json=None, headers=None, timeout=None):  # noqa: A002
         if "systemone" not in url:
             return _Resp(
                 {

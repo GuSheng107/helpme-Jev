@@ -58,7 +58,7 @@ class _Llm:
     def __exit__(self, *args) -> bool:
         return False
 
-    def post(self, url, json=None, headers=None):  # noqa: A002
+    def post(self, url, json=None, headers=None, timeout=None):  # noqa: A002
         content = {"changes": self.changes}
         user = ""
         if isinstance(json, dict):
@@ -332,7 +332,7 @@ def test_other_memory_does_not_leak_across_counterparts(
     seen: dict = {}
 
     class _Capture(_Llm):
-        def post(self, url, json=None, headers=None):  # noqa: A002
+        def post(self, url, json=None, headers=None, timeout=None):  # noqa: A002
             seen["body"] = json
             return super().post(url, json=json, headers=headers)
 

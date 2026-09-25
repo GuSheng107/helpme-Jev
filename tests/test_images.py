@@ -89,7 +89,7 @@ class _VisionRouter:
     def __exit__(self, *args):
         return False
 
-    def post(self, url, json=None, headers=None):  # noqa: A002
+    def post(self, url, json=None, headers=None, timeout=None):  # noqa: A002
         self.calls.append({"url": url, "json": json})
         if "systemone" not in url:
             content = json["messages"][1]["content"]

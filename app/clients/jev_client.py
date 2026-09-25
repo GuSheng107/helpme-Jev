@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
+from .http_client import get_client
 from .retry import post_with_backoff
 
 TIMEOUT_SECONDS = 45
@@ -165,8 +166,9 @@ def call_systemone(
     }
 
     try:
-        with httpx.Client(timeout=timeout) as client:
-            response = post_with_backoff(client, endpoint_url, json=body, headers=headers)
+        response = post_with_backoff(
+            get_client(), endpoint_url, json=body, headers=headers, timeout=timeout
+        )
     except httpx.TimeoutException:
         return JevResult(
             ok=False,

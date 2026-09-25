@@ -66,7 +66,7 @@ class _Router:
     def __exit__(self, *args) -> bool:
         return False
 
-    def post(self, url, json=None, headers=None):  # noqa: A002
+    def post(self, url, json=None, headers=None, timeout=None):  # noqa: A002
         self.calls.append({"url": url, "json": json, "headers": headers})
         if "systemone" in url:
             questions = (json or {}).get("questions") or {}

@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     port: int = 8790
     database_path: str = "./data/helpme_jev.db"
 
+    # 启动时预热已启用上游的 HTTP 连接（关掉可避免启动即向外发请求）
+    startup_warmup: bool = True
+
     # 数据保留与会话
     retention_days: int = RETENTION_DAYS_DEFAULT
     session_ttl_hours: int = SESSION_TTL_HOURS_DEFAULT

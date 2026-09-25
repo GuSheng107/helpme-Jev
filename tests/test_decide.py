@@ -83,7 +83,7 @@ class _DecideRouter:
     def __exit__(self, *args):
         return False
 
-    def post(self, url, json=None, headers=None):  # noqa: A002
+    def post(self, url, json=None, headers=None, timeout=None):  # noqa: A002
         self.calls.append({"url": url, "json": json})
         if "systemone" not in url:
             incoming = json_loads(json["messages"][1]["content"])
@@ -272,7 +272,7 @@ def test_decide_stream_reports_upstream_failure_as_event(
     _configure(client, headers)
 
     class _BrokenRouter(_DecideRouter):
-        def post(self, url, json=None, headers=None):  # noqa: A002
+        def post(self, url, json=None, headers=None, timeout=None):  # noqa: A002
             self.calls.append({"url": url, "json": json})
             if "systemone" in url:
                 raise httpx.ConnectError("boom")
@@ -371,7 +371,7 @@ def test_copy_edit_and_use_custom_scenario(
     )
 
     class _CustomRouter(_DecideRouter):
-        def post(self, url, json=None, headers=None):  # noqa: A002
+        def post(self, url, json=None, headers=None, timeout=None):  # noqa: A002
             self.calls.append({"url": url, "json": json})
             if "systemone" not in url:
                 return _Response(

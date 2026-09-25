@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from app.clients.http_client import reset_client
 from app.core.security import hash_password
 from app.domain.enums import UserRole
 from app.repositories.auth_repo import UserRepository
@@ -71,7 +72,7 @@ class _Router:
     def __exit__(self, *args):
         return False
 
-    def post(self, url, json=None, headers=None):  # noqa: A002
+    def post(self, url, json=None, headers=None, timeout=None):  # noqa: A002
         if "systemone" not in url:
             body = {"lines": [{"id": "1", "text": "Nothing much."}]}
             return _Response({"choices": [{"message": {"content": json_dumps(body)}}]})
@@ -131,6 +132,8 @@ def test_low_confidence_does_not_overwrite(
     assert first.json()["kept"] is False
     assert first.json()["traits"][0]["title"]
     monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: _Router(sufficient=0.1, confidence=0.2))
+    # 共享客户端是进程级单例，换假上游前要先丢弃，否则第二次仍走上一个替身
+    reset_client()
     second = client.post(
         "/api/personas/build",
         headers=headers,
