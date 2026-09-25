@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import os
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 
 _TMP_DIR = Path(tempfile.mkdtemp(prefix="helpme-jev-test-"))
@@ -16,15 +17,32 @@ os.environ["DATABASE_PATH"] = str(_TMP_DIR / "test.db")
 os.environ["APP_SECRET"] = base64.urlsafe_b64encode(b"x" * 32).decode().rstrip("=")
 os.environ["SESSION_TTL_HOURS"] = "8"
 os.environ["RETENTION_DAYS"] = "15"
+# 关掉启动预热：用例里配置的上游都是假地址，真去连既无意义也会扰乱替身注入
+os.environ["STARTUP_WARMUP"] = "false"
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 
+from app.clients.http_client import reset_client  # noqa: E402
 from app.core.db import SessionLocal  # noqa: E402
 from app.main import app  # noqa: E402
 from app.repositories.models import User  # noqa: E402
 from app.services.bootstrap import ensure_default_admin, run_migrations  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _isolate_http_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """逐用例隔离共享 httpx 客户端。
+
+    用例普遍 monkeypatch ``httpx.Client`` 造假日上游，而共享客户端是进程级单例：
+    不重置会把上一个用例的假日上游带进来。退出时 lifespan 也会 close 客户端，
+    而替身没有 ``close``，故一并挡掉。
+    """
+    monkeypatch.setattr("app.main.close_client", lambda: None)
+    reset_client()
+    yield
+    reset_client()
 
 
 @pytest.fixture(scope="session", autouse=True)

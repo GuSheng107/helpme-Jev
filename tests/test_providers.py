@@ -60,7 +60,7 @@ class _FakeHttpClient:
     def __exit__(self, *args) -> bool:
         return False
 
-    def post(self, url, json=None, headers=None):  # noqa: A002
+    def post(self, url, json=None, headers=None, timeout=None):  # noqa: A002
         if self._timeout_exc:
             raise httpx.TimeoutException("timeout")
         return self._response

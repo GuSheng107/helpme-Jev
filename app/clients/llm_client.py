@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
+from .http_client import get_client
 from .retry import post_with_backoff
 
 TIMEOUT_SECONDS = 60
@@ -64,13 +65,14 @@ def _post_with_protocol_headers(
     body: dict,
     api_key: str,
     protocol: str,
+    timeout: float,
     retry_transient: bool = False,
 ) -> httpx.Response:
     """仅使用所选 API 协议定义的认证头和请求格式。"""
     headers = _headers(api_key, protocol)
     if retry_transient:
-        return post_with_backoff(client, url, json=body, headers=headers)
-    return client.post(url, json=body, headers=headers)
+        return post_with_backoff(client, url, json=body, headers=headers, timeout=timeout)
+    return client.post(url, json=body, headers=headers, timeout=timeout)
 
 
 def _explain_status(status: int, body_text: str) -> str:
@@ -181,14 +183,14 @@ def test_connection(
     body = _probe_body(protocol, model, vision=vision)
 
     try:
-        with httpx.Client(timeout=timeout) as client:
-            response = _post_with_protocol_headers(
-                client,
-                url,
-                body=body,
-                api_key=api_key,
-                protocol=protocol,
-            )
+        response = _post_with_protocol_headers(
+            get_client(),
+            url,
+            body=body,
+            api_key=api_key,
+            protocol=protocol,
+            timeout=timeout,
+        )
     except httpx.TimeoutException:
         return UpstreamResult(
             ok=False,
@@ -446,15 +448,15 @@ def chat_json(
         }
 
     def _post(payload: dict) -> httpx.Response:
-        with httpx.Client(timeout=timeout) as client:
-            return _post_with_protocol_headers(
-                client,
-                url,
-                body=payload,
-                api_key=api_key,
-                protocol=protocol,
-                retry_transient=True,
-            )
+        return _post_with_protocol_headers(
+            get_client(),
+            url,
+            body=payload,
+            api_key=api_key,
+            protocol=protocol,
+            timeout=timeout,
+            retry_transient=True,
+        )
 
     try:
         response = _post(body)

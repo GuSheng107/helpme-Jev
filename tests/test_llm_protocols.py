@@ -25,7 +25,7 @@ def test_responses_preserves_system_text_and_image(monkeypatch: pytest.MonkeyPat
         def __exit__(self, *_args):
             return False
 
-        def post(self, url, json, headers):
+        def post(self, url, json, headers, timeout=None):
             sent.append({"url": url, "body": json, "headers": headers})
             return response
 
@@ -84,3 +84,4 @@ def test_responses_connection_rejects_non_object(monkeypatch: pytest.MonkeyPatch
     )
     assert result.ok is False
     assert result.error_code == "PROTOCOL_MISMATCH"
+

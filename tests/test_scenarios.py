@@ -87,7 +87,7 @@ class _Router:
     def __exit__(self, *args):
         return False
 
-    def post(self, url, json=None, headers=None):  # noqa: A002
+    def post(self, url, json=None, headers=None, timeout=None):  # noqa: A002
         self.calls.append({"url": url, "json": json})
         if "systemone" not in url:
             body = {"lines": [{"id": "1", "text": "Where are we on this?"}]}
@@ -125,7 +125,7 @@ class _PersonaRouter:
     def __exit__(self, *args):
         return False
 
-    def post(self, url, json=None, headers=None):  # noqa: A002
+    def post(self, url, json=None, headers=None, timeout=None):  # noqa: A002
         if "systemone" not in url:
             body = {"lines": [{"id": "1", "text": "Nothing much."}]}
             return _Response({"choices": [{"message": {"content": json_dumps(body)}}]})

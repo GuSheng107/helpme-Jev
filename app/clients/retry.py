@@ -16,11 +16,12 @@ def post_with_backoff(
     *,
     json: dict,
     headers: dict,
+    timeout: float,
 ) -> httpx.Response:
     """最多 3 次。429 优先采用 Retry-After，否则按 0.4s、0.8s 退避。"""
     last: httpx.Response | None = None
     for attempt in range(MAX_ATTEMPTS):
-        response = client.post(url, json=json, headers=headers)
+        response = client.post(url, json=json, headers=headers, timeout=timeout)
         last = response
         if response.status_code not in (429, 500, 502, 503, 504):
             return response

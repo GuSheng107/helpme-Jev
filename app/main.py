@@ -12,9 +12,11 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .api import account, admin, auth, chat, conversations, decide, logs, personas, providers, scenarios
+from .clients.http_client import close_client
 from .core.config import get_settings
 from .domain.errors import DomainError, error_body
 from .services.bootstrap import bootstrap
+from .services.warmup import warm_providers_async
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,10 +29,15 @@ VERSION = "0.1.0"
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """启动时建表、校验 Schema、创建首启管理员。"""
+    """启动时建表、校验 Schema、创建首启管理员，并预热上游连接。"""
     bootstrap()
+    if get_settings().startup_warmup:
+        warm_providers_async()
     logger.info("HelpMe JEV 启动完成")
-    yield
+    try:
+        yield
+    finally:
+        close_client()
 
 
 app = FastAPI(title="HelpMe JEV", version=VERSION, lifespan=lifespan)
