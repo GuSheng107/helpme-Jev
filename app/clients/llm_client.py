@@ -404,6 +404,24 @@ def _anthropic_text(data: dict) -> str:
     ).strip()
 
 
+def _format_ladder(response_schema: dict | None) -> list[dict | None]:
+    """``response_format`` 的降级阶梯，末档 None 表示不带该字段。
+
+    给了 schema 就从受约束的 ``json_schema`` 起步；网关不认时退到只保证合法
+    JSON 的 ``json_object``，再不认就整段摘掉（提示词里已要求只回 JSON）。
+    """
+    ladder: list[dict | None] = []
+    if response_schema is not None:
+        ladder.append(
+            {
+                "type": "json_schema",
+                "json_schema": {"name": "result", "strict": True, "schema": response_schema},
+            }
+        )
+    ladder.extend([{"type": "json_object"}, None])
+    return ladder
+
+
 def chat_json(
     *,
     endpoint_url: str,
@@ -413,10 +431,13 @@ def chat_json(
     protocol: str = "openai",
     timeout: int = TIMEOUT_SECONDS,
     max_output_tokens: int = 1024,
+    response_schema: dict | None = None,
 ) -> UpstreamResult:
     """一次 chat 调用，要求返回 JSON 对象。
 
-    ``response_format`` 不被支持（400）时去掉该字段重试一次。
+    ``response_schema`` 传 JSON Schema 时优先用 ``json_schema`` 受约束解码，
+    上游不认就按 ``json_object`` → 不带 ``response_format`` 逐档降级重试，
+    因此网关支持程度不一也不会直接判死。
     成功时 ``payload`` 是解析后的 JSON 对象，不是原始响应。
     """
     started = time.perf_counter()
@@ -444,7 +465,6 @@ def chat_json(
             "model": model,
             "messages": messages,
             "temperature": 0,
-            "response_format": {"type": "json_object"},
         }
 
     def _post(payload: dict) -> httpx.Response:
@@ -458,12 +478,17 @@ def chat_json(
             retry_transient=True,
         )
 
+    ladder: list[dict | None] = [None] if protocol != "openai" else _format_ladder(response_schema)
+    response: httpx.Response | None = None
     try:
-        response = _post(body)
-        # 兼容网关：少数端点不接受 response_format，摘掉该字段再试。
-        if response.status_code == 400 and "response_format" in body:
-            body.pop("response_format")
+        for fmt in ladder:
+            if fmt is None:
+                body.pop("response_format", None)
+            else:
+                body["response_format"] = fmt
             response = _post(body)
+            if response.status_code != 400:
+                break
     except httpx.TimeoutException:
         return UpstreamResult(
             ok=False,
@@ -479,6 +504,7 @@ def chat_json(
             error_code="LLM_UPSTREAM_ERROR",
         )
 
+    assert response is not None
     latency = int((time.perf_counter() - started) * 1000)
     if response.status_code >= 400:
         return UpstreamResult(

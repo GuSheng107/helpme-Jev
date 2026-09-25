@@ -64,6 +64,30 @@ Input: {"question":"这两个方案哪个更好？","context":"预算有限","op
 Output: {"question":"Which of these two options is better?","context":"The budget is limited.","options":["Build a prototype first","Write the document first"]}"""
 
 
+# 两个 JSON 契约的受约束解码 schema：网关支持就由解码器保证结构，
+# 少一次"字段缺失 → 整请求重发"的往返（不支持时 chat_json 会自动降级）。
+_TRANSLATE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "question": {"type": "string"},
+        "context": {"type": "string"},
+        "options": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["question", "context", "options"],
+    "additionalProperties": False,
+}
+
+_POLISH_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "question": {"type": "string"},
+        "options": {"type": "array", "items": {"type": "string"}},
+        "context": {"type": "string"},
+    },
+    "required": ["question", "options", "context"],
+    "additionalProperties": False,
+}
+
 _POLISH_PROMPT = """Polish a decision form in the original language of each field.
 Return exactly ONE valid JSON object with exactly these fields and no other text:
 {"question":"polished question","options":["polished option"],"context":"polished context"}
@@ -116,6 +140,7 @@ class DecideService:
                 api_key=_providers.decrypt_key(llm),
                 model=llm.model,
                 protocol=llm.protocol,
+                response_schema=_POLISH_SCHEMA,
                 messages=[
                     {"role": "system", "content": _POLISH_PROMPT},
                     {"role": "user", "content": json.dumps(source, ensure_ascii=False)},
@@ -257,6 +282,7 @@ class DecideService:
                     api_key=_providers.decrypt_key(llm),
                     model=llm.model,
                     protocol=llm.protocol,
+                    response_schema=_TRANSLATE_SCHEMA,
                     messages=[
                         {"role": "system", "content": _TRANSLATE_PROMPT},
                         {"role": "user", "content": json.dumps(bridge_input, ensure_ascii=False)},
