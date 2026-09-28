@@ -104,3 +104,68 @@ def generate_question_set(
         request=request_data, response=result.payload, ok=True,
     )
     return json.dumps(questions, ensure_ascii=False, indent=2)
+
+
+_PROMPT_INSTRUCTIONS = """Generate the reply system prompt (tone and rules) for the user's custom scenario.
+Return ONE JSON object: {"prompt":"..."}.
+The prompt tells the reply model how to sound in this scenario: register, tone, and hard rules.
+Write the prompt in English, imperative voice, at most 120 words.
+Do NOT include any output-format instruction, examples, or markdown: the runtime appends the reply JSON contract itself.
+"""
+
+
+def generate_reply_prompt(
+    db: Session,
+    *,
+    owner_user_id: int,
+    name: str,
+    description: str,
+    requirements: str,
+    trace_id: str = "",
+) -> str:
+    llm = _ANALYZE._require_provider(db, owner_user_id=owner_user_id, kind="llm")
+    result = chat_json(
+        endpoint_url=llm.endpoint_url,
+        api_key=_PROVIDERS.decrypt_key(llm),
+        model=llm.model,
+        protocol=llm.protocol,
+        max_output_tokens=1024,
+        messages=[
+            {"role": "system", "content": _PROMPT_INSTRUCTIONS},
+            {"role": "user", "content": json.dumps({
+                "scene_name": name,
+                "scene_description": description,
+                "additional_requirements": requirements,
+            }, ensure_ascii=False)},
+        ],
+    )
+    request_data = {"name": name, "description": description, "requirements": requirements}
+    if not result.ok:
+        record_model_call(
+            db, owner_user_id=owner_user_id, trace_id=trace_id,
+            kind="llm", phase="generate_prompt", provider=llm, result=result,
+            request=request_data, response=result.payload, ok=False,
+        )
+        raise DomainError(
+            DomainErrorCode.LLM_UPSTREAM_ERROR,
+            f"提示词生成失败：{result.detail}",
+            status_code=502,
+        )
+    prompt = str(result.payload.get("prompt", "")).strip()
+    if not prompt or len(prompt) > 10000:  # 上限与 ScenarioCreate / ScenarioUpdate 一致
+        record_model_call(
+            db, owner_user_id=owner_user_id, trace_id=trace_id,
+            kind="llm", phase="generate_prompt", provider=llm, result=result,
+            request=request_data, response=result.payload, ok=False,
+        )
+        raise DomainError(
+            DomainErrorCode.VALIDATION_FAILED,
+            "模型未返回有效的提示词" if not prompt else "模型返回的提示词过长",
+            status_code=422,
+        )
+    record_model_call(
+        db, owner_user_id=owner_user_id, trace_id=trace_id,
+        kind="llm", phase="generate_prompt", provider=llm, result=result,
+        request=request_data, response=result.payload, ok=True,
+    )
+    return prompt

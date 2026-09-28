@@ -35,6 +35,7 @@ export interface Scenario {
   kind: string
   description: string
   is_builtin: boolean
+  is_system: boolean
 }
 
 export interface ProbBar {

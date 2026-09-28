@@ -123,7 +123,7 @@ export default function App() {
       )}
       {page === 'decide' && <DecisionPage />}
       {page === 'personas' && <PersonaPage />}
-      {page === 'scenarios' && <ScenarioPage />}
+      {page === 'scenarios' && <ScenarioPage user={user} />}
       {page === 'logs' && <LogsPage />}
       {page === 'users' && user.role === 'admin' && <UsersPage />}
       {page === 'invitations' && user.role === 'admin' && <InvitationsPage />}
