@@ -387,3 +387,22 @@ def test_group_conversation_and_speaker(client: TestClient, db: Session) -> None
         ("小林", "我先说，这周日有空。"),
         ("", "好，那我订位子。"),
     ]
+
+
+def test_group_member_name_length_capped(client: TestClient, db: Session) -> None:
+    """成员名与单聊 counterpart_name 同为 64 上限：key 要进 String 列。"""
+    token = _make_user(client, db, "groupnameuser")
+    headers = _auth(token)
+    too_long = client.post(
+        "/api/conversations",
+        json={"title": "长名群", "members": ["a" * 65]},
+        headers=headers,
+    )
+    assert too_long.status_code == 422
+    ok = client.post(
+        "/api/conversations",
+        json={"title": "正常群", "members": ["a" * 64]},
+        headers=headers,
+    )
+    assert ok.status_code == 201, ok.text
+    assert ok.json()["members"][0]["key"] == "a" * 64

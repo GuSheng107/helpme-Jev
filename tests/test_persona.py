@@ -321,3 +321,68 @@ def test_group_import_maps_member_labels(client: TestClient, db: Session) -> Non
         ("阿花", "other"),
         ("", "me"),
     ]
+
+
+def test_member_persona_lines_respects_budget(client: TestClient, db: Session) -> None:
+    """群聊背景的人设摘要受字符预算约束，不能把记忆挤出去。"""
+    import json as _json
+
+    from app.repositories.models import Conversation, Persona
+    from app.services.persona_service import (
+        PERSONA_LINES_BUDGET_CHARS,
+        PersonaService,
+    )
+
+    password = "budgetuser!Passw0rd"
+    UserRepository().add(
+        db,
+        User(
+            username="budgetuser",
+            display_name="budgetuser",
+            password_hash=hash_password(password),
+            role=UserRole.USER.value,
+            must_change_password=False,
+            is_active=True,
+        ),
+    )
+    db.commit()
+    resp = client.post("/api/auth/login", json={"username": "budgetuser", "password": password})
+    owner = int(resp.json()["id"])
+
+    members = [{"key": f"m{i:02d}", "name": f"成员{i:02d}"} for i in range(20)]
+    conv = Conversation(
+        owner_user_id=owner,
+        title="预算群",
+        counterpart_key="预算群",
+        is_group=True,
+        members=_json.dumps(members, ensure_ascii=False),
+    )
+    db.add(conv)
+    db.flush()
+    # 每条档案带一段长文本，确保预算真的会截断
+    traits = _json.dumps(
+        {
+            "_schema": "custom_v1",
+            "values": {"style": "long"},
+            "meta": {"style": {"title": "风格", "labels": {"long": "详" * 60}}},
+        },
+        ensure_ascii=False,
+    )
+    for member in members:
+        db.add(
+            Persona(
+                owner_user_id=owner,
+                counterpart_key=member["key"],
+                subject="other",
+                context="romance",
+                traits=traits,
+                evidence="[]",
+                confidence=0.8,
+                version=1,
+            )
+        )
+    db.commit()
+
+    lines = PersonaService().member_persona_lines(db, owner_user_id=owner, conversation=conv)
+    assert 0 < len(lines) < 20  # 预算装不下全部 20 人
+    assert sum(len(line) + 1 for line in lines) <= PERSONA_LINES_BUDGET_CHARS + len(lines[0])

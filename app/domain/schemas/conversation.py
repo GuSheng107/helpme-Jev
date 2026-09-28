@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -15,6 +15,11 @@ MAX_ATTACHMENT_BYTES = 16 * 1024  # 单个附件 16KB
 
 # 群聊成员上限（不含"我"）
 MAX_GROUP_MEMBERS = 20
+# 单个成员名上限：key 会写进 personas.counterpart_key / messages.speaker，
+# 与单聊 counterpart_name 的 64 对齐
+MAX_MEMBER_NAME = 64
+
+MemberName = Annotated[str, Field(max_length=MAX_MEMBER_NAME)]
 
 
 class GroupMember(BaseModel):
@@ -66,7 +71,7 @@ class ConversationCreate(StrictModel):
     relationship: str = Field(default="", max_length=64)
     scenario_id: int | None = None
     # 群聊成员名字列表；非空即按群聊建立
-    members: list[str] = Field(default_factory=list, max_length=MAX_GROUP_MEMBERS)
+    members: list[MemberName] = Field(default_factory=list, max_length=MAX_GROUP_MEMBERS)
 
 
 class ConversationUpdate(StrictModel):

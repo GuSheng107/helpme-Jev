@@ -35,6 +35,9 @@ _memory = MemoryService()
 MIN_CONFIDENCE = 0.45
 SELF_REPORT_CONFIDENCE = 0.9
 
+# 群聊背景里成员人设摘要的字符预算（JEV 背景总预算 5000，摘要只占一小块）
+PERSONA_LINES_BUDGET_CHARS = 1000
+
 
 def _load(raw: str, fallback):
     try:
@@ -259,9 +262,14 @@ class PersonaService:
     def member_persona_lines(
         self, db: Session, *, owner_user_id: int, conversation: Conversation
     ) -> list[str]:
-        """群聊判断的背景：每位有人设的成员一行摘要，供 JEV 分清谁是谁。"""
+        """群聊判断的背景：每位有人设的成员一行摘要，供 JEV 分清谁是谁。
+
+        整体受字符预算约束 —— JEV 背景总预算有限，人设摘要不能把
+        记忆挤出去。
+        """
         context = persona_context_of(db, conversation)
         lines: list[str] = []
+        used = 0
         for member in parse_members(conversation.members):
             row = self._find(
                 db, owner_user_id=owner_user_id,
@@ -270,12 +278,17 @@ class PersonaService:
             if row is None:
                 continue
             traits = self._view(row)["traits"][:6]
-            if traits:
-                # 带上特质名：裸分数（3/8）JEV 读不出含义
-                lines.append(
-                    f"{member.name}的人设："
-                    + "、".join(f"{trait['title']}{trait['text']}" for trait in traits)
-                )
+            if not traits:
+                continue
+            # 带上特质名：裸分数（3/8）JEV 读不出含义
+            line = (
+                f"{member.name}的人设："
+                + "、".join(f"{trait['title']}{trait['text']}" for trait in traits)
+            )
+            if used + len(line) > PERSONA_LINES_BUDGET_CHARS:
+                break
+            used += len(line) + 1
+            lines.append(line)
         return lines
 
     def _custom_persona_questions(self, db, conversation) -> dict | None:
