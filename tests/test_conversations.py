@@ -315,3 +315,75 @@ def test_attachments_limits(client: TestClient, db: Session) -> None:
     )
     assert ok.status_code == 201
     assert ok.json()["attachments"] == [{"kind": "image", "n": 1}]
+
+
+# ------------------------------------------------------------------ 群聊
+def test_group_conversation_and_speaker(client: TestClient, db: Session) -> None:
+    """群聊：成员列表落库、发言人必须认、单人会话不带 speaker。"""
+    token = _make_user(client, db, "groupuser")
+    headers = _auth(token)
+
+    created = client.post(
+        "/api/conversations",
+        json={
+            "title": "周五饭局",
+            "relationship": "朋友",
+            "members": ["小林", "阿花", "小林", "  "],
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["is_group"] is True
+    # 重复与空白成员被清洗，key 归一化稳定
+    assert [(m["key"], m["name"]) for m in body["members"]] == [("小林", "小林"), ("阿花", "阿花")]
+    conv_id = body["id"]
+    # 群聊没有单一对象：counterpart_key 取群名，人设记忆挂这里
+    assert body["counterpart_key"] == "周五饭局"
+    assert body["counterpart_name"] == ""
+
+    # 群消息必须指认成员当发言人
+    ok = client.post(
+        f"/api/conversations/{conv_id}/messages",
+        json={"role": "other", "content": "我先说，这周日有空。", "speaker": "小林"},
+        headers=headers,
+    )
+    assert ok.status_code == 201, ok.text
+    assert ok.json()["speaker"] == "小林"
+
+    not_member = client.post(
+        f"/api/conversations/{conv_id}/messages",
+        json={"role": "other", "content": "冒充", "speaker": "路人"},
+        headers=headers,
+    )
+    assert not_member.status_code == 422
+    assert not_member.json()["error"]["code"] == "VALIDATION_FAILED"
+
+    # 我方消息不接受 speaker；单人会话同样忽略
+    mine = client.post(
+        f"/api/conversations/{conv_id}/messages",
+        json={"role": "me", "content": "好，那我订位子。", "speaker": "小林"},
+        headers=headers,
+    )
+    assert mine.status_code == 201
+    assert mine.json()["speaker"] == ""
+
+    solo_conv = client.post(
+        "/api/conversations",
+        json={"title": "单聊", "counterpart_name": "小美", "members": []},
+        headers=headers,
+    ).json()
+    assert solo_conv["is_group"] is False
+    solo_msg = client.post(
+        f"/api/conversations/{solo_conv['id']}/messages",
+        json={"role": "other", "content": "在吗", "speaker": "小林"},
+        headers=headers,
+    )
+    assert solo_msg.status_code == 201
+    assert solo_msg.json()["speaker"] == ""
+
+    rows = client.get(f"/api/conversations/{conv_id}/messages", headers=headers).json()
+    assert [(row["speaker"], row["content"]) for row in rows] == [
+        ("小林", "我先说，这周日有空。"),
+        ("", "好，那我订位子。"),
+    ]

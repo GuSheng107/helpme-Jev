@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from ..core.db import get_db
 from ..domain.errors import DomainError, DomainErrorCode
+from ..domain.schemas.conversation import parse_members
 from ..domain.schemas.persona import (
     ChatImportRequest,
     PersonaBuildRequest,
@@ -32,6 +33,13 @@ def _conversation_or_404(db: Session, *, owner_user_id: int, conversation_id: in
     return row
 
 
+def _member_label_map(conversation) -> dict[str, str] | None:
+    """群聊导入用：成员名 → 成员 key。单人会话返回 None 走旧逻辑。"""
+    if not conversation.is_group:
+        return None
+    return {member.name: member.key for member in parse_members(conversation.members)}
+
+
 @router.get("/api/personas")
 def get_persona(
     counterpart_key: str = Query(min_length=1),
@@ -46,6 +54,21 @@ def get_persona(
         counterpart_key=counterpart_key,
         subject=subject,
         context=context,
+    )
+
+
+@router.get("/api/personas/batch")
+def batch_personas(
+    conversation_id: int = Query(ge=1),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_active_user),
+) -> dict:
+    """批量获取一个会话里所有人的人设与上下文（群聊 = 每位成员 + 我）。"""
+    conversation = _conversation_or_404(
+        db, owner_user_id=user.id, conversation_id=conversation_id
+    )
+    return _personas.batch_for_conversation(
+        db, owner_user_id=user.id, conversation=conversation
     )
 
 
@@ -67,6 +90,7 @@ def build_persona(
         self_report=payload.self_report,
         context=payload.context,
         trace_id=getattr(request.state, "trace_id", ""),
+        member_key=payload.member_key,
     )
 
 
@@ -81,10 +105,16 @@ def persona_usage(
 @router.post("/api/import/chat/preview")
 def preview_chat(
     payload: ChatImportRequest,
+    db: Session = Depends(get_db),
     user: User = Depends(require_active_user),
 ) -> dict:
-    del user
-    return _imports.preview_chat(payload.text, payload.me_labels, payload.other_labels)
+    conversation = _conversation_or_404(
+        db, owner_user_id=user.id, conversation_id=payload.conversation_id
+    )
+    return _imports.preview_chat(
+        payload.text, payload.me_labels, payload.other_labels,
+        members=_member_label_map(conversation),
+    )
 
 
 @router.post("/api/import/chat")
@@ -103,6 +133,7 @@ def commit_chat(
         text=payload.text,
         me_labels=payload.me_labels,
         other_labels=payload.other_labels,
+        members=_member_label_map(conversation),
     )
 
 

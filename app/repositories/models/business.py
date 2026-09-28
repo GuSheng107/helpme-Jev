@@ -64,7 +64,11 @@ class Scenario(Base, TimestampMixin):
 
 
 class Conversation(Base, TimestampMixin):
-    """一个聊天对象一条会话（人设按 ``counterpart_key`` 跨会话共用）。"""
+    """一个聊天对象一条会话（人设按 ``counterpart_key`` 跨会话共用）。
+
+    群聊：``is_group`` 为真时 ``members`` 存 ``[{"key","name"}]``（不含"我"），
+    每位成员的人设与普通对象一样按 ``counterpart_key`` 存档。
+    """
 
     __tablename__ = "conversations"
 
@@ -79,6 +83,8 @@ class Conversation(Base, TimestampMixin):
     counterpart_key: Mapped[str] = mapped_column(String(128), index=True, nullable=False, default="")
     counterpart_name: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     relationship: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    is_group: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    members: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
 
     messages: Mapped[list["Message"]] = orm_relationship(
         back_populates="conversation", cascade="all, delete-orphan"
@@ -89,6 +95,7 @@ class Message(Base, TimestampMixin):
     """会话消息。``source`` 区分手工输入与导入。
 
     ``(conversation_id, seq)`` 唯一 —— 防止并发 append 产出重复序号。
+    群聊里 ``speaker`` 记录发言成员 key（role=other 时），单人会话恒为空。
     """
 
     __tablename__ = "messages"
@@ -105,6 +112,7 @@ class Message(Base, TimestampMixin):
     content: Mapped[str] = mapped_column(Text, nullable=False, default="")
     attachments: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     source: Mapped[str] = mapped_column(String(16), nullable=False, default="manual")
+    speaker: Mapped[str] = mapped_column(String(64), nullable=False, default="")
 
     conversation: Mapped[Conversation] = orm_relationship(back_populates="messages")
 

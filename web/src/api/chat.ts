@@ -14,7 +14,14 @@ export interface ChatMessage {
   attachments: ImageAttachment[]
   /** 这条内容怎么来的：manual=自己写的 candidate=采用推荐 rewrite=改写推荐 import=导入 */
   source: 'manual' | 'candidate' | 'rewrite' | 'import'
+  /** 群聊里 role=other 时的发言成员 key；单人会话为空 */
+  speaker: string
   created_at: string
+}
+
+export interface GroupMember {
+  key: string
+  name: string
 }
 
 export interface Conversation {
@@ -25,6 +32,8 @@ export interface Conversation {
   relationship: string
   scenario_id: number | null
   scenario_kind: string
+  is_group: boolean
+  members: GroupMember[]
   message_count: number
 }
 
@@ -117,9 +126,11 @@ export function listScenarios() {
 
 export function createConversation(body: {
   title: string
-  counterpart_name: string
+  counterpart_name?: string
   relationship: string
   scenario_id?: number | null
+  /** 群聊成员名列表；非空即按群聊建立 */
+  members?: string[]
 }) {
   return api.post<Conversation>('/api/conversations', body)
 }
@@ -134,12 +145,14 @@ export function appendMessage(
   content: string,
   source: 'manual' | 'candidate' | 'rewrite' | 'import' = 'manual',
   attachmentIds: number[] = [],
+  speaker = '',
 ) {
   return api.post<ChatMessage>(`/api/conversations/${conversationId}/messages`, {
     role,
     content,
     source,
     attachment_ids: attachmentIds,
+    speaker,
   })
 }
 

@@ -42,13 +42,36 @@ export function buildPersona(
   subject: 'me' | 'other',
   selfReport: Record<string, string | number> = {},
   context?: PersonaContext,
+  memberKey = '',
 ) {
   return api.post<PersonaView>('/api/personas/build', {
     conversation_id: conversationId,
     subject,
     self_report: selfReport,
     context,
+    member_key: memberKey,
   })
+}
+
+export interface PersonaBatchParticipant {
+  key: string
+  name: string
+  subject: 'me' | 'other'
+  persona: PersonaView
+}
+
+export interface PersonaBatch {
+  conversation_id: number
+  is_group: boolean
+  context: PersonaContext
+  counterpart_key: string
+  participants: PersonaBatchParticipant[]
+  memories: { id: number; subject: string; category: string; content: string }[]
+}
+
+/** 批量获取一个会话里所有人的人设与上下文（群聊 = 每位成员 + 我）。 */
+export function fetchPersonaBatch(conversationId: number) {
+  return api.get<PersonaBatch>(`/api/personas/batch?conversation_id=${conversationId}`)
 }
 
 export function personaUsage() {

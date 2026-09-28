@@ -91,7 +91,12 @@ class MemoryService:
             "counterpart": conversation.counterpart_name,
             "relationship": conversation.relationship,
             "messages": [
-                {"seq": row.seq, "from": row.role, "text": row.content} for row in rows
+                {
+                    "seq": row.seq,
+                    "from": (row.speaker or row.role) if conversation.is_group else row.role,
+                    "text": row.content,
+                }
+                for row in rows
             ],
             "memories": [
                 {

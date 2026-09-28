@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import json
+import json as _json
 
 import httpx
 import pytest
@@ -90,14 +90,14 @@ class _Response:
     def __init__(self, payload) -> None:
         self.status_code = 200
         self._payload = payload
-        self.text = json.dumps(payload)
+        self.text = _json.dumps(payload)
 
     def json(self):
         return self._payload
 
 
 def json_dumps(value) -> str:
-    return json.dumps(value, ensure_ascii=False)
+    return _json.dumps(value, ensure_ascii=False)
 
 
 def test_romance_persona_questions_cover_the_frameworks() -> None:
@@ -202,3 +202,122 @@ def test_screenshot_requires_vision(client: TestClient, db: Session) -> None:
         files={"file": ("a.png", b"png", "image/png")},
     )
     assert refused.status_code == 422
+
+
+# ------------------------------------------------------------------ 群聊人设
+class _EchoRouter(_Router):
+    """翻译阶段按请求回显：群聊测试里消息不止一条。"""
+
+    def post(self, url, json=None, headers=None, timeout=None):  # noqa: A002
+        if "systemone" not in url:
+            chat = (json or {}).get("messages", [{}])[-1].get("content", "{}")
+            payload = _json.loads(chat)
+            lines = [
+                {"id": item["id"], "text": f"Echoed: {item['text']}"}
+                for item in payload.get("lines", [])
+            ]
+            return _Response({"choices": [{"message": {"content": json_dumps({"lines": lines})}}]})
+        return super().post(url, json=json, headers=headers, timeout=timeout)
+
+
+def _group(client: TestClient, headers: dict, *, with_messages: bool = True) -> int:
+    created = client.post(
+        "/api/conversations",
+        headers=headers,
+        json={"title": "项目小队", "relationship": "同事", "members": ["小林", "阿花"]},
+    )
+    assert created.status_code == 201, created.text
+    conv_id = created.json()["id"]
+    if with_messages:
+        for speaker, content in (
+            ("小林", "这个需求我看悬，先说好做不完别赖我。"),
+            ("阿花", "没事，我们一起拆一下任务就行。"),
+            ("小林", "反正我按计划来，别临时加。"),
+        ):
+            resp = client.post(
+                f"/api/conversations/{conv_id}/messages",
+                headers=headers,
+                json={"role": "other", "content": content, "speaker": speaker},
+            )
+            assert resp.status_code == 201, resp.text
+    return conv_id
+
+
+def test_group_persona_batch_and_member_build(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """群聊：批量取全员人设与上下文；按成员建档；成员校验。"""
+    headers = _user(client, db, "grouppersona")
+    _ready(client, headers)
+    conv_id = _group(client, headers)
+
+    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: _EchoRouter())
+    built = client.post(
+        "/api/personas/build",
+        headers=headers,
+        json={"conversation_id": conv_id, "subject": "other", "member_key": "小林"},
+    )
+    assert built.status_code == 200, built.text
+    assert built.json()["counterpart_key"] == "小林"
+
+    # 成员不存在 → 422
+    missing = client.post(
+        "/api/personas/build",
+        headers=headers,
+        json={"conversation_id": conv_id, "subject": "other", "member_key": "路人"},
+    )
+    assert missing.status_code == 422
+
+    batch = client.get(
+        "/api/personas/batch", headers=headers, params={"conversation_id": conv_id}
+    )
+    assert batch.status_code == 200, batch.text
+    body = batch.json()
+    assert body["is_group"] is True
+    # 会话没挂场景：人设情境回落恋爱档（情境跟场景走，不看关系字段）
+    assert body["context"] == "romance"
+    keys = {item["key"]: item for item in body["participants"]}
+    assert set(keys) == {"小林", "阿花", "me"}
+    # 建过档的小林有特质，其他参与者是空档案占位
+    assert keys["小林"]["persona"]["version"] == 1
+    assert keys["小林"]["persona"]["traits"]
+    assert keys["阿花"]["persona"]["version"] == 0
+    assert keys["me"]["subject"] == "me"
+
+
+def test_group_import_maps_member_labels(client: TestClient, db: Session) -> None:
+    """群聊导入：成员名当标签，行归属到对应发言人。"""
+    headers = _user(client, db, "groupimport")
+    conv_id = _group(client, headers, with_messages=False)
+
+    preview = client.post(
+        "/api/import/chat/preview",
+        headers=headers,
+        json={
+            "conversation_id": conv_id,
+            "text": "小林: 周三评审别忘\n阿花: 收到\n路人: 冒充\n我: 好",
+        },
+    )
+    assert preview.status_code == 200, preview.text
+    body = preview.json()
+    assert body["count"] == 3
+    assert body["skipped"] == 1
+    labels = {(item["label"], item["role"]) for item in body["messages"]}
+    assert labels == {("小林", "other"), ("阿花", "other"), ("我", "me")}
+
+    saved = client.post(
+        "/api/import/chat",
+        headers=headers,
+        json={
+            "conversation_id": conv_id,
+            "text": "小林: 周三评审别忘\n阿花: 收到\n我: 好",
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["imported"] == 3
+    rows = client.get(f"/api/conversations/{conv_id}/messages", headers=headers).json()
+    assert [(row["speaker"], row["role"]) for row in rows] == [
+        ("小林", "other"),
+        ("阿花", "other"),
+        ("", "me"),
+    ]

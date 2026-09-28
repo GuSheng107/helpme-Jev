@@ -45,6 +45,18 @@ def _danger_tone(level: int | None) -> str:
     return "danger"
 
 
+def _member_persona_lines(db, *, owner_user_id: int, conversation) -> list[str]:
+    """群聊背景用：每位有人设的成员一行摘要。
+
+    函数内导入，避免与 persona_service 的模块级相互引用。
+    """
+    from .persona_service import PersonaService
+
+    return PersonaService().member_persona_lines(
+        db, owner_user_id=owner_user_id, conversation=conversation
+    )
+
+
 def build_state(
     messages: list[dict],
     *,
@@ -226,7 +238,11 @@ class AnalyzeService:
             )
 
         jev_messages = [
-            {"from": row.role, "text": annotated[str(row.seq)]} for row in rows
+            {
+                "from": (row.speaker or row.role) if conversation.is_group else row.role,
+                "text": annotated[str(row.seq)],
+            }
+            for row in rows
         ]
         pack = pack_of(db, conversation)
         memories = _memory.list_active(
@@ -245,6 +261,13 @@ class AnalyzeService:
             trace_id=trace_id,
         )
         background = render_background(memories, summary=summary)
+        if conversation.is_group:
+            # 群聊：把每位成员的人设摘要并进背景，JEV 才分得清谁是谁
+            persona_lines = _member_persona_lines(
+                db, owner_user_id=owner_user_id, conversation=conversation
+            )
+            if persona_lines:
+                background = "\n".join([*persona_lines, background]) if background else "\n".join(persona_lines)
         state = build_state(
             jev_messages, relationship=conversation.relationship, background=background
         )
