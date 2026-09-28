@@ -51,6 +51,7 @@ export default function DecisionPage() {
   const [historyRetention, setHistoryRetention] = useState(15)
   const [historyPage, setHistoryPage] = useState(0)
   const [historyLoading, setHistoryLoading] = useState(false)
+  const [historyDirection, setHistoryDirection] = useState<'prev' | 'next' | null>(null)
   const [historyError, setHistoryError] = useState('')
   const [selectedHistory, setSelectedHistory] = useState<DecisionHistoryItem | null>(null)
   const [plan, setPlan] = useState<LoaderKey[]>([])
@@ -89,6 +90,7 @@ export default function DecisionPage() {
       setHistoryError(err instanceof ApiError ? err.message : '历史任务未能载入')
     } finally {
       setHistoryLoading(false)
+      setHistoryDirection(null)
     }
   }, [])
   useEffect(() => { void loadHistory(historyPage) }, [historyPage, loadHistory])
@@ -172,12 +174,14 @@ export default function DecisionPage() {
 
   return (
     <PageShell>
-      <PageBody>
+      <PageBody className="flex h-full min-h-0 flex-col !py-0">
+        <div className="pt-6">
         <PageHeader title="决策工作台" description="填写题目和背景，选择判断方式。" />
-        <div className="relative" aria-busy={busy}>
-          {error && <div className="mb-4"><Notice tone="danger">{error}</Notice></div>}
-          <div className="grid items-stretch gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-          <DataCard title="发起判断" className="relative flex h-full flex-col" bodyClassName="flex flex-1 flex-col">
+        {error && <div className="mb-4"><Notice tone="danger">{error}</Notice></div>}
+        </div>
+        <div className="relative min-h-0 flex-1 pb-6" aria-busy={busy}>
+          <div className="grid h-full min-h-0 items-stretch gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+          <DataCard title="发起判断" className="relative flex h-full min-h-0 flex-col" bodyClassName="flex min-h-0 flex-1 flex-col overflow-y-auto">
             <div role="tablist" aria-label="题型" className="mb-3 flex rounded-[6px] border border-border p-0.5">
               {(Object.keys(TYPE_LABELS) as QuestionType[]).map((item) => (
                 <button key={item} type="button" role="tab" aria-selected={kind === item} disabled={busy}
@@ -240,8 +244,8 @@ export default function DecisionPage() {
               </div>
             )}
           </DataCard>
-          <div className="flex h-full min-w-0 flex-col gap-4">
-          <DataCard title="当前结果">
+          <div className="flex h-full min-h-0 min-w-0 flex-col gap-4">
+          <DataCard title="当前结果" className="flex max-h-[46%] min-h-0 shrink-0 flex-col" bodyClassName="min-h-0 flex-1 overflow-y-auto">
             {answer ? (
               <>
                 <ResultView result={answer.result} />
@@ -249,7 +253,7 @@ export default function DecisionPage() {
               </>
             ) : <p className="py-3 text-[13px] text-ink-muted">当前没有结果</p>}
           </DataCard>
-          <DataCard title="历史任务" className="flex flex-1 flex-col" bodyClassName="flex flex-1 flex-col">
+          <DataCard title="历史任务" className="flex min-h-0 flex-1 flex-col" bodyClassName="flex min-h-0 flex-1 flex-col">
             {selectedHistory ? <HistoryDetail item={selectedHistory} onClose={() => setSelectedHistory(null)} /> : <>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-[12px] text-ink-muted">
               <span>仅保留近 {historyRetention} 天的决策记录</span>
@@ -258,7 +262,7 @@ export default function DecisionPage() {
             {historyError && <div className="mb-3"><Notice tone="danger">{historyError}</Notice></div>}
             {historyLoading && history.length === 0 ? <p className="py-4 text-center text-[13px] text-ink-muted">载入中…</p>
               : history.length === 0 ? <p className="py-4 text-center text-[13px] text-ink-muted">近 {historyRetention} 天没有决策任务</p>
-                : <ul className="divide-y divide-border-subtle">
+                : <ul className="min-h-0 flex-1 divide-y divide-border-subtle overflow-y-auto">
                   {history.map((item) => (
                     <li key={item.id}>
                       <button type="button" disabled={deciding} onClick={() => setSelectedHistory(item)}
@@ -275,9 +279,9 @@ export default function DecisionPage() {
                 </ul>}
             {historyTotal > PAGE_SIZE && (
               <div className="mt-auto flex items-center justify-end gap-2 border-t border-border-subtle pt-3">
-                <Button size="sm" disabled={historyPage === 0 || historyLoading || deciding} onClick={() => setHistoryPage((page) => page - 1)}>上一页</Button>
+                <Button size="sm" loading={historyDirection === 'prev'} disabled={historyPage === 0 || historyLoading || deciding} disabledReason={historyLoading ? '正在载入' : '已经是第一页'} onClick={() => { setHistoryDirection('prev'); setHistoryPage((page) => page - 1) }}>上一页</Button>
                 <span className="text-[12px] text-ink-muted">{historyPage + 1} / {Math.max(1, Math.ceil(historyTotal / PAGE_SIZE))}</span>
-                <Button size="sm" disabled={(historyPage + 1) * PAGE_SIZE >= historyTotal || historyLoading || deciding} onClick={() => setHistoryPage((page) => page + 1)}>下一页</Button>
+                <Button size="sm" loading={historyDirection === 'next'} disabled={(historyPage + 1) * PAGE_SIZE >= historyTotal || historyLoading || deciding} disabledReason={historyLoading ? '正在载入' : '已经是最后一页'} onClick={() => { setHistoryDirection('next'); setHistoryPage((page) => page + 1) }}>下一页</Button>
               </div>
             )}
             </>}
@@ -299,7 +303,7 @@ export default function DecisionPage() {
 
 function HistoryDetail({ item, onClose }: { item: DecisionHistoryItem; onClose: () => void }) {
   return (
-    <div className="space-y-4">
+    <div className="min-h-0 flex-1 space-y-4 overflow-y-auto">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-[12px] text-ink-muted">{formatLocalTime(item.created_at)} · {item.question_type in TYPE_LABELS ? TYPE_LABELS[item.question_type as QuestionType] : '题型未记录'}</p>
         <Button size="sm" variant="text" onClick={onClose}>返回列表</Button>

@@ -46,6 +46,8 @@ export default function LogsPage() {
   const [items, setItems] = useState<LogItem[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [querying, setQuerying] = useState(false)
+  const [paging, setPaging] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [detail, setDetail] = useState<LogItem | null>(null)
 
@@ -74,7 +76,11 @@ export default function LogsPage() {
         setError(caught instanceof ApiError ? caught.message : '日志未能载入')
       },
     ).finally(() => {
-      if (!cancelled) setLoading(false)
+      if (!cancelled) {
+        setLoading(false)
+        setQuerying(false)
+        setPaging(null)
+      }
     })
     return () => { cancelled = true }
   }, [filters, page, pageSize, reload])
@@ -86,6 +92,8 @@ export default function LogsPage() {
 
   function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (loading) return
+    setQuerying(true)
     setPage(1)
     setDetail(null)
     setFilters({ ...draft, traceId: draft.traceId.trim() })
@@ -110,24 +118,26 @@ export default function LogsPage() {
   }
 
   function changePage(next: number) {
+    if (loading || next === page) return
+    setPaging(next)
     setPage(next)
     setDetail(null)
   }
 
   return (
     <PageShell>
-      <main className="mx-auto max-w-[1480px] px-5 py-6">
+      <main className="mx-auto flex h-full min-h-0 max-w-[1480px] flex-col px-5 pb-6 pt-6">
         <PageHeader
           title="日志查询"
           description="查询业务操作及同一 Trace ID 下的模型调用；这里只显示你自己的记录。"
-          actions={<Button size="sm" onClick={() => setReload((value) => value + 1)}>刷新</Button>}
+          actions={<Button size="sm" loading={loading} disabled={loading} disabledReason="正在载入" onClick={() => setReload((value) => value + 1)}>刷新</Button>}
         />
         {error && <div className="mb-3"><Notice tone="danger">{error}</Notice></div>}
-        <form onSubmit={submitSearch} className="mb-4 rounded-[8px] border border-border bg-surface p-4 shadow-[0_1px_3px_rgb(0_0_0/0.06)]">
+        <form onSubmit={submitSearch} className="mb-4 shrink-0 rounded-[8px] border border-border bg-surface p-4 shadow-[0_1px_3px_rgb(0_0_0/0.06)]" aria-busy={loading}>
           <div className="flex flex-wrap items-end gap-3">
             <label className="block w-full sm:w-44">
               <span className="mb-1 block text-[13px] font-medium text-ink-secondary">级别</span>
-              <select className={CONTROL_CLASS} value={draft.level} onChange={(event) => setDraft({ ...draft, level: event.target.value as LevelFilter })}>
+              <select className={CONTROL_CLASS} disabled={loading} value={draft.level} onChange={(event) => setDraft({ ...draft, level: event.target.value as LevelFilter })}>
                 <option value="">全部级别</option>
                 <option value="info">信息</option>
                 <option value="warn">警告</option>
@@ -136,42 +146,42 @@ export default function LogsPage() {
             </label>
             <label className="block w-full sm:w-44">
               <span className="mb-1 block text-[13px] font-medium text-ink-secondary">类型</span>
-              <select className={CONTROL_CLASS} value={draft.category} onChange={(event) => setDraft({ ...draft, category: event.target.value as CategoryFilter })}>
+              <select className={CONTROL_CLASS} disabled={loading} value={draft.category} onChange={(event) => setDraft({ ...draft, category: event.target.value as CategoryFilter })}>
                 <option value="">全部类型</option>
                 {Object.entries(CATEGORY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
             </label>
             <label className="block w-full sm:w-48">
               <span className="mb-1 block text-[13px] font-medium text-ink-secondary">开始时间</span>
-              <input type="datetime-local" className={CONTROL_CLASS} value={draft.startTime} onChange={(event) => setDraft({ ...draft, startTime: event.target.value })} />
+              <input type="datetime-local" className={CONTROL_CLASS} disabled={loading} value={draft.startTime} onChange={(event) => setDraft({ ...draft, startTime: event.target.value })} />
             </label>
             <label className="block w-full sm:w-48">
               <span className="mb-1 block text-[13px] font-medium text-ink-secondary">结束时间</span>
-              <input type="datetime-local" className={CONTROL_CLASS} value={draft.endTime} onChange={(event) => setDraft({ ...draft, endTime: event.target.value })} />
+              <input type="datetime-local" className={CONTROL_CLASS} disabled={loading} value={draft.endTime} onChange={(event) => setDraft({ ...draft, endTime: event.target.value })} />
             </label>
             <label className="block min-w-[240px] flex-1">
               <span className="mb-1 block text-[13px] font-medium text-ink-secondary">Trace ID</span>
-              <input className={`${CONTROL_CLASS} mono`} maxLength={64} value={draft.traceId} placeholder="输入完整 Trace ID" onChange={(event) => setDraft({ ...draft, traceId: event.target.value })} />
+              <input className={`${CONTROL_CLASS} mono`} disabled={loading} maxLength={64} value={draft.traceId} placeholder="输入完整 Trace ID" onChange={(event) => setDraft({ ...draft, traceId: event.target.value })} />
             </label>
             <div className="flex w-full justify-end gap-2 sm:w-auto">
-              <Button type="button" size="sm" onClick={resetSearch}>重置</Button>
-              <Button type="submit" size="sm" variant="primary">查询</Button>
+              <Button type="button" size="sm" disabled={loading} disabledReason="正在查询" onClick={resetSearch}>重置</Button>
+              <Button type="submit" size="sm" variant="primary" loading={querying} disabled={loading} disabledReason="正在查询">查询</Button>
             </div>
           </div>
         </form>
 
-        <section className="overflow-hidden rounded-[8px] border border-border bg-surface shadow-[0_1px_3px_rgb(0_0_0/0.06)]" aria-busy={loading}>
+        <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[8px] border border-border bg-surface shadow-[0_1px_3px_rgb(0_0_0/0.06)]" aria-busy={loading}>
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border-subtle px-4 py-3">
             <h2 className="text-[15px] font-semibold text-ink">活动记录</h2>
             <span className="text-[12px] text-ink-muted">共 {total} 条 · 当前 {firstRow}–{lastRow} 条</span>
           </div>
-          <div className="overflow-x-auto">
+          <div className="min-h-0 flex-1 overflow-auto">
             <table className="w-full min-w-[1120px] text-left text-[13px]">
               <thead className="bg-surface-muted text-[12px] text-ink-muted">
                 <tr>
                   <th className="w-16 px-4 py-3 text-center font-medium">行号</th>
                   <th className="w-20 px-4 py-3 font-medium">级别</th>
-                  <th className="w-20 px-4 py-3 font-medium">类型</th>
+                  <th className="w-28 px-4 py-3 font-medium">类型</th>
                   <th className="w-28 px-4 py-3 font-medium">来源</th>
                   <th className="w-48 px-4 py-3 font-medium">Trace ID</th>
                   <th className="w-44 px-4 py-3 font-medium">时间</th>
@@ -187,7 +197,9 @@ export default function LogsPage() {
                     <td className="px-4 py-3">
                       <StatusTag tone={levelTone(item.level)}>{levelLabel(item.level)}</StatusTag>
                     </td>
-                    <td className="px-4 py-3"><StatusTag tone="primary">{CATEGORY_LABELS[item.category] ?? item.category}</StatusTag></td>
+                    <td className="whitespace-nowrap px-4 py-3">
+                      <StatusTag tone="primary">{CATEGORY_LABELS[item.category] ?? item.category}</StatusTag>
+                    </td>
                     <td className="px-4 py-3 text-ink-secondary">{item.source}</td>
                     <td className="max-w-[190px] px-4 py-3">
                       {item.trace_id ? (
@@ -235,11 +247,11 @@ export default function LogsPage() {
               </select>
             </label>
             <div className="flex items-center gap-1">
-              <Button size="sm" disabled={loading || page <= 1} disabledReason="已经是第一页" onClick={() => changePage(1)}>首页</Button>
-              <Button size="sm" disabled={loading || page <= 1} disabledReason="已经是第一页" onClick={() => changePage(page - 1)}>上一页</Button>
+              <Button size="sm" loading={paging === 1} disabled={loading || page <= 1} disabledReason={loading ? '正在查询' : '已经是第一页'} onClick={() => changePage(1)}>首页</Button>
+              <Button size="sm" loading={paging === page - 1} disabled={loading || page <= 1} disabledReason={loading ? '正在查询' : '已经是第一页'} onClick={() => changePage(page - 1)}>上一页</Button>
               <span className="min-w-20 px-2 text-center text-[12px] text-ink-secondary">{page} / {totalPages}</span>
-              <Button size="sm" disabled={loading || page >= totalPages} disabledReason="已经是最后一页" onClick={() => changePage(page + 1)}>下一页</Button>
-              <Button size="sm" disabled={loading || page >= totalPages} disabledReason="已经是最后一页" onClick={() => changePage(totalPages)}>末页</Button>
+              <Button size="sm" loading={paging === page + 1} disabled={loading || page >= totalPages} disabledReason={loading ? '正在查询' : '已经是最后一页'} onClick={() => changePage(page + 1)}>下一页</Button>
+              <Button size="sm" loading={paging === totalPages} disabled={loading || page >= totalPages} disabledReason={loading ? '正在查询' : '已经是最后一页'} onClick={() => changePage(totalPages)}>末页</Button>
             </div>
           </div>
         </section>

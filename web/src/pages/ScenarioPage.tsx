@@ -69,7 +69,8 @@ export default function ScenarioPage({ user }: { user: UserSummary }) {
 
   return (
     <PageShell>
-      <PageBody>
+      <PageBody className="flex h-full min-h-0 flex-col !py-0">
+        <div className="pt-6">
         <PageHeader
           title="场景"
           description={isAdmin
@@ -79,7 +80,8 @@ export default function ScenarioPage({ user }: { user: UserSummary }) {
         />
         {error && <div className="mb-3"><Notice tone="danger">{error}</Notice></div>}
         {notice && <div className="mb-3"><Notice tone="success">{notice}</Notice></div>}
-        <div className="space-y-4">
+        </div>
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pb-6">
           <ScenarioGroup title="系统内置" rows={builtins} loading={loading} empty="还没有内置场景"
             onView={setView} onCopy={(row) => openEditor({ mode: 'copy', source: row })} />
           <ScenarioGroup title="系统级场景" rows={systemLevel} loading={loading}
@@ -134,7 +136,7 @@ function ScenarioGroup({ title, rows, loading, empty, onView, onCopy, onEdit, on
               <Button size="sm" onClick={() => onView(row)}>查看</Button>
               {onEdit && <Button size="sm" onClick={() => onEdit(row)}>编辑</Button>}
               <Button size="sm" onClick={() => onCopy(row)}>复制</Button>
-              {onDelete && <Button size="sm" variant="text" loading={deletingId === row.id} onClick={() => onDelete(row)}>删除</Button>}
+              {onDelete && <Button size="sm" variant="text" loading={deletingId === row.id} disabled={deletingId !== null && deletingId !== row.id} disabledReason="正在删除其他场景" onClick={() => onDelete(row)}>删除</Button>}
             </div>
           </div>
         ))}
