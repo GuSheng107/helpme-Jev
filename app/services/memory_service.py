@@ -303,7 +303,7 @@ class MemoryService:
         if not chosen.is_enabled:
             raise DomainError(
                 DomainErrorCode.NOT_CONFIGURED,
-                "表达模型已停用，请在设置里启用。",
+                "语言模型已停用，请在设置里启用。",
                 status_code=409,
             )
         return chosen

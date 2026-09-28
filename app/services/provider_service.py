@@ -75,7 +75,7 @@ class ProviderService:
     ) -> ProviderConfig:
         existing = self.repo.list_all(db, owner_user_id=owner_user_id, kind=payload.kind)
         if existing:
-            label = "表达模型" if payload.kind == "llm" else "决策模型"
+            label = "语言模型" if payload.kind == "llm" else "决策模型"
             raise DomainError(
                 DomainErrorCode.CONFLICT, f"{label}只能配置一个，请直接修改现有的", status_code=409
             )
@@ -124,7 +124,7 @@ class ProviderService:
             if row.kind != "llm":
                 raise DomainError(
                     DomainErrorCode.VALIDATION_FAILED,
-                    "只有表达模型可设置上下文窗口", status_code=422,
+                    "只有语言模型可设置上下文窗口", status_code=422,
                 )
             row.context_window_tokens = fields["context_window_tokens"]
         if fields.get("is_enabled") is not None:

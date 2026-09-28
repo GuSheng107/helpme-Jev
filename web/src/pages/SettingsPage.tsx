@@ -40,7 +40,7 @@ interface FormState {
 
 const COPY: Record<ProviderKind, { title: string; address: string; model: string }> = {
   llm: {
-    title: '表达模型',
+    title: '语言模型',
     address: 'https://api.example.com/v1/chat/completions',
     model: 'gpt-4o-mini',
   },
@@ -65,7 +65,7 @@ function blank(kind: ProviderKind): FormState {
   }
 }
 
-/** 设置：表达模型和决策模型完全分开，下面只留账号自己的数据操作。 */
+/** 设置：语言模型和决策模型完全分开，下面只留账号自己的数据操作。 */
 export default function SettingsPage({ user, onUserChange, onLogout }: Props) {
   const [rows, setRows] = useState<ProviderView[]>([])
   const [loading, setLoading] = useState(true)
@@ -217,7 +217,7 @@ export default function SettingsPage({ user, onUserChange, onLogout }: Props) {
     <PageShell>
       <PageBody className="flex h-full max-h-full min-h-0 w-full flex-col !py-0">
         <div className="pt-6">
-          <PageHeader title="设置" description="账号、表达模型和决策模型。" />
+          <PageHeader title="设置" description="账号、语言模型和决策模型。" />
         </div>
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pb-6">
           <AccountCard user={user} onUserChange={onUserChange} />
@@ -308,9 +308,9 @@ function AccountCard({
 }) {
   const fileRef = useRef<HTMLInputElement>(null)
   const [displayName, setDisplayName] = useState(user.display_name)
-  const [oldPassword, setOldPassword] = useState('')
-  const [newPassword, setNewPassword] = useState('')
   const [busy, setBusy] = useState(false)
+  const [pwdOpen, setPwdOpen] = useState(false)
+  const [editorSrc, setEditorSrc] = useState<string | null>(null)
 
   async function saveProfile(event: React.FormEvent) {
     event.preventDefault()
@@ -325,41 +325,10 @@ function AccountCard({
     }
   }
 
-  async function savePassword(event: React.FormEvent) {
-    event.preventDefault()
-    setBusy(true)
-    try {
-      onUserChange(await changePassword(oldPassword, newPassword))
-      setOldPassword('')
-      setNewPassword('')
-      toast('密码已修改')
-    } catch (err) {
-      toastError(err, '修改失败')
-    } finally {
-      setBusy(false)
-    }
-  }
-
   function pickAvatar(file: File | undefined) {
     if (!file) return
-    if (file.size > MAX_AVATAR_BYTES) {
-      toast('头像不能超过 1MB', 'warning')
-      return
-    }
     const reader = new FileReader()
-    reader.onload = async () => {
-      const raw = String(reader.result || '')
-      const payload = raw.includes(',') ? raw.split(',')[1] : raw
-      setBusy(true)
-      try {
-        onUserChange(await updateAvatar(payload))
-        toast('头像已更新')
-      } catch (err) {
-        toastError(err, '头像未更新')
-      } finally {
-        setBusy(false)
-      }
-    }
+    reader.onload = () => setEditorSrc(String(reader.result || ''))
     reader.readAsDataURL(file)
   }
 
@@ -374,9 +343,9 @@ function AccountCard({
           </span>
         )}
         <div>
-          <input ref={fileRef} type="file" accept="image/png,image/jpeg" className="hidden" onChange={(event) => pickAvatar(event.target.files?.[0])} />
-          <Button size="sm" loading={busy} onClick={() => fileRef.current?.click()}>更换头像</Button>
-          <p className="mt-1 text-[12px] text-ink-muted">PNG 或 JPEG，不超过 1MB。没有头像时显示昵称首字。</p>
+          <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(event) => { pickAvatar(event.target.files?.[0]); event.target.value = '' }} />
+          <Button size="sm" onClick={() => fileRef.current?.click()}>更换头像</Button>
+          <p className="mt-1 text-[12px] text-ink-muted">选择图片后可拖动和缩放裁剪。没有头像时显示昵称首字。</p>
         </div>
       </div>
       <form onSubmit={saveProfile} className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -384,12 +353,191 @@ function AccountCard({
         <Field label="昵称" value={displayName} onChange={(event) => setDisplayName(event.target.value)} required />
         <div><Button type="submit" size="sm" variant="primary" loading={busy}>保存资料</Button></div>
       </form>
-      <form onSubmit={savePassword} className="mt-4 grid gap-3 border-t border-border-subtle pt-4 sm:grid-cols-2">
-        <Field label="原密码" type="password" value={oldPassword} onChange={(event) => setOldPassword(event.target.value)} required />
-        <Field label="新密码" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required hint="至少 10 位，含字母、数字和符号" />
-        <div><Button type="submit" size="sm" loading={busy} disabled={!oldPassword || !newPassword} disabledReason="请填写原密码和新密码">修改密码</Button></div>
-      </form>
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border-subtle pt-4">
+        <p className="text-[12px] text-ink-muted">密码至少 10 位，需包含字母、数字和符号。</p>
+        <Button size="sm" onClick={() => setPwdOpen(true)}>修改密码</Button>
+      </div>
+      {pwdOpen && (
+        <PasswordModal onClose={() => setPwdOpen(false)} onSaved={(next) => { setPwdOpen(false); onUserChange(next); toast('密码已修改') }} />
+      )}
+      {editorSrc && (
+        <AvatarEditorModal src={editorSrc} onClose={() => setEditorSrc(null)} onSaved={(next) => { setEditorSrc(null); onUserChange(next); toast('头像已更新') }} />
+      )}
     </DataCard>
+  )
+}
+
+function PasswordModal({ onClose, onSaved }: { onClose: () => void; onSaved: (user: UserSummary) => void }) {
+  const titleId = useId()
+  const [oldPwd, setOldPwd] = useState('')
+  const [nextPwd, setNextPwd] = useState('')
+  const [confirmPwd, setConfirmPwd] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const problem = !nextPwd || !confirmPwd ? null
+    : nextPwd.length < 10 ? '新密码至少 10 位'
+      : !(/[A-Za-z]/.test(nextPwd) && /\d/.test(nextPwd) && /[^A-Za-z0-9]/.test(nextPwd)) ? '新密码需同时包含字母、数字和符号'
+        : nextPwd !== confirmPwd ? '两次输入的新密码不一致'
+          : null
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault()
+    if (busy || !oldPwd || problem) return
+    setBusy(true)
+    try {
+      onSaved(await changePassword(oldPwd, nextPwd))
+    } catch (err) {
+      toastError(err, '修改失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal size="sm" scroll="hidden" onClose={onClose} busy={busy} labelledBy={titleId} initialFocusSelector="input" className="flex flex-col">
+      <form onSubmit={submit} className="flex min-h-0 flex-col">
+        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border-subtle px-4 py-3 sm:px-5">
+          <h3 id={titleId} className="text-[17px] font-semibold text-ink">修改密码</h3>
+          <Button size="sm" variant="text" type="button" disabled={busy} onClick={onClose} aria-label="关闭修改密码弹窗">关闭</Button>
+        </header>
+        <div className="space-y-3 px-4 py-4 sm:px-5">
+          <Field label="原密码" type="password" value={oldPwd} onChange={(event) => setOldPwd(event.target.value)} required />
+          <Field label="新密码" type="password" value={nextPwd} onChange={(event) => setNextPwd(event.target.value)} required hint="至少 10 位，含字母、数字和符号" />
+          <Field label="再输一次新密码" type="password" value={confirmPwd} onChange={(event) => setConfirmPwd(event.target.value)} required />
+          {problem && <p className="text-[12px] text-danger">{problem}</p>}
+        </div>
+        <footer className="flex shrink-0 justify-end gap-2 border-t border-border-subtle px-4 py-3 sm:px-5">
+          <Button type="button" disabled={busy} onClick={onClose}>取消</Button>
+          <Button type="submit" variant="primary" loading={busy} disabled={!oldPwd || !nextPwd || !confirmPwd || problem !== null}
+            disabledReason={problem ?? '请填写完整'}>确认修改</Button>
+        </footer>
+      </form>
+    </Modal>
+  )
+}
+
+const AVATAR_BOX = 288
+const AVATAR_OUTPUT = 256
+const HALF_PI = Math.PI / 2
+
+function AvatarEditorModal({ src, onClose, onSaved }: { src: string; onClose: () => void; onSaved: (user: UserSummary) => void }) {
+  const titleId = useId()
+  const [img, setImg] = useState<HTMLImageElement | null>(null)
+  const [zoom, setZoom] = useState(1)
+  const [rotation, setRotation] = useState(0)
+  const [offset, setOffset] = useState({ x: 0, y: 0 })
+  const [uploading, setUploading] = useState(false)
+  const dragRef = useRef<{ px: number; py: number; ox: number; oy: number } | null>(null)
+
+  useEffect(() => {
+    const image = new Image()
+    image.onload = () => {
+      setImg(image)
+      setZoom(1)
+      setRotation(0)
+      setOffset({ x: 0, y: 0 })
+    }
+    image.src = src
+  }, [src])
+
+  const swapped = img ? Math.round(rotation / HALF_PI) % 2 !== 0 : false
+  const base = img
+    ? Math.max(
+      AVATAR_BOX / (swapped ? img.naturalHeight : img.naturalWidth),
+      AVATAR_BOX / (swapped ? img.naturalWidth : img.naturalHeight),
+    )
+    : 1
+
+  function clampOffset(x: number, y: number, nextZoom: number) {
+    if (!img) return { x: 0, y: 0 }
+    const effW = (swapped ? img.naturalHeight : img.naturalWidth) * base * nextZoom
+    const effH = (swapped ? img.naturalWidth : img.naturalHeight) * base * nextZoom
+    const maxX = Math.max(0, (effW - AVATAR_BOX) / 2)
+    const maxY = Math.max(0, (effH - AVATAR_BOX) / 2)
+    return { x: Math.min(maxX, Math.max(-maxX, x)), y: Math.min(maxY, Math.max(-maxY, y)) }
+  }
+
+  // 缩放 / 旋转后把画面拉回有效范围，避免拖出圆形裁剪框。
+  useEffect(() => {
+    setOffset((prev) => clampOffset(prev.x, prev.y, zoom))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zoom, rotation, img])
+
+  async function confirmCrop() {
+    if (!img || uploading) return
+    const canvas = document.createElement('canvas')
+    canvas.width = AVATAR_OUTPUT
+    canvas.height = AVATAR_OUTPUT
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    const ratio = AVATAR_OUTPUT / AVATAR_BOX
+    ctx.translate(AVATAR_OUTPUT / 2 + offset.x * ratio, AVATAR_OUTPUT / 2 + offset.y * ratio)
+    ctx.rotate(rotation)
+    ctx.scale(base * zoom * ratio, base * zoom * ratio)
+    ctx.drawImage(img, -img.naturalWidth / 2, -img.naturalHeight / 2)
+    const dataUrl = canvas.toDataURL('image/png')
+    const payload = dataUrl.slice(dataUrl.indexOf(',') + 1)
+    if (payload.length * 3 / 4 > MAX_AVATAR_BYTES) {
+      toast('裁剪结果超过 1MB，请缩小图片后重试', 'warning')
+      return
+    }
+    setUploading(true)
+    try {
+      onSaved(await updateAvatar(payload))
+    } catch (err) {
+      toastError(err, '头像未更新')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  return (
+    <Modal size="sm" scroll="hidden" onClose={onClose} busy={uploading} labelledBy={titleId} className="flex flex-col">
+      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border-subtle px-4 py-3 sm:px-5">
+        <h3 id={titleId} className="text-[17px] font-semibold text-ink">更换头像</h3>
+        <Button size="sm" variant="text" type="button" disabled={uploading} onClick={onClose} aria-label="关闭头像编辑弹窗">关闭</Button>
+      </header>
+      <div className="space-y-4 px-4 py-4 sm:px-5">
+        <div className="flex justify-center">
+          <div
+            className="relative h-72 w-72 cursor-grab touch-none select-none overflow-hidden rounded-full bg-surface-muted active:cursor-grabbing"
+            onPointerDown={(event) => {
+              dragRef.current = { px: event.clientX, py: event.clientY, ox: offset.x, oy: offset.y }
+              event.currentTarget.setPointerCapture(event.pointerId)
+            }}
+            onPointerMove={(event) => {
+              const drag = dragRef.current
+              if (!drag) return
+              setOffset(clampOffset(drag.ox + event.clientX - drag.px, drag.oy + event.clientY - drag.py, zoom))
+            }}
+            onPointerUp={() => { dragRef.current = null }}
+            onPointerCancel={() => { dragRef.current = null }}
+          >
+            {img && (
+              <img src={src} alt="" draggable={false} className="pointer-events-none absolute left-1/2 top-1/2 max-w-none"
+                style={{
+                  width: img.naturalWidth * base * zoom,
+                  height: img.naturalHeight * base * zoom,
+                  transform: `translate(-50%, -50%) translate(${offset.x}px, ${offset.y}px) rotate(${rotation}rad)`,
+                }} />
+            )}
+            <span className="pointer-events-none absolute inset-0 rounded-full ring-1 ring-black/10 ring-inset" />
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          <Button size="sm" type="button" disabled={uploading || !img}
+            onClick={() => setRotation((value) => value + HALF_PI)}>旋转</Button>
+          <input type="range" min={1} max={3} step={0.01} value={zoom} disabled={uploading || !img}
+            onChange={(event) => setZoom(Number(event.target.value))} className="min-w-0 flex-1 accent-[#409eff]" aria-label="缩放" />
+          <span className="w-12 text-right text-[12px] text-ink-muted">{Math.round(zoom * 100)}%</span>
+        </div>
+        <p className="text-[12px] text-ink-muted">拖动调整位置，滑动缩放；确认后裁剪为 {AVATAR_OUTPUT}×{AVATAR_OUTPUT}。</p>
+      </div>
+      <footer className="flex shrink-0 justify-end gap-2 border-t border-border-subtle px-4 py-3 sm:px-5">
+        <Button type="button" disabled={uploading} onClick={onClose}>取消</Button>
+        <Button type="button" variant="primary" loading={uploading} disabled={!img} disabledReason="图片尚未载入" onClick={() => void confirmCrop()}>确认</Button>
+      </footer>
+    </Modal>
   )
 }
 
