@@ -96,7 +96,7 @@ def generate_prompt(
     db: Session = Depends(get_db),
     user: User = Depends(require_active_user),
 ) -> dict:
-    """用当前用户已启用的表达模型起草回复提示词（语气与规则）。"""
+    """用当前用户已启用的语言模型起草回复提示词（语气与规则）。"""
     return {"prompt": generate_reply_prompt(
         db,
         owner_user_id=user.id,

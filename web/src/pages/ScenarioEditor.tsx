@@ -31,17 +31,17 @@ const GEN_LABELS: Record<GenerateTarget, { running: string; done: string; notice
 const GEN_DIALOG: Record<GenerateTarget, { title: string; hint: string; placeholder: string }> = {
   prompt: {
     title: '自动生成回复提示词',
-    hint: '将用当前账号已启用的表达模型，根据场景名称与描述起草回复提示词。',
+    hint: '将用当前账号已启用的语言模型，根据场景名称与描述起草回复提示词。',
     placeholder: '例如：语气专业克制，先共情再给行动建议，不做出未确定的承诺',
   },
   judge: {
     title: '自动生成判断题集',
-    hint: '将用当前账号已启用的表达模型，根据场景信息生成判断题集。',
+    hint: '将用当前账号已启用的语言模型，根据场景信息生成判断题集。',
     placeholder: '例如：重点判断事实、风险和下一步动作',
   },
   persona: {
     title: '自动生成人设题集',
-    hint: '将用当前账号已启用的表达模型，根据场景信息生成人设题集。',
+    hint: '将用当前账号已启用的语言模型，根据场景信息生成人设题集。',
     placeholder: '例如：侧重沟通风格与情绪需求',
   },
 }
@@ -223,7 +223,7 @@ export default function ScenarioEditor({ mode, source, onCancel, onSaved }: Prop
         {tab === 'prompt' && (
           <div className="space-y-3">
             <div className="flex items-center justify-between gap-2">
-              <span className="text-[13px] font-medium text-ink-secondary">回复提示词（表达模型）</span>
+              <span className="text-[13px] font-medium text-ink-secondary">回复提示词（语言模型）</span>
               <Button size="sm" type="button" disabled={locked} onClick={() => askGenerate('prompt')}>自动生成</Button>
             </div>
             <label className="block text-[13px] font-medium text-ink-secondary">
