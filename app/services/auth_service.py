@@ -236,12 +236,19 @@ class AuthService:
         db: Session,
         user: User,
         *,
-        old_password: str,
+        old_password: str | None,
         new_password: str,
         keep_session_id: int | None = None,
     ) -> None:
-        if not verify_password(old_password, user.password_hash):
-            raise DomainError(DomainErrorCode.UNAUTHORIZED, "原密码不正确", status_code=401)
+        # 强制改密（首次登录）可免验原密码——用户本就用初始密码登录进来；
+        # 其余场景必须验原密码，防止被劫持的会话直接改密。
+        if old_password:
+            if not verify_password(old_password, user.password_hash):
+                raise DomainError(DomainErrorCode.UNAUTHORIZED, "原密码不正确", status_code=401)
+        elif not user.must_change_password:
+            raise DomainError(
+                DomainErrorCode.VALIDATION_FAILED, "请输入当前密码", status_code=422
+            )
         validate_password_strength(new_password)
         if verify_password(new_password, user.password_hash):
             raise DomainError(

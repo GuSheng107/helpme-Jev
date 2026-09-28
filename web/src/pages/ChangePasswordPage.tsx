@@ -36,7 +36,8 @@ export default function ChangePasswordPage({ user, forced, onDone }: Props) {
     setBusy(true)
     setError(null)
     try {
-      const updated = await changePassword(oldPassword, newPassword)
+      // 首次登录就是用初始密码进来的，不必再验一遍原密码
+      const updated = await changePassword(forced ? null : oldPassword, newPassword)
       onDone(updated)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '网络异常，请稍后再试')
@@ -66,14 +67,16 @@ export default function ChangePasswordPage({ user, forced, onDone }: Props) {
             )}
 
             <form onSubmit={submit} className="space-y-3">
-              <Field
-                label="当前密码"
-                type="password"
-                value={oldPassword}
-                onChange={(event) => setOldPassword(event.target.value)}
-                required
-                autoComplete="current-password"
-              />
+              {!forced && (
+                <Field
+                  label="当前密码"
+                  type="password"
+                  value={oldPassword}
+                  onChange={(event) => setOldPassword(event.target.value)}
+                  required
+                  autoComplete="current-password"
+                />
+              )}
 
               <Field
                 label="新密码"
