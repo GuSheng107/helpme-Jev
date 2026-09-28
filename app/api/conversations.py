@@ -122,6 +122,11 @@ def create_conversation(
             raise DomainError(DomainErrorCode.NOT_FOUND, "场景不存在", status_code=404)
 
     members = normalize_member_names(payload.members)
+    if payload.members and not members:
+        # 传了成员但全是空白 —— 用户想要群聊，不能静默降级成单聊
+        raise DomainError(
+            DomainErrorCode.VALIDATION_FAILED, "成员名不能全是空白", status_code=422
+        )
     is_group = bool(members)
     if is_group and not payload.title.strip():
         # title 在 schema 里必填；群聊的 key 取群名，得有名字才能稳住人设档

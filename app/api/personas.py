@@ -60,15 +60,20 @@ def get_persona(
 @router.get("/api/personas/batch")
 def batch_personas(
     conversation_id: int = Query(ge=1),
+    context: str = Query(default="", pattern="^(|romance|workplace)$"),
     db: Session = Depends(get_db),
     user: User = Depends(require_active_user),
 ) -> dict:
-    """批量获取一个会话里所有人的人设与上下文（群聊 = 每位成员 + 我）。"""
+    """批量获取一个会话里所有人的人设与上下文（群聊 = 每位成员 + 我）。
+
+    ``context`` 不传则按会话挂的场景推断；前端切恋爱 / 职场时跟随传参。
+    """
     conversation = _conversation_or_404(
         db, owner_user_id=user.id, conversation_id=conversation_id
     )
     return _personas.batch_for_conversation(
-        db, owner_user_id=user.id, conversation=conversation
+        db, owner_user_id=user.id, conversation=conversation,
+        context=context or None,
     )
 
 

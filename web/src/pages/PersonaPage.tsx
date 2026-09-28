@@ -128,18 +128,38 @@ export default function PersonaPage() {
     setMemberKey('me')
     setPersona(null)
     setBatch(null)
-    if (current.is_group) {
-      fetchPersonaBatch(current.id)
-        .then(setBatch)
-        .catch(() => setError('群成员档案未能载入'))
-    }
   }, [current])
 
   useEffect(() => {
+    if (!current?.is_group) return
+    let cancelled = false
+    // 情境跟随恋爱 / 职场切换，和下方单份档案保持一致
+    fetchPersonaBatch(current.id, context)
+      .then((result) => {
+        // 快速切换会话时，慢的旧响应不能覆盖新会话的批量档案
+        if (!cancelled) setBatch(result)
+      })
+      .catch(() => {
+        if (!cancelled) setError('群成员档案未能载入')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [current, context])
+
+  useEffect(() => {
     if (!current) return
+    let cancelled = false
     getPersona(groupSel.key, groupSel.subject, context)
-      .then(setPersona)
-      .catch(() => setPersona(null))
+      .then((view) => {
+        if (!cancelled) setPersona(view)
+      })
+      .catch(() => {
+        if (!cancelled) setPersona(null)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [current, groupSel.key, groupSel.subject, context])
 
   function pickConversation(id: number) {
@@ -166,7 +186,7 @@ export default function PersonaPage() {
       setPersona(built)
       setNotice(built.kept ? built.reason || '已保留原档案' : '档案已更新')
       if (current?.is_group) {
-        fetchPersonaBatch(current.id).then(setBatch).catch(() => undefined)
+        fetchPersonaBatch(current.id, context).then(setBatch).catch(() => undefined)
       }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '建模未完成')

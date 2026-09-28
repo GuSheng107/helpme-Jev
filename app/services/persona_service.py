@@ -101,6 +101,7 @@ class PersonaService:
             target_key = member_key
             focus_name = members[member_key]
         # 档案情境可以由用户选择；题集始终取会话挂载的自定义场景。
+        # persona_context_of 已把自定义场景映射到 romance / workplace，这里不可能再是 custom
         scenario_kind = kind_of(db, conversation)
         kind = context or persona_context_of(db, conversation)
         custom_source = (
@@ -108,8 +109,6 @@ class PersonaService:
             if scenario_kind == "custom" else None
         )
         custom_questions = strip_meta(custom_source) if custom_source else None
-        if kind == "custom":
-            kind = "workplace" if custom_questions and "disc" in custom_questions else "romance"
         if kind not in {"romance", "workplace"}:
             kind = "romance"
         rows = _messages.list_by_conversation(
@@ -188,34 +187,36 @@ class PersonaService:
         return {"adopted": adopted, "rewritten": rewritten}
 
     def batch_for_conversation(
-        self, db: Session, *, owner_user_id: int, conversation: Conversation
+        self, db: Session, *, owner_user_id: int, conversation: Conversation,
+        context: str | None = None,
     ) -> dict:
         """批量取一个会话里所有人的人设与上下文（记忆）。
 
         群聊返回每位成员 + 我；单聊返回对方 + 我。记忆是会话级的
         （群聊共享一份）， 人设按成员 key 各自取情境分档。
+        ``context`` 不传则按会话挂的场景推断。
         """
-        context = persona_context_of(db, conversation)
+        resolved = context or persona_context_of(db, conversation)
         participants: list[dict] = []
         if conversation.is_group:
             for member in parse_members(conversation.members):
                 row = self._find(
                     db, owner_user_id=owner_user_id,
-                    counterpart_key=member.key, subject="other", context=context,
+                    counterpart_key=member.key, subject="other", context=resolved,
                 )
                 participants.append({
                     "key": member.key,
                     "name": member.name,
                     "subject": "other",
                     "persona": self._view(
-                        row, counterpart_key=member.key, subject="other", context=context
+                        row, counterpart_key=member.key, subject="other", context=resolved
                     ),
                 })
         else:
             row = self._find(
                 db, owner_user_id=owner_user_id,
                 counterpart_key=conversation.counterpart_key,
-                subject="other", context=context,
+                subject="other", context=resolved,
             )
             participants.append({
                 "key": conversation.counterpart_key,
@@ -223,12 +224,12 @@ class PersonaService:
                 "subject": "other",
                 "persona": self._view(
                     row, counterpart_key=conversation.counterpart_key,
-                    subject="other", context=context,
+                    subject="other", context=resolved,
                 ),
             })
         me_row = self._find(
             db, owner_user_id=owner_user_id,
-            counterpart_key=conversation.counterpart_key, subject="me", context=context,
+            counterpart_key=conversation.counterpart_key, subject="me", context=resolved,
         )
         participants.append({
             "key": "me",
@@ -236,7 +237,7 @@ class PersonaService:
             "subject": "me",
             "persona": self._view(
                 me_row, counterpart_key=conversation.counterpart_key,
-                subject="me", context=context,
+                subject="me", context=resolved,
             ),
         })
         memories = _memory.list_active(
@@ -245,7 +246,7 @@ class PersonaService:
         return {
             "conversation_id": conversation.id,
             "is_group": conversation.is_group,
-            "context": context,
+            "context": resolved,
             "counterpart_key": conversation.counterpart_key,
             "participants": participants,
             "memories": [

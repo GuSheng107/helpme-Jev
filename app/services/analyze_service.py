@@ -252,7 +252,7 @@ class AnalyzeService:
         )
         summary = ensure_summary(
             db,
-            conversation_id=conversation.id,
+            conversation=conversation,
             owner_user_id=owner_user_id,
             endpoint_url=llm.endpoint_url,
             api_key=_providers.decrypt_key(llm),

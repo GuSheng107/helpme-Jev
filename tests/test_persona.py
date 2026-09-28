@@ -386,3 +386,130 @@ def test_member_persona_lines_respects_budget(client: TestClient, db: Session) -
     lines = PersonaService().member_persona_lines(db, owner_user_id=owner, conversation=conv)
     assert 0 < len(lines) < 20  # 预算装不下全部 20 人
     assert sum(len(line) + 1 for line in lines) <= PERSONA_LINES_BUDGET_CHARS + len(lines[0])
+
+
+def test_batch_accepts_explicit_context(client: TestClient, db: Session) -> None:
+    """batch 带 context 参数：面板情境跟随前端恋爱 / 职场切换。"""
+    import json as _json
+
+    from app.repositories.models import Conversation, Persona
+
+    password = "batchctx!Passw0rd"
+    UserRepository().add(
+        db,
+        User(
+            username="batchctx",
+            display_name="batchctx",
+            password_hash=hash_password(password),
+            role=UserRole.USER.value,
+            must_change_password=False,
+            is_active=True,
+        ),
+    )
+    db.commit()
+    resp = client.post("/api/auth/login", json={"username": "batchctx", "password": password})
+    headers = {"Authorization": f"Bearer {resp.json()['access_token']}"}
+    owner = int(resp.json()["id"])
+
+    conv = Conversation(
+        owner_user_id=owner,
+        title="情境群",
+        counterpart_key="情境群",
+        is_group=True,
+        members=_json.dumps([{"key": "小林", "name": "小林"}], ensure_ascii=False),
+    )
+    db.add(conv)
+    db.flush()
+    db.add(
+        Persona(
+            owner_user_id=owner,
+            counterpart_key="小林",
+            subject="other",
+            context="workplace",
+            traits=_json.dumps({"disc": "steadiness"}, ensure_ascii=False),
+            evidence="[]",
+            confidence=0.8,
+            version=1,
+        )
+    )
+    db.commit()
+
+    default = client.get(
+        "/api/personas/batch", headers=headers, params={"conversation_id": conv.id}
+    ).json()
+    assert default["context"] == "romance"  # 没挂场景，回落恋爱
+    assert default["participants"][0]["persona"]["version"] == 0
+
+    workplace = client.get(
+        "/api/personas/batch",
+        headers=headers,
+        params={"conversation_id": conv.id, "context": "workplace"},
+    ).json()
+    assert workplace["context"] == "workplace"
+    assert workplace["participants"][0]["persona"]["version"] == 1
+
+
+def test_group_summary_keeps_speaker_names(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """群聊滚动摘要的 payload 按发言人归属，不再是 other。"""
+    from app.repositories.models import Conversation, Message
+    from app.services import context_service
+
+    password = "summaryg!Passw0rd"
+    UserRepository().add(
+        db,
+        User(
+            username="summaryg",
+            display_name="summaryg",
+            password_hash=hash_password(password),
+            role=UserRole.USER.value,
+            must_change_password=False,
+            is_active=True,
+        ),
+    )
+    db.commit()
+    resp = client.post("/api/auth/login", json={"username": "summaryg", "password": password})
+    owner = int(resp.json()["id"])
+
+    conv = Conversation(
+        owner_user_id=owner,
+        title="摘要群",
+        counterpart_key="摘要群",
+        is_group=True,
+        members=_json.dumps([{"key": "小林", "name": "小林"}], ensure_ascii=False),
+    )
+    db.add(conv)
+    db.flush()
+    for seq in range(1, 32):  # 31 条：pending = 31 - 10 = 21 ≥ SUMMARY_GAP(20)
+        db.add(
+            Message(
+                conversation_id=conv.id,
+                seq=seq,
+                role="other",
+                content=f"第{seq}条",
+                speaker="小林",
+            )
+        )
+    db.commit()
+
+    captured: dict = {}
+
+    class _Result:
+        ok = True
+        payload = {"summary": "摘要"}
+        status_code = 200
+        latency_ms = 1
+        detail = ""
+
+    def _fake_chat_json(**kwargs):
+        captured["messages"] = kwargs["messages"][1]["content"]
+        return _Result()
+
+    monkeypatch.setattr(context_service, "chat_json", _fake_chat_json)
+    context_service.ensure_summary(
+        db, conversation=conv, owner_user_id=owner,
+        endpoint_url="https://llm.example/v1", api_key="k", model="m",
+    )
+    body = _json.loads(captured["messages"])
+    assert body["messages"][0]["from"] == "小林"

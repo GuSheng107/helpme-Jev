@@ -112,9 +112,18 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
     })
     setSpeakerKey('')
     setRole('other')
+    let cancelled = false
     void listMessages(currentId)
-      .then(setMessages)
-      .catch((err: unknown) => setError(err instanceof ApiError ? err.message : '内容加载失败'))
+      .then((rows) => {
+        // 快速切换会话时，慢的旧响应不能覆盖新会话的内容
+        if (!cancelled) setMessages(rows)
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof ApiError ? err.message : '内容加载失败')
+      })
+    return () => {
+      cancelled = true
+    }
   }, [currentId])
 
   async function create() {

@@ -406,3 +406,16 @@ def test_group_member_name_length_capped(client: TestClient, db: Session) -> Non
     )
     assert ok.status_code == 201, ok.text
     assert ok.json()["members"][0]["key"] == "a" * 64
+
+
+def test_group_blank_members_rejected(client: TestClient, db: Session) -> None:
+    """传了成员但全是空白：要 422，不能静默降级成单聊。"""
+    token = _make_user(client, db, "blankmember")
+    headers = _auth(token)
+    resp = client.post(
+        "/api/conversations",
+        json={"title": "空白群", "members": ["  ", "　"]},
+        headers=headers,
+    )
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "VALIDATION_FAILED"

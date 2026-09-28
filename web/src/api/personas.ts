@@ -70,8 +70,9 @@ export interface PersonaBatch {
 }
 
 /** 批量获取一个会话里所有人的人设与上下文（群聊 = 每位成员 + 我）。 */
-export function fetchPersonaBatch(conversationId: number) {
-  return api.get<PersonaBatch>(`/api/personas/batch?conversation_id=${conversationId}`)
+export function fetchPersonaBatch(conversationId: number, context?: PersonaContext) {
+  const suffix = context ? `&context=${context}` : ''
+  return api.get<PersonaBatch>(`/api/personas/batch?conversation_id=${conversationId}${suffix}`)
 }
 
 export function personaUsage() {
