@@ -88,7 +88,7 @@ class ReplyService:
         pack = pack_of(db, conversation)
         scenario = db.get(Scenario, conversation.scenario_id) if conversation.scenario_id else None
         prompt = effective_prompt(scenario) if scenario else builtin_draft_prompt(pack.kind)
-        if scenario is not None and not scenario.is_builtin:
+        if scenario is None or scenario.kind == "custom":
             prompt += CUSTOM_REPLY_FORMAT
         if _high_risk(decision, pack):
             raise DomainError(

@@ -215,12 +215,12 @@ export default function SettingsPage({ user, onUserChange, onLogout }: Props) {
 
   return (
     <PageShell>
-      <PageBody>
-        <PageHeader title="设置" description="账号、表达模型和决策模型。" />
-        <div className="mb-4">
-          <AccountCard user={user} onUserChange={onUserChange} />
+      <PageBody className="flex h-full min-h-0 flex-col !py-0">
+        <div className="pt-6">
+          <PageHeader title="设置" description="账号、表达模型和决策模型。" />
         </div>
-        <div className="space-y-4">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pb-6">
+          <AccountCard user={user} onUserChange={onUserChange} />
           {(['llm', 'jev'] as const).map((kind) => (
             <ProviderSection
               key={kind}

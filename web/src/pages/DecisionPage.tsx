@@ -16,8 +16,8 @@ const TYPE_LABELS: Record<QuestionType, string> = {
   score: '评分题',
 }
 const PAGE_SIZE = 5
-// 收尾状态停留一下再收起，否则"已完成"一闪而过看不见
-const DONE_HOLD_MS = 600
+// 完成态只停留一瞬间，让「翻译完成」能被看见，随即切到下一步。
+const DONE_HOLD_MS = 280
 
 type LoaderKey = 'translate' | 'decide' | 'polish'
 const STEP_LABELS: Record<LoaderKey, { running: string; done: string }> = {
@@ -111,7 +111,9 @@ export default function DecisionPage() {
     setAnswer(null)
     setDeciding(true)
     setError(null)
-    setPlan([])
+    // 点击后立刻显示当前这一步；服务端确认计划后再对齐，避免空等。
+    const ascii = /^[\x00-\x7F]*$/.test(`${question}${context}${filledOptions.join('')}`)
+    setPlan(ascii ? ['decide'] : ['translate', 'decide'])
     setProgress(0)
     try {
       const answered = await decide(
@@ -277,19 +279,17 @@ export default function DecisionPage() {
                     </li>
                   ))}
                 </ul>}
-            {historyTotal > PAGE_SIZE && (
-              <div className="mt-auto flex items-center justify-end gap-2 border-t border-border-subtle pt-3">
+            <div className="mt-auto flex shrink-0 items-center justify-end gap-2 border-t border-border-subtle pt-3">
                 <Button size="sm" loading={historyDirection === 'prev'} disabled={historyPage === 0 || historyLoading || deciding} disabledReason={historyLoading ? '正在载入' : '已经是第一页'} onClick={() => { setHistoryDirection('prev'); setHistoryPage((page) => page - 1) }}>上一页</Button>
                 <span className="text-[12px] text-ink-muted">{historyPage + 1} / {Math.max(1, Math.ceil(historyTotal / PAGE_SIZE))}</span>
                 <Button size="sm" loading={historyDirection === 'next'} disabled={(historyPage + 1) * PAGE_SIZE >= historyTotal || historyLoading || deciding} disabledReason={historyLoading ? '正在载入' : '已经是最后一页'} onClick={() => { setHistoryDirection('next'); setHistoryPage((page) => page + 1) }}>下一页</Button>
               </div>
-            )}
             </>}
           </DataCard>
           </div>
           </div>
-          {deciding && loaderSteps.length > 0 && (
-            <div role="status" className="absolute inset-0 z-10 flex items-start justify-center rounded-[8px] bg-page/80 pt-32 backdrop-blur-[1px]">
+          {deciding && (
+            <div className="absolute inset-0 z-10 flex items-start justify-center rounded-[8px] bg-page/80 pt-32 backdrop-blur-[1px]">
               <div className="rounded-[8px] border border-border bg-surface px-5 py-4 shadow-sm">
                 <StageLoader steps={loaderSteps} />
               </div>

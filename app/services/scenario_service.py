@@ -21,11 +21,11 @@ _JEV_KEYS = ("type", "instructions", "criteria")
 
 
 def effective_prompt(scenario: Scenario) -> str:
-    """返回场景实际用于生成回复的提示词。旧自定义场景按人设题回退。"""
-    if scenario.is_builtin:
-        return builtin_draft_prompt(scenario.kind)
+    """返回场景实际用于生成回复的提示词。库里没写时才回退到代码默认。"""
     if scenario.system_prompt.strip():
         return scenario.system_prompt.strip()
+    if scenario.is_builtin:
+        return builtin_draft_prompt(scenario.kind)
     persona = _load_questions(scenario.persona_questions)
     return builtin_draft_prompt("workplace" if "disc" in persona else "romance")
 
@@ -40,14 +40,18 @@ def kind_of(db: Session, conversation: Conversation) -> str:
 
 
 def pack_of(db: Session, conversation: Conversation) -> JudgePack:
+    """题包以库里的场景为准，管理员改过的内置场景也会生效。"""
     if conversation.scenario_id is not None:
         scenario = db.get(Scenario, conversation.scenario_id)
-        if scenario is not None and scenario.kind == "custom":
-            return custom_pack(scenario)
+        if scenario is not None:
+            if scenario.is_builtin and scenario.kind in {"romance", "workplace"}:
+                return custom_pack(scenario, fallback=pack_for(scenario.kind))
+            if scenario.kind == "custom":
+                return custom_pack(scenario)
     return pack_for(kind_of(db, conversation))
 
 
-def custom_pack(scenario: Scenario) -> JudgePack:
+def custom_pack(scenario: Scenario, fallback: JudgePack | None = None) -> JudgePack:
     """自定义场景 → 动态题包。
 
     题集 JSON 里可以带展示性字段（title / labels / level_labels），
@@ -61,7 +65,11 @@ def custom_pack(scenario: Scenario) -> JudgePack:
     level_labels: dict[str, tuple[str, ...]] = {}
     for key, question in raw.items():
         questions[key] = {k: question[k] for k in _JEV_KEYS if k in question}
-        titles[key] = str(question.get("title") or key)
+        titles[key] = str(
+            question.get("title")
+            or (fallback.question_titles.get(key) if fallback else "")
+            or key
+        )
         if isinstance(question.get("labels"), dict):
             labels[key] = {str(k): str(v) for k, v in question["labels"].items()}
         if isinstance(question.get("level_labels"), list):
@@ -85,20 +93,28 @@ def custom_pack(scenario: Scenario) -> JudgePack:
     )
 
     def _label_of(key: str, value: str) -> str:
-        return labels.get(key, {}).get(value, value)
+        stored = labels.get(key, {}).get(value)
+        if stored:
+            return stored
+        if fallback is not None:
+            return fallback.label_of(key, value)
+        return value
 
     return JudgePack(
-        kind="custom",
+        kind=fallback.kind if fallback else "custom",
         questions=lambda: questions,
-        panel_keys=tuple(list(questions)[:5]),
+        panel_keys=fallback.panel_keys if fallback else tuple(list(questions)[:5]),
         question_titles=titles,
         label_of=_label_of,
-        intensity_labels=tuple(level_labels.get(next(iter(level_labels), ""), ())),
-        risk_key=risk_key,
-        risk_threshold=risk_threshold,
-        needs_key=needs_key,
-        risk_word="风险",
-        level_labels=level_labels,
+        intensity_labels=(
+            fallback.intensity_labels if fallback
+            else tuple(level_labels.get(next(iter(level_labels), ""), ()))
+        ),
+        risk_key=fallback.risk_key if fallback and fallback.risk_key in questions else risk_key,
+        risk_threshold=fallback.risk_threshold if fallback else risk_threshold,
+        needs_key=fallback.needs_key if fallback and fallback.needs_key in questions else needs_key,
+        risk_word=fallback.risk_word if fallback else "风险",
+        level_labels=level_labels or (fallback.level_labels if fallback else {}),
     )
 
 

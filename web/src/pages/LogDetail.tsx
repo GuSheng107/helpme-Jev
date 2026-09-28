@@ -45,7 +45,7 @@ function PayloadSection({ title, value }: { title: string; value: unknown }) {
     <section>
       <div className="mb-2 flex items-center justify-between gap-3">
         <h4 className="text-[14px] font-medium text-ink">{title}</h4>
-        <Button size="sm" variant="text" onClick={() => void copyText(text, title)}>复制{title}</Button>
+        <Button size="sm" variant="text" onClick={() => void copyText(text, title)}>复制</Button>
       </div>
       <pre className="mono max-h-80 overflow-auto whitespace-pre-wrap break-all rounded-[6px] border border-border-subtle bg-surface-muted p-4 text-[12px] leading-5 text-ink-secondary">
         {text}

@@ -478,6 +478,44 @@ def test_admin_created_scenario_is_system_level(
     assert client.delete(f"/api/scenarios/{body['id']}", headers=admin).status_code == 204
 
 
+def test_admin_can_edit_and_delete_builtin_scenario(
+    client: TestClient, db: Session
+) -> None:
+    """内置场景落库后以数据库为准：管理员可改可删，普通用户不行。"""
+    from app.repositories.models import Scenario
+    from app.services.bootstrap import ensure_builtin_scenarios
+
+    admin = _admin_headers(client, db)
+    user = _user(client, db, "builtinreader")
+    romance_id = _scenario_id(client, admin, "romance")
+
+    denied = client.patch(
+        f"/api/scenarios/{romance_id}", headers=user, json={"name": "改掉恋爱助手"},
+    )
+    assert denied.status_code == 404, denied.text
+
+    patched = client.patch(
+        f"/api/scenarios/{romance_id}", headers=admin,
+        json={"name": "恋爱顾问", "description": "管理员改过的说明"},
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["name"] == "恋爱顾问"
+    assert patched.json()["is_builtin"] is True
+
+    ensure_builtin_scenarios(db)
+    db.expire_all()
+    row = db.get(Scenario, romance_id)
+    assert row is not None
+    assert row.name == "恋爱顾问"
+    assert row.description == "管理员改过的说明"
+
+    assert client.delete(f"/api/scenarios/{romance_id}", headers=user).status_code == 404
+    assert client.delete(f"/api/scenarios/{romance_id}", headers=admin).status_code == 204
+    ensure_builtin_scenarios(db)
+    db.expire_all()
+    assert db.get(Scenario, romance_id) is None
+
+
 def test_user_created_scenario_stays_personal(
     client: TestClient, db: Session
 ) -> None:

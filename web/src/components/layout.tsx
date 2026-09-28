@@ -5,7 +5,7 @@ import type { ReactNode } from 'react'
  * 不用巨大留白模拟营销站。
  */
 export function PageShell({ children }: { children: ReactNode }) {
-  return <div className="app-shell min-h-screen bg-page">{children}</div>
+  return <div className="app-shell h-full min-h-0 bg-page">{children}</div>
 }
 
 /** 主内容区：最大宽度不强制锁死，默认内边距 20px。 */

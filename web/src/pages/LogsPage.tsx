@@ -177,7 +177,7 @@ export default function LogsPage() {
           </div>
           <div className="min-h-0 flex-1 overflow-auto">
             <table className="w-full min-w-[1120px] text-left text-[13px]">
-              <thead className="bg-surface-muted text-[12px] text-ink-muted">
+              <thead className="sticky top-0 z-[1] bg-surface-muted text-[12px] text-ink-muted">
                 <tr>
                   <th className="w-16 px-4 py-3 text-center font-medium">行号</th>
                   <th className="w-20 px-4 py-3 font-medium">级别</th>
@@ -235,7 +235,7 @@ export default function LogsPage() {
               </tbody>
             </table>
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border-subtle px-4 py-3">
+          <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-border-subtle px-4 py-3">
             <label className="flex items-center gap-2 text-[12px] text-ink-secondary">
               每页
               <select

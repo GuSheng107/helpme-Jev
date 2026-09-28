@@ -62,8 +62,7 @@ export default function ScenarioPage({ user }: { user: UserSummary }) {
     }
   }
 
-  const builtins = rows.filter((row) => row.is_builtin)
-  const systemLevel = rows.filter((row) => !row.is_builtin && row.is_system)
+  const builtins = rows.filter((row) => row.is_builtin || row.is_system)
   const mine = rows.filter((row) => !row.is_builtin && !row.is_system)
   const openEditor = (target: EditorTarget) => { setEditor(target); setNotice('') }
 
@@ -74,8 +73,8 @@ export default function ScenarioPage({ user }: { user: UserSummary }) {
         <PageHeader
           title="场景"
           description={isAdmin
-            ? '查看系统场景；你新建的场景将发布为系统级，所有用户可见。'
-            : '查看系统场景，或创建自己的场景。'}
+            ? '查看系统内置场景；你新建的场景会发布为系统内置，所有用户可见。'
+            : '查看系统内置场景，或创建自己的场景。'}
           actions={<Button size="sm" variant="primary" onClick={() => openEditor({ mode: 'new' })}>新建场景</Button>}
         />
         {error && <div className="mb-3"><Notice tone="danger">{error}</Notice></div>}
@@ -83,9 +82,6 @@ export default function ScenarioPage({ user }: { user: UserSummary }) {
         </div>
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pb-6">
           <ScenarioGroup title="系统内置" rows={builtins} loading={loading} empty="还没有内置场景"
-            onView={setView} onCopy={(row) => openEditor({ mode: 'copy', source: row })} />
-          <ScenarioGroup title="系统级场景" rows={systemLevel} loading={loading}
-            empty={isAdmin ? '还没有系统级场景，新建场景将发布到这里' : '暂无系统级场景'}
             onView={setView} onCopy={(row) => openEditor({ mode: 'copy', source: row })}
             onEdit={isAdmin ? (row) => openEditor({ mode: 'edit', source: row }) : undefined}
             onDelete={isAdmin ? (row) => void remove(row) : undefined}
@@ -97,7 +93,7 @@ export default function ScenarioPage({ user }: { user: UserSummary }) {
         </div>
         {view && <ScenarioView key={view.id} row={view} onClose={() => setView(null)}
           onCopy={() => { setView(null); openEditor({ mode: 'copy', source: view }) }}
-          onEdit={!view.is_builtin && (!view.is_system || isAdmin)
+          onEdit={(isAdmin || !view.is_system)
             ? () => { setView(null); openEditor({ mode: 'edit', source: view }) }
             : undefined} />}
         {editor && <ScenarioEditor key={`${editor.mode}-${editor.source?.id ?? 'blank'}`}

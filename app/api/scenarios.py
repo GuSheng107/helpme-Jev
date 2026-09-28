@@ -249,11 +249,11 @@ def _base_or_default(db: Session, user: User, base_id: int | None) -> Scenario:
 
 def _own_or_404(db: Session, user: User, scenario_id: int) -> Scenario:
     row = db.get(Scenario, scenario_id)
-    if row is None or row.is_builtin:
+    if row is None:
         raise DomainError(DomainErrorCode.NOT_FOUND, "场景不存在或不可修改", status_code=404)
     if row.owner_user_id == user.id:
         return row
-    # 系统级自定义场景：仅管理员可维护
+    # 内置场景和系统场景：仅管理员可维护，包括改题和删除。
     if row.owner_user_id is None and user.role == UserRole.ADMIN.value:
         return row
     raise DomainError(DomainErrorCode.NOT_FOUND, "场景不存在或不可修改", status_code=404)
