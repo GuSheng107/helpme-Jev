@@ -290,6 +290,11 @@ def test_decide_stream_reports_upstream_failure_as_event(
     assert events[-1]["stage"] == "error"
     assert events[-1]["error"]["code"] == "JEV_UPSTREAM_ERROR"
     assert events[-1]["error"]["retryable"] is True
+    traced = client.get(
+        "/api/logs", headers=headers, params={"trace_id": streamed.headers["x-trace-id"]}
+    ).json()["items"]
+    assert any(item["source"] == "用户" and item["level"] == "error" for item in traced)
+    assert any(item["source"] == "JEV" and item["level"] == "error" for item in traced)
 
 
 # ------------------------------------------------------------------ 自定义场景

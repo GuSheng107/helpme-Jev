@@ -52,7 +52,7 @@ JEV（TypeSafe System One）回答的是有类型的问题，例如是非概率�
 | 记忆 | 让 LLM 把有用上下文总结成带日期的条目，可以查看、撤销或删除。 |
 | 图片 | 支持粘贴或上传 PNG/JPEG/WEBP 截图，一条消息最多 9 张；由支持视觉的 LLM 描述，系统不做 OCR。 |
 | 表达辅助 | 润色消息、补充问题、生成候选回复，再由 JEV 排序。 |
-| 数据控制 | SQLite 存储、数据导出、账号注销、按用户隔离、可追踪调用日志，以及加密保存的提供方密钥。 |
+| 数据控制 | SQLite 存储、数据导出、账号注销、按用户隔离、可按 trace 追踪的活动日志，以及加密保存的提供方密钥。 |
 
 ## 基本流程
 
@@ -168,7 +168,7 @@ LLM 在流程需要语言处理时使用：翻译、追问、图片描述、候�
 | <code>DEFAULT_ADMIN_PASSWORD</code> | 见 <code>.env.example</code> | 首次管理员密码，仅在没有用户时使用。 |
 | <code>PORT</code> | <code>8790</code> | 应用端口。 |
 | <code>DATABASE_PATH</code> | <code>./data/helpme_jev.db</code> | SQLite 数据库路径。 |
-| <code>RETENTION_DAYS</code> | <code>15</code> | 上游调用日志保留天数。 |
+| <code>RETENTION_DAYS</code> | <code>15</code> | 活动日志和上游调用日志保留天数。 |
 | <code>SESSION_TTL_HOURS</code> | <code>8</code> | 服务端会话有效期。 |
 | <code>WEB_DIST_DIR</code> | <code>./web/dist</code> | FastAPI 托管的前端构建目录。 |
 
@@ -213,8 +213,9 @@ tests/              后端测试
 - 提供方 API Key 使用 HKDF-SHA256 和 AES-256-GCM 加密保存，前端只收到掩码，绝不返回密钥明文。
 - 密码使用 Argon2id。Bearer token 通过服务端会话处理，库中保存哈希值。
 - 对话、记忆、人设、提供方配置和日志按用户隔离；管理员不会自动获得其他用户的聊天内容。
-- 请求日志经过脱敏，<code>Authorization</code>、Cookie 和常见 Token 格式会被移除。
-- 服务启动时会清理超过 <code>RETENTION_DAYS</code> 的调用日志；对话不会因为调用日志过期而被删除。
+- 活动日志通过 trace ID 串联业务动作、失败和模型调用；日志页查询这份统一记录，首页判断次数仍从调用日志统计。日志查询及决策历史读取不会产生新日志。
+- 请求摘要不记录请求正文。模型明细会经过脱敏，<code>Authorization</code>、Cookie 和常见 Token 格式会被移除。
+- 服务启动时会清理超过 <code>RETENTION_DAYS</code> 的活动日志和调用日志；对话不会因为日志过期而被删除。
 - 支持导出个人数据和注销账号。账号注销不可恢复。
 
 > [!WARNING]

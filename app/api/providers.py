@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy.orm import Session
 
 from ..core.db import get_db
@@ -79,6 +79,7 @@ def delete_provider(
 @router.post("/{provider_id}/test", response_model=ConnectionTestResult)
 def test_provider(
     provider_id: int,
+    request: Request,
     with_smoke: bool = Query(default=True, description="JEV 是否顺带跑冒烟测试"),
     db: Session = Depends(get_db),
     user: User = Depends(require_active_user),
@@ -89,5 +90,6 @@ def test_provider(
     - ``kind=jev``：先验协议连通，再跑 5 组标准用例得出**健康度**
     """
     return _service.test_connection(
-        db, owner_user_id=user.id, provider_id=provider_id, with_smoke=with_smoke
+        db, owner_user_id=user.id, provider_id=provider_id, with_smoke=with_smoke,
+        trace_id=getattr(request.state, "trace_id", ""),
     )

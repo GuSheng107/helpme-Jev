@@ -46,6 +46,7 @@ def register(
     payload: RegisterRequest, request: Request, db: Session = Depends(get_db)
 ) -> UserSummary:
     """注册**只走邀请码**。"""
+    request.state.activity_username = payload.username
     key = throttle_key(request, payload.username)
     _ensure_allowed(key, "尝试过于频繁，请稍后再试")
     try:
@@ -63,6 +64,7 @@ def register(
             login_throttle.record_failure(key)
         raise
     db.commit()
+    request.state.user = user
     login_throttle.reset(key)
     return to_summary(user)
 
@@ -71,6 +73,7 @@ def register(
 def login(
     payload: LoginRequest, request: Request, db: Session = Depends(get_db)
 ) -> LoginResponse:
+    request.state.activity_username = payload.username
     key = throttle_key(request, payload.username)
     _ensure_allowed(key, "登录尝试过于频繁，请稍后再试")
     try:
@@ -87,6 +90,7 @@ def login(
             login_throttle.record_failure(key)
         raise
     db.commit()
+    request.state.user = user
     login_throttle.reset(key)
     return LoginResponse(**to_summary(user).model_dump(), access_token=token)
 

@@ -140,14 +140,15 @@ class ProviderService:
 
     # ------------------------------------------------------------ 测试
     def test_connection(
-        self, db: Session, *, owner_user_id: int, provider_id: int, with_smoke: bool = True
+        self, db: Session, *, owner_user_id: int, provider_id: int,
+        with_smoke: bool = True, trace_id: str = "",
     ) -> ConnectionTestResult:
         """连通性测试；JEV 额外跑冒烟测试得出**健康度**。"""
         row = self.get_or_404(db, owner_user_id=owner_user_id, provider_id=provider_id)
         api_key = self.decrypt_key(row)
+        trace_id = trace_id or uuid4().hex
 
         if row.kind == "llm":
-            trace_id = uuid4().hex
             result = llm_client.test_connection(
                 endpoint_url=row.endpoint_url,
                 api_key=api_key,
@@ -180,7 +181,6 @@ class ProviderService:
 
         # JEV：先连通，再冒烟；每条返回路径都写回测试状态。
         # 连通日志延后到冒烟结束再写 —— 健康度偏低要记 warn，得先知道结果。
-        trace_id = uuid4().hex
         conn = jev_client.test_connection(
             endpoint_url=row.endpoint_url, api_key=api_key, model=row.model
         )

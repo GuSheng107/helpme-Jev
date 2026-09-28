@@ -140,6 +140,7 @@ def revert_reflect(
 @router.post("/reply")
 def reply(
     payload: ReplyRequest,
+    request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(require_active_user),
 ) -> dict:
@@ -151,13 +152,14 @@ def reply(
         owner_user_id=user.id,
         conversation=conversation,
         decision=payload.decision,
-        trace_id="",
+        trace_id=getattr(request.state, "trace_id", ""),
     )
 
 
 @router.post("/evaluate")
 def evaluate(
     payload: EvaluateRequest,
+    request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(require_active_user),
 ) -> dict:
@@ -165,25 +167,31 @@ def evaluate(
         db, owner_user_id=user.id, conversation_id=payload.conversation_id
     )
     return _reply.evaluate(
-        db, owner_user_id=user.id, conversation=conversation, text=payload.text
+        db, owner_user_id=user.id, conversation=conversation, text=payload.text,
+        trace_id=getattr(request.state, "trace_id", ""),
     )
 
 
 @router.post("/clarify")
 def clarify(
     payload: ClarifyRequest,
+    request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(require_active_user),
 ) -> dict:
     conversation = _conversation_or_404(
         db, owner_user_id=user.id, conversation_id=payload.conversation_id
     )
-    return _reply.clarify(db, owner_user_id=user.id, conversation=conversation)
+    return _reply.clarify(
+        db, owner_user_id=user.id, conversation=conversation,
+        trace_id=getattr(request.state, "trace_id", ""),
+    )
 
 
 @router.post("/explain")
 def explain(
     payload: ExplainRequest,
+    request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(require_active_user),
 ) -> dict:
@@ -191,7 +199,8 @@ def explain(
         db, owner_user_id=user.id, conversation_id=payload.conversation_id
     )
     return _reply.explain(
-        db, owner_user_id=user.id, conversation=conversation, decision=payload.decision
+        db, owner_user_id=user.id, conversation=conversation, decision=payload.decision,
+        trace_id=getattr(request.state, "trace_id", ""),
     )
 
 

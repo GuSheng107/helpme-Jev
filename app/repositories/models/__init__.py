@@ -11,9 +11,10 @@ from .business import (
     SessionSummary,
 )
 from .knowledge import Material, Memory, MemoryReflection, Persona, QaPair
-from .log import AuditLog, CallLog
+from .log import ActivityLog, AuditLog, CallLog
 
 __all__ = [
+    "ActivityLog",
     "AuditLog",
     "AuthSession",
     "CallLog",

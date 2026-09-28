@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -62,6 +63,30 @@ def _configure(client: TestClient, headers: dict) -> None:
 def _scenario_id(client: TestClient, headers: dict, kind: str) -> int:
     rows = client.get("/api/scenarios", headers=headers).json()
     return next(row["id"] for row in rows if row["kind"] == kind)
+
+
+def test_question_generation_failure_has_same_trace_model_detail(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    headers = _user(client, db, "generatefail")
+    _configure(client, headers)
+    monkeypatch.setattr(
+        "app.services.scenario_generation_service.chat_json",
+        lambda **_kwargs: SimpleNamespace(
+            ok=False, payload={}, detail="上游不可用", status_code=502, latency_ms=8,
+        ),
+    )
+    response = client.post(
+        "/api/scenarios/generate-questions", headers=headers,
+        json={"kind": "judge", "name": "自定义场景"},
+    )
+    assert response.status_code == 502
+    logs = client.get(
+        "/api/logs", headers=headers,
+        params={"trace_id": response.headers["x-trace-id"]},
+    ).json()["items"]
+    assert any(item["source"] == "用户" and item["level"] == "error" for item in logs)
+    assert any(item["source"] == "LLM" and item["level"] == "error" for item in logs)
 
 
 class _Response:

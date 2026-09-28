@@ -21,6 +21,7 @@ from ..scenarios.persona_questions import (
 )
 from .analyze_service import RECENT_MESSAGE_LIMIT, AnalyzeService
 from .image_service import image_context_contents
+from .model_log import record_model_call
 from .provider_service import ProviderService
 from .scenario_service import kind_of, strip_meta
 
@@ -77,6 +78,7 @@ class PersonaService:
         subject: str,
         self_report: dict | None = None,
         context: str | None = None,
+        trace_id: str = "",
     ) -> dict:
         if subject not in {"me", "other"}:
             raise DomainError(DomainErrorCode.VALIDATION_FAILED, "对象只能是我或对方", status_code=422)
@@ -101,13 +103,20 @@ class PersonaService:
             raise DomainError(DomainErrorCode.VALIDATION_FAILED, "请先完成自评", status_code=422)
 
         jev = _analyze._require_provider(db, owner_user_id=owner_user_id, kind="jev")
-        state = self._state(db, owner_user_id, conversation, rows, self_report)
+        state = self._state(db, owner_user_id, conversation, rows, self_report, trace_id)
+        questions = custom_questions or persona_questions_for(kind, subject)
         result = jev_client.call_with_fallback(
             endpoint_url=jev.endpoint_url,
             api_key=_providers.decrypt_key(jev),
             model=jev.model,
             state=state,
-            questions=custom_questions or persona_questions_for(kind, subject),
+            questions=questions,
+        )
+        record_model_call(
+            db, owner_user_id=owner_user_id, trace_id=trace_id,
+            kind="jev", phase="persona", provider=jev, result=result,
+            request={"state": state, "questions": questions},
+            response=result.answers, ok=result.ok,
         )
         if not result.ok:
             raise DomainError(DomainErrorCode.JEV_UPSTREAM_ERROR, "建模未完成，请重试。", status_code=502)
@@ -171,7 +180,7 @@ class PersonaService:
             return None
         return raw
 
-    def _state(self, db, owner_user_id, conversation, rows, self_report) -> dict:
+    def _state(self, db, owner_user_id, conversation, rows, self_report, trace_id: str) -> dict:
         llm = _analyze._require_provider(db, owner_user_id=owner_user_id, kind="llm")
         # 附件图片读成英文描述（多模态），与正文一起走注释翻译
         contents = image_context_contents(
@@ -180,6 +189,7 @@ class PersonaService:
             api_key=_providers.decrypt_key(llm),
             rows=rows,
             owner_user_id=owner_user_id,
+            trace_id=trace_id,
         )
         annotated, translated = annotate(
             endpoint_url=llm.endpoint_url,
@@ -188,6 +198,13 @@ class PersonaService:
             protocol=llm.protocol,
             lines=[(str(row.seq), text) for row, text in zip(rows, contents)],
         )
+        if translated is not None:
+            record_model_call(
+                db, owner_user_id=owner_user_id, trace_id=trace_id,
+                kind="llm", phase="translate", provider=llm, result=translated,
+                request={"conversation_id": conversation.id},
+                response=translated.payload, ok=translated.ok,
+            )
         if translated is not None and not translated.ok:
             raise DomainError(DomainErrorCode.LLM_UPSTREAM_ERROR, "内容转换失败，请重试。", status_code=502)
         return {

@@ -131,6 +131,11 @@ def test_low_confidence_does_not_overwrite(
     assert first.status_code == 200, first.text
     assert first.json()["kept"] is False
     assert first.json()["traits"][0]["title"]
+    first_logs = client.get(
+        "/api/logs", headers=headers,
+        params={"trace_id": first.headers["x-trace-id"]},
+    ).json()["items"]
+    assert {item["source"] for item in first_logs} >= {"用户", "JEV"}
     monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: _Router(sufficient=0.1, confidence=0.2))
     # 共享客户端是进程级单例，换假上游前要先丢弃，否则第二次仍走上一个替身
     reset_client()

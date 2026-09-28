@@ -6,21 +6,20 @@ export function getLogStats(): Promise<{ judgment_count: number }> {
 }
 
 export type LogLevel = 'info' | 'warn' | 'error'
+export type LogCategory = 'auth' | 'chat' | 'decision' | 'persona' | 'scenario' | 'admin' | 'settings' | 'model'
 
 export interface LogItem {
   id: number
   trace_id: string
-  kind: 'jev' | 'llm'
+  category: LogCategory
+  source: string
   level: LogLevel
-  phase: string
-  model: string
+  summary: string
+  detail: string
   status_code: number | null
   latency_ms: number
-  error: string
-  truncated: boolean
+  error_code: string
   created_at: string
-  request: unknown
-  response: unknown
 }
 
 export interface LogLine {
@@ -33,8 +32,7 @@ export function listLogs(params: {
   limit?: number
   offset?: number
   level?: LogLevel | ''
-  kind?: 'jev' | 'llm' | ''
-  phase?: string
+  category?: LogCategory | ''
   trace_id?: string
   start_time?: string
   end_time?: string
@@ -43,8 +41,7 @@ export function listLogs(params: {
   if (params.limit) search.set('limit', String(params.limit))
   if (params.offset) search.set('offset', String(params.offset))
   if (params.level) search.set('level', params.level)
-  if (params.kind) search.set('kind', params.kind)
-  if (params.phase) search.set('phase', params.phase)
+  if (params.category) search.set('category', params.category)
   if (params.start_time) search.set('start_time', params.start_time)
   if (params.end_time) search.set('end_time', params.end_time)
   if (params.trace_id) search.set('trace_id', params.trace_id)

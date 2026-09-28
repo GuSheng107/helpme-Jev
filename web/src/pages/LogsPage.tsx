@@ -1,33 +1,40 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { ApiError } from '../api/client'
-import { listLogs, type LogItem, type LogLevel } from '../api/logs'
+import { listLogs, type LogCategory, type LogItem, type LogLevel } from '../api/logs'
 import Button from '../components/Button'
 import { EmptyState, Notice, PageHeader, PageShell, StatusTag } from '../components/layout'
 import LogDetail from './LogDetail'
 import { formatLocalTime } from '../utils/datetime'
-import { KIND_LABELS, levelLabel, levelTone, PHASE_LABELS } from './logPresentation'
+import { CATEGORY_LABELS, levelLabel, levelTone } from './logPresentation'
 
 const PAGE_SIZES = [20, 50, 100]
 const CONTROL_CLASS = 'h-9 w-full rounded-[6px] border border-border bg-surface px-3 text-[14px] text-ink outline-none focus:border-primary'
 
 type LevelFilter = '' | LogLevel
-type KindFilter = '' | 'jev' | 'llm'
+type CategoryFilter = '' | LogCategory
 
 interface Filters {
   level: LevelFilter
-  kind: KindFilter
+  category: CategoryFilter
   traceId: string
+  startTime: string
+  endTime: string
 }
 
 const EMPTY_FILTERS: Filters = {
   level: '',
-  kind: '',
+  category: '',
   traceId: '',
+  startTime: '',
+  endTime: '',
 }
 
-function summary(item: LogItem): string {
-  if (item.error) return item.error
-  return item.model || (item.status_code ? `HTTP ${item.status_code}` : '调用完成')
+function toStartTime(value: string): string | undefined {
+  return value ? new Date(value).toISOString() : undefined
+}
+
+function toEndTime(value: string): string | undefined {
+  return value ? new Date(`${value}:59.999`).toISOString() : undefined
 }
 
 export default function LogsPage() {
@@ -52,8 +59,10 @@ export default function LogsPage() {
       limit: pageSize,
       offset: (page - 1) * pageSize,
       level: filters.level || undefined,
-      kind: filters.kind || undefined,
+      category: filters.category || undefined,
       trace_id: filters.traceId || undefined,
+      start_time: toStartTime(filters.startTime),
+      end_time: toEndTime(filters.endTime),
     }).then(
       (result) => {
         if (cancelled) return
@@ -110,7 +119,7 @@ export default function LogsPage() {
       <main className="mx-auto max-w-[1480px] px-5 py-6">
         <PageHeader
           title="日志查询"
-          description="按 Trace ID 追踪一次操作中的 JEV / LLM 调用；这里只显示你自己的记录。"
+          description="查询业务操作及同一 Trace ID 下的模型调用；这里只显示你自己的记录。"
           actions={<Button size="sm" onClick={() => setReload((value) => value + 1)}>刷新</Button>}
         />
         {error && <div className="mb-3"><Notice tone="danger">{error}</Notice></div>}
@@ -127,11 +136,18 @@ export default function LogsPage() {
             </label>
             <label className="block w-full sm:w-44">
               <span className="mb-1 block text-[13px] font-medium text-ink-secondary">类型</span>
-              <select className={CONTROL_CLASS} value={draft.kind} onChange={(event) => setDraft({ ...draft, kind: event.target.value as KindFilter })}>
+              <select className={CONTROL_CLASS} value={draft.category} onChange={(event) => setDraft({ ...draft, category: event.target.value as CategoryFilter })}>
                 <option value="">全部类型</option>
-                <option value="jev">JEV</option>
-                <option value="llm">LLM</option>
+                {Object.entries(CATEGORY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
+            </label>
+            <label className="block w-full sm:w-48">
+              <span className="mb-1 block text-[13px] font-medium text-ink-secondary">开始时间</span>
+              <input type="datetime-local" className={CONTROL_CLASS} value={draft.startTime} onChange={(event) => setDraft({ ...draft, startTime: event.target.value })} />
+            </label>
+            <label className="block w-full sm:w-48">
+              <span className="mb-1 block text-[13px] font-medium text-ink-secondary">结束时间</span>
+              <input type="datetime-local" className={CONTROL_CLASS} value={draft.endTime} onChange={(event) => setDraft({ ...draft, endTime: event.target.value })} />
             </label>
             <label className="block min-w-[240px] flex-1">
               <span className="mb-1 block text-[13px] font-medium text-ink-secondary">Trace ID</span>
@@ -146,7 +162,7 @@ export default function LogsPage() {
 
         <section className="overflow-hidden rounded-[8px] border border-border bg-surface shadow-[0_1px_3px_rgb(0_0_0/0.06)]" aria-busy={loading}>
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border-subtle px-4 py-3">
-            <h2 className="text-[15px] font-semibold text-ink">调用记录</h2>
+            <h2 className="text-[15px] font-semibold text-ink">活动记录</h2>
             <span className="text-[12px] text-ink-muted">共 {total} 条 · 当前 {firstRow}–{lastRow} 条</span>
           </div>
           <div className="overflow-x-auto">
@@ -156,10 +172,10 @@ export default function LogsPage() {
                   <th className="w-16 px-4 py-3 text-center font-medium">行号</th>
                   <th className="w-20 px-4 py-3 font-medium">级别</th>
                   <th className="w-20 px-4 py-3 font-medium">类型</th>
-                  <th className="w-28 px-4 py-3 font-medium">阶段</th>
+                  <th className="w-28 px-4 py-3 font-medium">来源</th>
                   <th className="w-48 px-4 py-3 font-medium">Trace ID</th>
                   <th className="w-44 px-4 py-3 font-medium">时间</th>
-                  <th className="px-4 py-3 font-medium">模型 / 信息</th>
+                  <th className="px-4 py-3 font-medium">摘要</th>
                   <th className="w-24 px-4 py-3 font-medium">耗时</th>
                   <th className="w-24 px-4 py-3 text-right font-medium">操作</th>
                 </tr>
@@ -171,8 +187,8 @@ export default function LogsPage() {
                     <td className="px-4 py-3">
                       <StatusTag tone={levelTone(item.level)}>{levelLabel(item.level)}</StatusTag>
                     </td>
-                    <td className="px-4 py-3"><StatusTag tone="primary">{KIND_LABELS[item.kind]}</StatusTag></td>
-                    <td className="px-4 py-3 text-ink-secondary">{PHASE_LABELS[item.phase] ?? item.phase}</td>
+                    <td className="px-4 py-3"><StatusTag tone="primary">{CATEGORY_LABELS[item.category] ?? item.category}</StatusTag></td>
+                    <td className="px-4 py-3 text-ink-secondary">{item.source}</td>
                     <td className="max-w-[190px] px-4 py-3">
                       {item.trace_id ? (
                         <button type="button" title={`按 ${item.trace_id} 筛选同链路`} className="mono block max-w-full truncate text-left text-[12px] text-primary hover:underline" onClick={() => filterByTrace(item.trace_id)}>
@@ -181,8 +197,8 @@ export default function LogsPage() {
                       ) : <span className="text-ink-muted">—</span>}
                     </td>
                     <td className="whitespace-nowrap px-4 py-3 text-ink-muted" title={formatLocalTime(item.created_at)}>{formatLocalTime(item.created_at)}</td>
-                    <td className="max-w-[250px] px-4 py-3" title={summary(item)}>
-                      <span className={`block truncate ${levelTone(item.level) === 'danger' ? 'text-danger' : levelTone(item.level) === 'warning' ? 'text-warning' : 'text-ink-secondary'}`}>{summary(item)}</span>
+                    <td className="max-w-[250px] px-4 py-3" title={item.summary}>
+                      <span className={`block truncate ${levelTone(item.level) === 'danger' ? 'text-danger' : levelTone(item.level) === 'warning' ? 'text-warning' : 'text-ink-secondary'}`}>{item.summary}</span>
                     </td>
                     <td className="whitespace-nowrap px-4 py-3 text-ink-muted">{item.latency_ms} ms</td>
                     <td className="px-4 py-3 text-right">
@@ -197,8 +213,8 @@ export default function LogsPage() {
                   <tr>
                     <td colSpan={9}>
                       <EmptyState
-                        title={total === 0 && !hasFilters ? '还没有调用记录' : '没有符合条件的日志'}
-                        description="调整筛选条件或刷新页面，查看最近的 JEV / LLM 调用。"
+                        title={total === 0 && !hasFilters ? '还没有活动记录' : '没有符合条件的日志'}
+                        description="调整筛选条件或刷新页面，查看最近的业务操作和模型调用。"
                         action={<Button size="sm" onClick={resetSearch}>清除筛选</Button>}
                       />
                     </td>

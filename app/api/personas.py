@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from sqlalchemy.orm import Session
 
 from ..core.db import get_db
@@ -52,6 +52,7 @@ def get_persona(
 @router.post("/api/personas/build")
 def build_persona(
     payload: PersonaBuildRequest,
+    request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(require_active_user),
 ) -> dict:
@@ -65,6 +66,7 @@ def build_persona(
         subject=payload.subject,
         self_report=payload.self_report,
         context=payload.context,
+        trace_id=getattr(request.state, "trace_id", ""),
     )
 
 

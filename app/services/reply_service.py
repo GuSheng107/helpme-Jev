@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from ..clients import jev_client
 from ..clients.llm_client import chat_json
 from ..clients.translation import annotate
+from ..core.logging import dump_body, pick_level
 from ..domain.errors import DomainError, DomainErrorCode
 from ..repositories.conversations_repo import MessageRepository
 from ..repositories.models import CallLog, Conversation, Scenario
@@ -19,6 +20,7 @@ from ..scenarios.builders import choice
 from ..scenarios.packs import JudgePack
 from ..scenarios.reply_prompts import CUSTOM_REPLY_FORMAT, builtin_draft_prompt
 from .analyze_service import RECENT_MESSAGE_LIMIT, AnalyzeService
+from .model_log import record_model_call
 from .provider_service import ProviderService
 from .scenario_service import effective_prompt, pack_of
 
@@ -121,6 +123,11 @@ class ReplyService:
             ],
         )
         replies = _three(drafted.payload.get("replies") if drafted.ok else None)
+        record_model_call(
+            db, owner_user_id=owner_user_id, trace_id=trace_id, kind="llm",
+            phase="draft", provider=llm, result=drafted, request=payload,
+            response=drafted.payload, ok=bool(drafted.ok and replies),
+        )
         if not drafted.ok or replies is None:
             raise DomainError(DomainErrorCode.LLM_UPSTREAM_ERROR, "候选未生成，请重试。", status_code=502)
 
@@ -131,10 +138,17 @@ class ReplyService:
             protocol=llm.protocol,
             lines=[(str(index), text) for index, text in enumerate(replies)],
         )
+        if translated is not None:
+            record_model_call(
+                db, owner_user_id=owner_user_id, trace_id=trace_id, kind="llm",
+                phase="translate", provider=llm, result=translated,
+                request={"lines": replies}, response=translated.payload, ok=translated.ok,
+            )
         if translated is not None and not translated.ok:
             raise DomainError(DomainErrorCode.LLM_UPSTREAM_ERROR, "候选未能完成排序，请重试。", status_code=502)
 
         ranked = self._rank(
+            db=db, owner_user_id=owner_user_id, trace_id=trace_id,
             jev=jev,
             state=_state(rows, conversation.relationship),
             annotated=[annotated[str(index)] for index in range(3)],
@@ -147,7 +161,6 @@ class ReplyService:
             key=lambda item: item["percent"],
             reverse=True,
         )
-        del trace_id
         return {"candidates": ordered}
 
     def evaluate(
@@ -157,6 +170,7 @@ class ReplyService:
         owner_user_id: int,
         conversation: Conversation,
         text: str,
+        trace_id: str = "",
     ) -> dict:
         rows = _messages.list_by_conversation(
             db, conversation_id=conversation.id, limit=RECENT_MESSAGE_LIMIT
@@ -170,6 +184,12 @@ class ReplyService:
             protocol=llm.protocol,
             lines=[("0", text)],
         )
+        if translated is not None:
+            record_model_call(
+                db, owner_user_id=owner_user_id, trace_id=trace_id, kind="llm",
+                phase="translate", provider=llm, result=translated,
+                request={"text": text}, response=translated.payload, ok=translated.ok,
+            )
         if translated is not None and not translated.ok:
             raise DomainError(DomainErrorCode.LLM_UPSTREAM_ERROR, "评估未完成，请重试。", status_code=502)
         question = {
@@ -190,6 +210,12 @@ class ReplyService:
             state=state,
             questions=question,
         )
+        record_model_call(
+            db, owner_user_id=owner_user_id, trace_id=trace_id, kind="jev",
+            phase="evaluate", provider=jev, result=result,
+            request={"state": state, "questions": question},
+            response=result.answers, ok=result.ok,
+        )
         if not result.ok:
             raise DomainError(DomainErrorCode.JEV_UPSTREAM_ERROR, "评估未完成，请重试。", status_code=502)
         raw = (result.answers.get("fits") or {}).get("noul")
@@ -197,7 +223,10 @@ class ReplyService:
         verdict = "适合发送" if percent >= 60 else "不太适合"
         return {"percent": percent, "verdict": verdict}
 
-    def clarify(self, db: Session, *, owner_user_id: int, conversation: Conversation) -> dict:
+    def clarify(
+        self, db: Session, *, owner_user_id: int, conversation: Conversation,
+        trace_id: str = "",
+    ) -> dict:
         rows = _messages.list_by_conversation(
             db, conversation_id=conversation.id, limit=RECENT_MESSAGE_LIMIT
         )
@@ -219,12 +248,21 @@ class ReplyService:
             ],
         )
         questions = result.payload.get("questions") if result.ok else None
+        record_model_call(
+            db, owner_user_id=owner_user_id, trace_id=trace_id, kind="llm",
+            phase="clarify", provider=llm, result=result,
+            request={"conversation_id": conversation.id}, response=result.payload,
+            ok=isinstance(questions, list),
+        )
         if not isinstance(questions, list):
             raise DomainError(DomainErrorCode.LLM_UPSTREAM_ERROR, "追问未生成，请重试。", status_code=502)
         cleaned = [str(item).strip() for item in questions if str(item).strip()][:3]
         return {"questions": cleaned}
 
-    def explain(self, db: Session, *, owner_user_id: int, conversation: Conversation, decision: dict) -> dict:
+    def explain(
+        self, db: Session, *, owner_user_id: int, conversation: Conversation,
+        decision: dict, trace_id: str = "",
+    ) -> dict:
         rows = _messages.list_by_conversation(
             db, conversation_id=conversation.id, limit=RECENT_MESSAGE_LIMIT
         )
@@ -249,6 +287,12 @@ class ReplyService:
             ],
         )
         reason = str(result.payload.get("reason") or "").strip() if result.ok else ""
+        record_model_call(
+            db, owner_user_id=owner_user_id, trace_id=trace_id, kind="llm",
+            phase="explain", provider=llm, result=result,
+            request={"conversation_id": conversation.id, "decision": decision},
+            response=result.payload, ok=bool(reason),
+        )
         if not reason:
             raise DomainError(DomainErrorCode.LLM_UPSTREAM_ERROR, "说明未生成，请重试。", status_code=502)
         return {"reason": reason}
@@ -257,8 +301,6 @@ class ReplyService:
         self, db: Session, *, owner_user_id: int, text: str, kind: str,
         trace_id: str = "",
     ) -> dict:
-        from ..core.logging import dump_body, pick_level
-
         llm = _analyze._require_provider(db, owner_user_id=owner_user_id, kind="llm")
         prompt = _POLISH_PROMPTS.get(kind, _POLISH_PROMPTS["chat"]) + "\n" + _POLISH_FORMAT
         polished = ""
@@ -317,13 +359,23 @@ class ReplyService:
             )
         return {"text": polished}
 
-    def _rank(self, *, jev, state: dict, annotated: list[str]) -> list[int]:
+    def _rank(
+        self, *, db: Session, owner_user_id: int, trace_id: str,
+        jev, state: dict, annotated: list[str],
+    ) -> list[int]:
+        questions = _rank_question(annotated)
         result = jev_client.call_with_fallback(
             endpoint_url=jev.endpoint_url,
             api_key=_providers.decrypt_key(jev),
             model=jev.model,
             state=state,
-            questions=_rank_question(annotated),
+            questions=questions,
+        )
+        record_model_call(
+            db, owner_user_id=owner_user_id, trace_id=trace_id, kind="jev",
+            phase="rank", provider=jev, result=result,
+            request={"state": state, "questions": questions},
+            response=result.answers, ok=result.ok,
         )
         if not result.ok:
             raise DomainError(DomainErrorCode.JEV_UPSTREAM_ERROR, "排序未完成，请重试。", status_code=502)

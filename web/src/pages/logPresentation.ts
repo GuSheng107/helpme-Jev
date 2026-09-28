@@ -1,16 +1,15 @@
-export const PHASE_LABELS: Record<string, string> = {
-  translate: '翻译',
-  analyze: '判断',
-  describe: '读图',
-  decide: '决策',
-  connect: '连通测试',
-  vision: '看图测试',
-  reflect: '记忆整理',
-  summarize: '摘要',
-  polish: '润色',
-}
+import type { LogCategory } from '../api/logs'
 
-export const KIND_LABELS = { jev: 'JEV', llm: 'LLM' } as const
+export const CATEGORY_LABELS: Record<LogCategory, string> = {
+  auth: '登录与认证',
+  chat: '聊天',
+  decision: '决策',
+  persona: '人设与导入',
+  scenario: '场景',
+  admin: '管理',
+  settings: '设置',
+  model: '模型',
+}
 
 type LevelTone = 'success' | 'primary' | 'warning' | 'danger' | 'info'
 
