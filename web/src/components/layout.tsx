@@ -9,8 +9,8 @@ export function PageShell({ children }: { children: ReactNode }) {
 }
 
 /** 主内容区：最大宽度不强制锁死，默认内边距 20px。 */
-export function PageBody({ children }: { children: ReactNode }) {
-  return <main className="mx-auto max-w-5xl px-5 py-6">{children}</main>
+export function PageBody({ children, className = '' }: { children: ReactNode; className?: string }) {
+  return <main className={`mx-auto max-w-5xl px-5 py-6 ${className}`}>{children}</main>
 }
 
 /** 页面标题区：标题 20/28 600；说明 13/20；右侧放主要操作。 */
@@ -49,7 +49,7 @@ export function DataCard({
   bodyClassName?: string
 }) {
   return (
-    <section className={'rounded-[8px] border border-border bg-surface shadow-[0_1px_3px_rgb(0_0_0/0.06)] ' + className}>
+    <section className={'overflow-hidden rounded-[8px] border border-border bg-surface shadow-[0_1px_3px_rgb(0_0_0/0.06)] ' + className}>
       {(title || actions) && (
         <header className="flex items-center justify-between border-b border-border-subtle px-4 py-3">
           {title && <h2 className="text-[16px] font-semibold leading-6 text-ink">{title}</h2>}

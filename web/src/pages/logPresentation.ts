@@ -1,10 +1,10 @@
 import type { LogCategory } from '../api/logs'
 
 export const CATEGORY_LABELS: Record<LogCategory, string> = {
-  auth: '登录与认证',
+  auth: '登录',
   chat: '聊天',
   decision: '决策',
-  persona: '人设与导入',
+  persona: '人设',
   scenario: '场景',
   admin: '管理',
   settings: '设置',
