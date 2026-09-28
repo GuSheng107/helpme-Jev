@@ -7,6 +7,7 @@ import {
 import Button from '../components/Button'
 import { confirmAction } from '../components/confirm'
 import { DataCard, Notice, PageBody, PageHeader, PageShell } from '../components/layout'
+import Modal from '../components/Modal'
 import StageLoader, { type LoaderStep } from '../components/StageLoader'
 import { formatLocalTime } from '../utils/datetime'
 
@@ -15,7 +16,7 @@ const TYPE_LABELS: Record<QuestionType, string> = {
   choice: '选择题',
   score: '评分题',
 }
-const PAGE_SIZE = 20
+const PAGE_SIZES = [20, 50, 100]
 // 完成态只停留一瞬间，让「翻译完成」能被看见，随即切到下一步。
 const DONE_HOLD_MS = 280
 
@@ -50,10 +51,11 @@ export default function DecisionPage() {
   const [historyTotal, setHistoryTotal] = useState(0)
   const [historyRetention, setHistoryRetention] = useState(15)
   const [historyPage, setHistoryPage] = useState(0)
+  const [historyPageSize, setHistoryPageSize] = useState(20)
   const [historyLoading, setHistoryLoading] = useState(false)
-  const [historyDirection, setHistoryDirection] = useState<'prev' | 'next' | null>(null)
+  const [historyPaging, setHistoryPaging] = useState<number | null>(null)
   const [historyError, setHistoryError] = useState('')
-  const [selectedHistory, setSelectedHistory] = useState<DecisionHistoryItem | null>(null)
+  const [historyDetail, setHistoryDetail] = useState<DecisionHistoryItem | null>(null)
   const [plan, setPlan] = useState<LoaderKey[]>([])
   const [progress, setProgress] = useState(0)
   const questionRef = useRef<HTMLTextAreaElement>(null)
@@ -77,12 +79,12 @@ export default function DecisionPage() {
     state: index < progress ? 'done' : index === progress ? 'running' : 'pending',
   }))
 
-  const loadHistory = useCallback(async (page: number) => {
+  const loadHistory = useCallback(async (page: number, size: number) => {
     setHistoryLoading(true)
     setHistory([])
     setHistoryError('')
     try {
-      const data = await listDecisionHistory(PAGE_SIZE, page * PAGE_SIZE)
+      const data = await listDecisionHistory(size, page * size)
       setHistory(data.items)
       setHistoryTotal(data.total)
       setHistoryRetention(data.retention_days)
@@ -90,10 +92,24 @@ export default function DecisionPage() {
       setHistoryError(err instanceof ApiError ? err.message : '历史任务未能载入')
     } finally {
       setHistoryLoading(false)
-      setHistoryDirection(null)
+      setHistoryPaging(null)
     }
   }, [])
-  useEffect(() => { void loadHistory(historyPage) }, [historyPage, loadHistory])
+  useEffect(() => { void loadHistory(historyPage, historyPageSize) }, [historyPage, historyPageSize, loadHistory])
+
+  function changeHistoryPage(next: number) {
+    if (historyLoading || next === historyPage || next < 0) return
+    setHistoryPaging(next)
+    setHistoryPage(next)
+    setHistoryDetail(null)
+  }
+
+  function changeHistoryPageSize(size: number) {
+    if (historyLoading || size === historyPageSize) return
+    setHistoryPaging(0)
+    setHistoryPageSize(size)
+    setHistoryPage(0)
+  }
 
   async function removeOption(index: number) {
     if (busy || !await confirmAction({
@@ -140,7 +156,7 @@ export default function DecisionPage() {
       setDeciding(false)
       setPlan([])
       setProgress(0)
-      if (historyPage === 0) void loadHistory(0)
+      if (historyPage === 0) void loadHistory(0, historyPageSize)
       else setHistoryPage(0)
     }
   }
@@ -256,7 +272,7 @@ export default function DecisionPage() {
             ) : <p className="py-3 text-[13px] text-ink-muted">当前没有结果</p>}
           </DataCard>
           <DataCard title="历史任务">
-            {selectedHistory ? <HistoryDetail item={selectedHistory} onClose={() => setSelectedHistory(null)} /> : <>
+            {historyDetail ? <HistoryDetail item={historyDetail} /> : <>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-[12px] text-ink-muted">
               <span>仅保留近 {historyRetention} 天的决策记录</span>
               <span>共 {historyTotal} 条</span>
@@ -266,24 +282,36 @@ export default function DecisionPage() {
               : history.length === 0 ? <p className="py-4 text-center text-[13px] text-ink-muted">近 {historyRetention} 天没有决策任务</p>
                 : <ul className="divide-y divide-border-subtle">
                   {history.map((item) => (
-                    <li key={item.id}>
-                      <button type="button" disabled={deciding} onClick={() => setSelectedHistory(item)}
-                        className="flex w-full flex-col gap-1 py-3 text-left hover:bg-surface-muted disabled:opacity-60 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
-                        <span className="min-w-0 truncate text-[13px] font-medium text-ink">{item.question || '旧日志未记录原题'}</span>
-                        <span className="flex shrink-0 flex-wrap items-center gap-2 text-[12px] text-ink-muted">
+                    <li key={item.id} className="flex items-center justify-between gap-3 py-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-[13px] font-medium text-ink" title={item.question || undefined}>{item.question || '旧日志未记录原题'}</p>
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-ink-muted">
                           <span>{item.question_type in TYPE_LABELS ? TYPE_LABELS[item.question_type as QuestionType] : '题型未记录'}</span>
                           <span className={item.status === 'success' ? 'text-success' : 'text-danger'}>{item.status === 'success' ? '完成' : '失败'}</span>
                           <time>{formatLocalTime(item.created_at)}</time>
-                        </span>
-                      </button>
+                        </div>
+                      </div>
+                      <button type="button" className="shrink-0 whitespace-nowrap text-[13px] text-primary hover:underline"
+                        onClick={() => setHistoryDetail(item)}>查看详情</button>
                     </li>
                   ))}
                 </ul>}
-            <div className="mt-3 flex items-center justify-end gap-2 border-t border-border-subtle pt-3">
-                <Button size="sm" loading={historyDirection === 'prev'} disabled={historyPage === 0 || historyLoading || deciding} disabledReason={historyLoading ? '正在载入' : '已经是第一页'} onClick={() => { setHistoryDirection('prev'); setHistoryPage((page) => page - 1) }}>上一页</Button>
-                <span className="text-[12px] text-ink-muted">{historyPage + 1} / {Math.max(1, Math.ceil(historyTotal / PAGE_SIZE))}</span>
-                <Button size="sm" loading={historyDirection === 'next'} disabled={(historyPage + 1) * PAGE_SIZE >= historyTotal || historyLoading || deciding} disabledReason={historyLoading ? '正在载入' : '已经是最后一页'} onClick={() => { setHistoryDirection('next'); setHistoryPage((page) => page + 1) }}>下一页</Button>
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border-subtle pt-3">
+              <label className="flex items-center gap-2 text-[12px] text-ink-secondary">
+                每页
+                <select className="h-8 rounded-[6px] border border-border bg-surface px-2 text-[13px]" disabled={historyLoading}
+                  value={historyPageSize} onChange={(event) => changeHistoryPageSize(Number(event.target.value))}>
+                  {PAGE_SIZES.map((size) => <option key={size} value={size}>{size} 条</option>)}
+                </select>
+              </label>
+              <div className="flex items-center gap-1">
+                <Button size="sm" loading={historyPaging === 0} disabled={historyLoading || historyPage === 0 || deciding} disabledReason={historyLoading ? '正在载入' : '已经是第一页'} onClick={() => changeHistoryPage(0)}>首页</Button>
+                <Button size="sm" loading={historyPaging === historyPage - 1} disabled={historyLoading || historyPage === 0 || deciding} disabledReason={historyLoading ? '正在载入' : '已经是第一页'} onClick={() => changeHistoryPage(historyPage - 1)}>上一页</Button>
+                <span className="min-w-14 px-1 text-center text-[12px] text-ink-secondary">{historyPage + 1} / {Math.max(1, Math.ceil(historyTotal / historyPageSize))}</span>
+                <Button size="sm" loading={historyPaging === historyPage + 1} disabled={historyLoading || (historyPage + 1) * historyPageSize >= historyTotal || deciding} disabledReason={historyLoading ? '正在载入' : '已经是最后一页'} onClick={() => changeHistoryPage(historyPage + 1)}>下一页</Button>
+                <Button size="sm" loading={historyPaging === Math.max(0, Math.ceil(historyTotal / historyPageSize) - 1)} disabled={historyLoading || (historyPage + 1) * historyPageSize >= historyTotal || deciding} disabledReason={historyLoading ? '正在载入' : '已经是最后一页'} onClick={() => changeHistoryPage(Math.max(0, Math.ceil(historyTotal / historyPageSize) - 1))}>末页</Button>
               </div>
+            </div>
             </>}
           </DataCard>
           </div>
@@ -296,18 +324,29 @@ export default function DecisionPage() {
             </div>
           )}
         </div>
+        {historyDetail && (
+          <Modal size="md" scroll="hidden" onClose={() => setHistoryDetail(null)} labelledBy="history-detail-title" className="flex flex-col">
+            <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border-subtle px-4 py-3 sm:px-5">
+              <h2 id="history-detail-title" className="min-w-0 truncate text-[17px] font-semibold text-ink">历史任务详情</h2>
+              <Button size="sm" variant="text" onClick={() => setHistoryDetail(null)} aria-label="关闭历史任务详情">关闭</Button>
+            </header>
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5">
+              <HistoryDetail item={historyDetail} />
+            </div>
+            <footer className="flex shrink-0 justify-end border-t border-border-subtle px-4 py-3 sm:px-5">
+              <Button size="sm" onClick={() => setHistoryDetail(null)}>关闭</Button>
+            </footer>
+          </Modal>
+        )}
       </PageBody>
     </PageShell>
   )
 }
 
-function HistoryDetail({ item, onClose }: { item: DecisionHistoryItem; onClose: () => void }) {
+function HistoryDetail({ item }: { item: DecisionHistoryItem }) {
   return (
-    <div className="min-h-0 flex-1 space-y-4 overflow-y-auto">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-[12px] text-ink-muted">{formatLocalTime(item.created_at)} · {item.question_type in TYPE_LABELS ? TYPE_LABELS[item.question_type as QuestionType] : '题型未记录'}</p>
-        <Button size="sm" variant="text" onClick={onClose}>返回列表</Button>
-      </div>
+    <div className="space-y-4">
+      <p className="text-[12px] text-ink-muted">{formatLocalTime(item.created_at)} · {item.question_type in TYPE_LABELS ? TYPE_LABELS[item.question_type as QuestionType] : '题型未记录'}</p>
       <div>
         <p className="mb-1 text-[12px] text-ink-muted">题目</p>
         <p className="whitespace-pre-wrap break-words text-[14px] text-ink">{item.question || '旧日志未记录原题'}</p>
