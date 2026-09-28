@@ -1,4 +1,4 @@
-"""场景接口：查看内置配置，管理个人场景与生成题集。"""
+"""场景接口：查看内置配置，管理个人与系统级场景，生成题集与回复提示词。"""
 
 from __future__ import annotations
 
@@ -12,11 +12,12 @@ from sqlalchemy.orm import Session
 
 from ..core.db import get_db
 from ..domain.errors import DomainError, DomainErrorCode
+from ..domain.enums import UserRole
 from ..domain.schemas.auth import StrictModel
 from ..repositories.models import Scenario, User
 from ..scenarios.packs import pack_for
 from ..scenarios.reply_prompts import DEFAULT_CUSTOM_DRAFT_PROMPT
-from ..services.scenario_generation_service import generate_question_set
+from ..services.scenario_generation_service import generate_question_set, generate_reply_prompt
 from ..services.scenario_service import (
     effective_prompt,
     validate_persona_questions,
@@ -51,6 +52,12 @@ class ScenarioGenerate(StrictModel):
     requirements: str = Field(default="", max_length=2000)
 
 
+class ScenarioGeneratePrompt(StrictModel):
+    name: str = Field(min_length=1, max_length=64)
+    description: str = Field(default="", max_length=500)
+    requirements: str = Field(default="", max_length=2000)
+
+
 @router.get("")
 def list_scenarios(
     db: Session = Depends(get_db),
@@ -75,6 +82,24 @@ def generate_questions(
         db,
         owner_user_id=user.id,
         kind=payload.kind,
+        name=payload.name.strip(),
+        description=payload.description.strip(),
+        requirements=payload.requirements.strip(),
+        trace_id=getattr(request.state, "trace_id", ""),
+    )}
+
+
+@router.post("/generate-prompt")
+def generate_prompt(
+    payload: ScenarioGeneratePrompt,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_active_user),
+) -> dict:
+    """用当前用户已启用的表达模型起草回复提示词（语气与规则）。"""
+    return {"prompt": generate_reply_prompt(
+        db,
+        owner_user_id=user.id,
         name=payload.name.strip(),
         description=payload.description.strip(),
         requirements=payload.requirements.strip(),
@@ -121,7 +146,8 @@ def create_scenario(
         else f"复制自「{base.name}」" if base else ""
     )
     row = Scenario(
-        owner_user_id=user.id,
+        # 管理员新建的场景即系统级场景：所有人可见，仅管理员可维护
+        owner_user_id=None if user.role == UserRole.ADMIN.value else user.id,
         slug=f"custom-{uuid4().hex[:12]}",
         name=payload.name.strip(),
         kind="custom",
@@ -190,6 +216,7 @@ def _view(row: Scenario) -> dict:
         "kind": row.kind,
         "description": row.description,
         "is_builtin": row.is_builtin,
+        "is_system": row.owner_user_id is None,
         "system_prompt": effective_prompt(row),
         "judge_questions": judge,
         "persona_questions": row.persona_questions,
@@ -224,9 +251,12 @@ def _own_or_404(db: Session, user: User, scenario_id: int) -> Scenario:
     row = db.get(Scenario, scenario_id)
     if row is None or row.is_builtin:
         raise DomainError(DomainErrorCode.NOT_FOUND, "场景不存在或不可修改", status_code=404)
-    if row.owner_user_id != user.id:
-        raise DomainError(DomainErrorCode.NOT_FOUND, "场景不存在或不可修改", status_code=404)
-    return row
+    if row.owner_user_id == user.id:
+        return row
+    # 系统级自定义场景：仅管理员可维护
+    if row.owner_user_id is None and user.role == UserRole.ADMIN.value:
+        return row
+    raise DomainError(DomainErrorCode.NOT_FOUND, "场景不存在或不可修改", status_code=404)
 
 
 def _enriched(key: str, question: dict, pack) -> dict:

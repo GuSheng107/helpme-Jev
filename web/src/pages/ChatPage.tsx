@@ -359,14 +359,14 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                     setScenarioId(event.target.value === '' ? null : Number(event.target.value))
                   }
                 >
-                  <optgroup label="系统内置">
-                    {scenarios.filter((item) => item.is_builtin).map((item) => (
+                  <optgroup label="系统场景">
+                    {scenarios.filter((item) => item.is_builtin || item.is_system).map((item) => (
                       <option key={item.id} value={item.id}>{item.name}</option>
                     ))}
                   </optgroup>
-                  {scenarios.some((item) => !item.is_builtin) && (
+                  {scenarios.some((item) => !item.is_builtin && !item.is_system) && (
                     <optgroup label="我的场景">
-                      {scenarios.filter((item) => !item.is_builtin).map((item) => (
+                      {scenarios.filter((item) => !item.is_builtin && !item.is_system).map((item) => (
                         <option key={item.id} value={item.id}>{item.name}</option>
                       ))}
                     </optgroup>

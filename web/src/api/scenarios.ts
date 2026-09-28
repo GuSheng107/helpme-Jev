@@ -38,6 +38,14 @@ export function generateScenarioQuestions(body: {
   return api.post<{ questions: string }>('/api/scenarios/generate-questions', body)
 }
 
+export function generateScenarioPrompt(body: {
+  name: string
+  description: string
+  requirements: string
+}) {
+  return api.post<{ prompt: string }>('/api/scenarios/generate-prompt', body)
+}
+
 export function deleteScenario(id: number) {
   return api.delete<void>(`/api/scenarios/${id}`)
 }

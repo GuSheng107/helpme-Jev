@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ApiError } from '../api/client'
+import { type UserSummary } from '../api/auth'
 import { deleteScenario, listAllScenarios, type CustomScenario } from '../api/scenarios'
 import Button from '../components/Button'
 import { confirmAction } from '../components/confirm'
@@ -16,7 +17,8 @@ const viewTabs: { key: ViewTab; label: string }[] = [
   { key: 'persona', label: '人设题集' },
 ]
 
-export default function ScenarioPage() {
+export default function ScenarioPage({ user }: { user: UserSummary }) {
+  const isAdmin = user.role === 'admin'
   const [rows, setRows] = useState<CustomScenario[]>([])
   const [loading, setLoading] = useState(true)
   const [editor, setEditor] = useState<EditorTarget | null>(null)
@@ -61,7 +63,8 @@ export default function ScenarioPage() {
   }
 
   const builtins = rows.filter((row) => row.is_builtin)
-  const customs = rows.filter((row) => !row.is_builtin)
+  const systemLevel = rows.filter((row) => !row.is_builtin && row.is_system)
+  const mine = rows.filter((row) => !row.is_builtin && !row.is_system)
   const openEditor = (target: EditorTarget) => { setEditor(target); setNotice('') }
 
   return (
@@ -69,7 +72,9 @@ export default function ScenarioPage() {
       <PageBody>
         <PageHeader
           title="场景"
-          description="查看系统内置场景，或创建自己的场景。"
+          description={isAdmin
+            ? '查看系统场景；你新建的场景将发布为系统级，所有用户可见。'
+            : '查看系统场景，或创建自己的场景。'}
           actions={<Button size="sm" variant="primary" onClick={() => openEditor({ mode: 'new' })}>新建场景</Button>}
         />
         {error && <div className="mb-3"><Notice tone="danger">{error}</Notice></div>}
@@ -77,14 +82,22 @@ export default function ScenarioPage() {
         <div className="space-y-4">
           <ScenarioGroup title="系统内置" rows={builtins} loading={loading} empty="还没有内置场景"
             onView={setView} onCopy={(row) => openEditor({ mode: 'copy', source: row })} />
-          <ScenarioGroup title="我的场景" rows={customs} loading={loading} empty="还没有场景，可以新建或复制一个系统内置场景"
+          <ScenarioGroup title="系统级场景" rows={systemLevel} loading={loading}
+            empty={isAdmin ? '还没有系统级场景，新建场景将发布到这里' : '暂无系统级场景'}
+            onView={setView} onCopy={(row) => openEditor({ mode: 'copy', source: row })}
+            onEdit={isAdmin ? (row) => openEditor({ mode: 'edit', source: row }) : undefined}
+            onDelete={isAdmin ? (row) => void remove(row) : undefined}
+            deletingId={deletingId} />
+          <ScenarioGroup title="我的场景" rows={mine} loading={loading} empty="还没有场景，可以新建或复制一个系统场景"
             onView={setView} onCopy={(row) => openEditor({ mode: 'copy', source: row })}
             onEdit={(row) => openEditor({ mode: 'edit', source: row })}
             onDelete={(row) => void remove(row)} deletingId={deletingId} />
         </div>
         {view && <ScenarioView key={view.id} row={view} onClose={() => setView(null)}
           onCopy={() => { setView(null); openEditor({ mode: 'copy', source: view }) }}
-          onEdit={!view.is_builtin ? () => { setView(null); openEditor({ mode: 'edit', source: view }) } : undefined} />}
+          onEdit={!view.is_builtin && (!view.is_system || isAdmin)
+            ? () => { setView(null); openEditor({ mode: 'edit', source: view }) }
+            : undefined} />}
         {editor && <ScenarioEditor key={`${editor.mode}-${editor.source?.id ?? 'blank'}`}
           mode={editor.mode} source={editor.source} onCancel={() => setEditor(null)}
           onSaved={(message) => { setEditor(null); setNotice(message); void reload() }} />}

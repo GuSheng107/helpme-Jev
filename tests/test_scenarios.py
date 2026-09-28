@@ -408,3 +408,126 @@ def test_panel_titles_do_not_hardcode_gender() -> None:
     from app.scenarios.questions_romance import QUESTION_TITLES
 
     assert QUESTION_TITLES["she_needs"] == "对方需要什么"
+
+
+# ------------------------------------------------------------------ 系统级场景
+def _admin_headers(client: TestClient, db: Session) -> dict[str, str]:
+    from tests.test_auth_flow import _activate_admin
+
+    token = _activate_admin(client, db)
+    return {"Authorization": f"Bearer {token}"}
+
+
+_MIN_JUDGE = json.dumps({
+    "risk_level": {
+        "type": "score",
+        "instructions": "Rate the risk of the latest exchange.",
+        "criteria": ["low", "medium", "high"],
+    },
+}, ensure_ascii=False)
+_MIN_PERSONA = json.dumps({
+    "evidence_sufficient": {
+        "type": "noul",
+        "instructions": "True when the conversation has enough evidence.",
+        "criteria": {"true": "Enough evidence.", "false": "Not enough."},
+    },
+    "communication_style": {
+        "type": "choice",
+        "instructions": "How does the other person communicate?",
+        "criteria": {"direct": "Straight to the point.", "tactful": "Indirect."},
+    },
+}, ensure_ascii=False)
+
+
+def test_admin_created_scenario_is_system_level(
+    client: TestClient, db: Session
+) -> None:
+    """管理员新建的场景即系统级：所有人可见，普通用户只读，管理员可维护。"""
+    admin = _admin_headers(client, db)
+    user = _user(client, db, "scenreader")
+
+    created = client.post(
+        "/api/scenarios", headers=admin,
+        json={
+            "name": "客服对话",
+            "description": "系统级客服场景",
+            "judge_questions": _MIN_JUDGE,
+            "persona_questions": _MIN_PERSONA,
+        },
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["is_system"] is True
+
+    # 普通用户可见、可复制，但不能改删
+    rows = client.get("/api/scenarios", headers=user).json()
+    assert any(row["id"] == body["id"] for row in rows)
+    denied_patch = client.patch(
+        f"/api/scenarios/{body['id']}", headers=user, json={"name": "改名"},
+    )
+    assert denied_patch.status_code == 404, denied_patch.text
+    denied_delete = client.delete(f"/api/scenarios/{body['id']}", headers=user)
+    assert denied_delete.status_code == 404, denied_delete.text
+
+    # 管理员可改可删
+    patched = client.patch(
+        f"/api/scenarios/{body['id']}", headers=admin, json={"description": "已修订"},
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["description"] == "已修订"
+    assert client.delete(f"/api/scenarios/{body['id']}", headers=admin).status_code == 204
+
+
+def test_user_created_scenario_stays_personal(
+    client: TestClient, db: Session
+) -> None:
+    headers = _user(client, db, "scenowner")
+    created = client.post(
+        "/api/scenarios", headers=headers,
+        json={
+            "name": "我的场景",
+            "judge_questions": _MIN_JUDGE,
+            "persona_questions": _MIN_PERSONA,
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["is_system"] is False
+
+
+# ------------------------------------------------------------------ 提示词生成
+def test_generate_prompt_success_and_failure(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    headers = _user(client, db, "promptgen")
+    _configure(client, headers)
+    monkeypatch.setattr(
+        "app.services.scenario_generation_service.chat_json",
+        lambda **_kwargs: SimpleNamespace(
+            ok=True, payload={"prompt": "Sound like a patient support agent."},
+            status_code=200, latency_ms=5,
+        ),
+    )
+    ok = client.post(
+        "/api/scenarios/generate-prompt", headers=headers,
+        json={"name": "客服", "requirements": "亲切但不油腻"},
+    )
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["prompt"] == "Sound like a patient support agent."
+
+    monkeypatch.setattr(
+        "app.services.scenario_generation_service.chat_json",
+        lambda **_kwargs: SimpleNamespace(
+            ok=True, payload={}, status_code=200, latency_ms=5,
+        ),
+    )
+    empty = client.post("/api/scenarios/generate-prompt", headers=headers, json={"name": "客服"})
+    assert empty.status_code == 422, empty.text
+
+    monkeypatch.setattr(
+        "app.services.scenario_generation_service.chat_json",
+        lambda **_kwargs: SimpleNamespace(
+            ok=False, payload={}, detail="上游不可用", status_code=502, latency_ms=8,
+        ),
+    )
+    failed = client.post("/api/scenarios/generate-prompt", headers=headers, json={"name": "客服"})
+    assert failed.status_code == 502, failed.text

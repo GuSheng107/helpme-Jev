@@ -1,17 +1,19 @@
 import { useRef, useState } from 'react'
 import { ApiError } from '../api/client'
 import {
-  createScenario, generateScenarioQuestions, updateScenario,
+  createScenario, generateScenarioPrompt, generateScenarioQuestions, updateScenario,
   type CustomScenario, type QuestionKind,
 } from '../api/scenarios'
 import Button from '../components/Button'
 import { Notice } from '../components/layout'
 import Modal from '../components/Modal'
+import StageLoader, { type LoaderStep } from '../components/StageLoader'
 import ScenarioQuestionEditor from './ScenarioQuestionEditor'
 import { parseQuestionSet, serializeQuestionSet, type QuestionItem } from './ScenarioQuestions'
 
 type Mode = 'new' | 'copy' | 'edit'
 type EditorTab = 'basic' | 'prompt' | 'judge' | 'persona'
+type GenerateTarget = 'prompt' | 'judge' | 'persona'
 const tabs: { key: EditorTab; label: string }[] = [
   { key: 'basic', label: '基本信息' },
   { key: 'prompt', label: '回复提示词' },
@@ -19,6 +21,30 @@ const tabs: { key: EditorTab; label: string }[] = [
   { key: 'persona', label: '人设题集' },
 ]
 const fieldClass = 'mt-1.5 w-full rounded-[6px] border border-border bg-surface px-3 py-2 text-[14px] text-ink'
+// 收尾状态停留一下再收起，否则"已完成"一闪而过看不见（与决策页一致）
+const DONE_HOLD_MS = 600
+const GEN_LABELS: Record<GenerateTarget, { running: string; done: string; notice: string }> = {
+  prompt: { running: '正在生成回复提示词', done: '回复提示词生成完成', notice: '回复提示词已生成，请检查后保存' },
+  judge: { running: '正在生成判断题集', done: '判断题集生成完成', notice: '判断题已生成，请检查后保存' },
+  persona: { running: '正在生成人设题集', done: '人设题集生成完成', notice: '人设题已生成，请检查后保存' },
+}
+const GEN_DIALOG: Record<GenerateTarget, { title: string; hint: string; placeholder: string }> = {
+  prompt: {
+    title: '自动生成回复提示词',
+    hint: '将用当前账号已启用的表达模型，根据场景名称与描述起草回复提示词。',
+    placeholder: '例如：语气专业克制，先共情再给行动建议，不做出未确定的承诺',
+  },
+  judge: {
+    title: '自动生成判断题集',
+    hint: '将用当前账号已启用的表达模型，根据场景信息生成判断题集。',
+    placeholder: '例如：重点判断事实、风险和下一步动作',
+  },
+  persona: {
+    title: '自动生成人设题集',
+    hint: '将用当前账号已启用的表达模型，根据场景信息生成人设题集。',
+    placeholder: '例如：侧重沟通风格与情绪需求',
+  },
+}
 
 interface Props {
   mode: Mode
@@ -52,6 +78,10 @@ async function readQuestionFile(file: File, kind: QuestionKind): Promise<Questio
   return items
 }
 
+function holdDone(): Promise<void> {
+  return new Promise((resolve) => { window.setTimeout(resolve, DONE_HOLD_MS) })
+}
+
 export default function ScenarioEditor({ mode, source, onCancel, onSaved }: Props) {
   const [tab, setTab] = useState<EditorTab>('basic')
   const [name, setName] = useState(mode === 'copy' ? `${source?.name ?? ''}（副本）` : source?.name ?? '')
@@ -61,11 +91,17 @@ export default function ScenarioEditor({ mode, source, onCancel, onSaved }: Prop
   const [personaItems, setPersonaItems] = useState(() => initialQuestions(source?.persona_questions))
   const [requirements, setRequirements] = useState('')
   const [busy, setBusy] = useState(false)
-  const [generating, setGenerating] = useState<QuestionKind | null>(null)
+  const [genTarget, setGenTarget] = useState<GenerateTarget | null>(null)
+  const [genDone, setGenDone] = useState(false)
+  const [genDialog, setGenDialog] = useState<GenerateTarget | null>(null)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
-  const locked = busy || generating !== null
+  const locked = busy || genTarget !== null
   const title = mode === 'edit' ? `编辑「${source?.name ?? ''}」` : mode === 'copy' ? `复制「${source?.name ?? ''}」` : '新建场景'
+  // 与决策页一致的分步 loading：生成中只有一步，完成态停留片刻再回填收起
+  const loaderSteps: LoaderStep[] = genTarget
+    ? [{ key: genTarget, ...GEN_LABELS[genTarget], state: genDone ? 'done' : 'running' }]
+    : []
 
   function setQuestions(kind: QuestionKind, items: QuestionItem[]) {
     if (kind === 'judge') setJudgeItems(items)
@@ -83,23 +119,39 @@ export default function ScenarioEditor({ mode, source, onCancel, onSaved }: Prop
     }
   }
 
-  async function generate(kind: QuestionKind) {
+  function askGenerate(target: GenerateTarget) {
     if (!name.trim()) { setTab('basic'); setError('请先填写场景名称'); return }
-    setGenerating(kind)
+    setError('')
+    setNotice('')
+    setGenDialog(target)
+  }
+
+  async function runGenerate(target: GenerateTarget) {
+    setGenDialog(null)
+    setGenTarget(target)
+    setGenDone(false)
     setError('')
     setNotice('')
     try {
-      const result = await generateScenarioQuestions({
-        kind, name: name.trim(), description: description.trim(), requirements: requirements.trim(),
-      })
-      const items = parseQuestionSet(result.questions)
-      serializeQuestionSet(items, kind)
-      setQuestions(kind, items)
-      setNotice(`${kind === 'judge' ? '判断' : '人设'}题已生成，请检查后保存`)
+      const common = {
+        name: name.trim(), description: description.trim(), requirements: requirements.trim(),
+      }
+      if (target === 'prompt') {
+        setPrompt((await generateScenarioPrompt(common)).prompt)
+      } else {
+        const result = await generateScenarioQuestions({ kind: target, ...common })
+        const items = parseQuestionSet(result.questions)
+        serializeQuestionSet(items, target)
+        setQuestions(target, items)
+      }
+      setGenDone(true)
+      await holdDone()
+      setNotice(GEN_LABELS[target].notice)
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : '题集生成失败')
+      setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : '生成失败')
     } finally {
-      setGenerating(null)
+      setGenTarget(null)
+      setGenDone(false)
     }
   }
 
@@ -142,7 +194,7 @@ export default function ScenarioEditor({ mode, source, onCancel, onSaved }: Prop
   }
 
   return (
-    <Modal size="lg" scroll="hidden" busy={locked} onClose={onCancel} labelledBy="scenario-editor-title" className="flex flex-col">
+    <Modal size="lg" scroll="hidden" busy={locked} onClose={onCancel} labelledBy="scenario-editor-title" className="relative flex flex-col">
       <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border-subtle px-4 py-3 sm:px-5">
         <h2 id="scenario-editor-title" className="min-w-0 truncate text-[17px] font-semibold text-ink">{title}</h2>
         <Button size="sm" variant="text" onClick={onCancel} disabled={locked} aria-label="关闭场景编辑弹窗">关闭</Button>
@@ -169,38 +221,51 @@ export default function ScenarioEditor({ mode, source, onCancel, onSaved }: Prop
           </div>
         )}
         {tab === 'prompt' && (
-          <label className="block text-[13px] font-medium text-ink-secondary">
-            回复提示词（表达模型）
-            <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} maxLength={10000} disabled={locked} rows={12} placeholder="填写此场景下回复的语气和规则" className={`${fieldClass} min-h-64 resize-y leading-6`} />
-            <span className="mt-1 block font-normal text-ink-muted">留空时使用默认规则。</span>
-          </label>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[13px] font-medium text-ink-secondary">回复提示词（表达模型）</span>
+              <Button size="sm" type="button" disabled={locked} onClick={() => askGenerate('prompt')}>自动生成</Button>
+            </div>
+            <label className="block text-[13px] font-medium text-ink-secondary">
+              <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} maxLength={10000} disabled={locked} rows={12} placeholder="填写此场景下回复的语气和规则" className={`${fieldClass} min-h-64 resize-y leading-6`} />
+              <span className="mt-1 block font-normal text-ink-muted">留空时使用默认规则。</span>
+            </label>
+          </div>
         )}
         {(tab === 'judge' || tab === 'persona') && (
           <QuestionPanel key={tab} kind={tab} items={tab === 'judge' ? judgeItems : personaItems}
-            requirements={requirements} onRequirements={setRequirements}
             onChange={(items) => setQuestions(tab, items)}
             onImport={(file) => void importFile(tab, file)}
-            onGenerate={() => void generate(tab)}
-            generating={generating === tab} disabled={locked} />
+            onGenerate={() => askGenerate(tab)}
+            disabled={locked} />
         )}
       </div>
       <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-border-subtle bg-surface px-4 py-3 sm:px-5">
         <Button size="sm" onClick={onCancel} disabled={locked}>取消</Button>
         <Button size="sm" variant="primary" loading={busy} disabled={locked} onClick={() => void save()}>保存场景</Button>
       </div>
+      {genTarget && (
+        <div role="status" className="absolute inset-0 z-10 flex items-center justify-center rounded-[20px] bg-white/75 backdrop-blur-[1px]">
+          <div className="rounded-[8px] border border-border bg-surface px-5 py-4 shadow-sm">
+            <StageLoader steps={loaderSteps} />
+          </div>
+        </div>
+      )}
+      {genDialog && (
+        <GenerateDialog target={genDialog} requirements={requirements} onRequirements={setRequirements}
+          onConfirm={() => { if (genDialog) void runGenerate(genDialog) }}
+          onClose={() => setGenDialog(null)} />
+      )}
     </Modal>
   )
 }
 
-function QuestionPanel({ kind, items, requirements, onRequirements, onChange, onImport, onGenerate, generating, disabled }: {
+function QuestionPanel({ kind, items, onChange, onImport, onGenerate, disabled }: {
   kind: QuestionKind
   items: QuestionItem[]
-  requirements: string
-  onRequirements: (value: string) => void
   onChange: (items: QuestionItem[]) => void
   onImport: (file: File) => void
   onGenerate: () => void
-  generating: boolean
   disabled: boolean
 }) {
   const fileInput = useRef<HTMLInputElement>(null)
@@ -218,13 +283,41 @@ function QuestionPanel({ kind, items, requirements, onRequirements, onChange, on
             event.target.value = ''
           }} />
           <Button size="sm" type="button" disabled={disabled} onClick={() => fileInput.current?.click()}>导入 JSON</Button>
-          <Button size="sm" type="button" disabled={disabled && !generating} loading={generating} onClick={onGenerate}>用我的 LLM 生成</Button>
+          <Button size="sm" type="button" disabled={disabled} onClick={onGenerate}>自动生成</Button>
         </div>
       </div>
-      <label className="block text-[12px] text-ink-secondary">生成要求（可选）
-        <input value={requirements} onChange={(event) => onRequirements(event.target.value)} maxLength={2000} disabled={disabled} placeholder="例如：重点判断事实、风险和下一步动作" className={fieldClass} />
-      </label>
       <ScenarioQuestionEditor kind={kind} items={items} onChange={onChange} disabled={disabled} />
     </div>
+  )
+}
+
+function GenerateDialog({ target, requirements, onRequirements, onConfirm, onClose }: {
+  target: GenerateTarget
+  requirements: string
+  onRequirements: (value: string) => void
+  onConfirm: () => void
+  onClose: () => void
+}) {
+  const meta = GEN_DIALOG[target]
+  return (
+    <Modal size="sm" onClose={onClose} labelledBy="generate-dialog-title" initialFocusSelector="#generate-requirements">
+      <form onSubmit={(event) => { event.preventDefault(); onConfirm() }} className="flex flex-col">
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border-subtle px-4 py-3 sm:px-5">
+          <h2 id="generate-dialog-title" className="text-[16px] font-semibold text-ink">{meta.title}</h2>
+          <Button size="sm" variant="text" type="button" onClick={onClose} aria-label="关闭生成弹窗">关闭</Button>
+        </div>
+        <div className="px-4 py-4 sm:px-5">
+          <p className="text-[12px] leading-5 text-ink-muted">{meta.hint}</p>
+          <label className="mt-3 block text-[13px] font-medium text-ink-secondary">生成要求（可选）
+            <textarea id="generate-requirements" value={requirements} onChange={(event) => onRequirements(event.target.value)}
+              maxLength={2000} rows={4} placeholder={meta.placeholder} className={`${fieldClass} resize-y`} />
+          </label>
+        </div>
+        <div className="flex shrink-0 justify-end gap-2 border-t border-border-subtle px-4 py-3 sm:px-5">
+          <Button size="sm" type="button" onClick={onClose}>取消</Button>
+          <Button size="sm" variant="primary" type="submit">生成</Button>
+        </div>
+      </form>
+    </Modal>
   )
 }
