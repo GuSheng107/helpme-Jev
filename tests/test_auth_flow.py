@@ -166,6 +166,21 @@ def test_forced_change_password_allows_missing_old_password(
     assert wrong.status_code == 401, wrong.text
 
 
+def test_admin_cannot_delete_own_account(client: TestClient, db: Session) -> None:
+    """管理员账号不允许注销——系统至少要保留一个管理入口。"""
+    _activate_admin(client, db)
+    resp = _login(client, "admin", ADMIN_NEW_PASSWORD)
+    headers = {"Authorization": f"Bearer {resp.json()['access_token']}"}
+
+    denied = client.request(
+        "DELETE", "/api/account", json={"password": ADMIN_NEW_PASSWORD}, headers=headers,
+    )
+    assert denied.status_code == 403, denied.text
+    assert denied.json()["error"]["code"] == "FORBIDDEN"
+    # 管理员仍在，可正常登录
+    assert _login(client, "admin", ADMIN_NEW_PASSWORD).status_code == 200
+
+
 def test_after_password_change_capabilities_expand(client: TestClient, db: Session) -> None:
     _activate_admin(client, db)
     resp = _login(client, "admin", ADMIN_NEW_PASSWORD)

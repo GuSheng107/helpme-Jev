@@ -265,16 +265,18 @@ export default function SettingsPage({ user, onUserChange, onLogout }: Props) {
             </div>
           </DataCard>
 
-          <DataCard title="注销账号">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-[13px] leading-5 text-ink-secondary">
-                账号、会话、人设和配置会全部删除，无法恢复。建议先下载一份数据。
-              </p>
-              <Button size="sm" variant="danger" onClick={() => setConfirmDelete(true)}>
-                注销账号
-              </Button>
-            </div>
-          </DataCard>
+          {user.role !== 'admin' && (
+            <DataCard title="注销账号">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p className="text-[13px] leading-5 text-ink-secondary">
+                  账号、会话、人设和配置会全部删除，无法恢复。建议先下载一份数据。
+                </p>
+                <Button size="sm" variant="danger" onClick={() => setConfirmDelete(true)}>
+                  注销账号
+                </Button>
+              </div>
+            </DataCard>
+          )}
           {confirmDelete && (
             <ConfirmDialog
               title="确认注销"

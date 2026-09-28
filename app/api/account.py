@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from ..core.db import get_db
 from ..core.time import iso_utc, utc_now
+from ..domain.enums import UserRole
 from ..domain.errors import DomainError, DomainErrorCode
 from ..domain.schemas.auth import PasswordChangeRequest, StrictModel, UserSummary
 from ..repositories.auth_repo import AuditRepository
@@ -137,7 +138,10 @@ def delete_account(
     """账号注销：密码确认后删除全部数据（级联），不可恢复。
 
     审计记录在删除前落库（owner 置 NULL 保留痕迹），然后删用户行。
+    管理员账号不允许注销——系统至少要保留一个管理入口。
     """
+    if user.role == UserRole.ADMIN.value:
+        raise DomainError(DomainErrorCode.FORBIDDEN, "管理员账号不允许注销", status_code=403)
     if not verify_password(payload.password, user.password_hash):
         raise DomainError(DomainErrorCode.VALIDATION_FAILED, "密码不正确", status_code=422)
     _audit.add(
