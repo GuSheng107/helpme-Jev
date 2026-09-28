@@ -119,7 +119,7 @@ export default function AppShell({ page, user, onNavigate, onLogout, children }:
           </div>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
 
         <nav className="flex shrink-0 overflow-x-auto border-t border-border bg-surface lg:hidden">
           {NAV.filter((item) => !item.admin || user.role === 'admin').map((item) => (

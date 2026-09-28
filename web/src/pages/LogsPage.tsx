@@ -126,7 +126,7 @@ export default function LogsPage() {
 
   return (
     <PageShell>
-      <main className="mx-auto flex h-full min-h-0 max-w-[1480px] flex-col px-5 pb-6 pt-6">
+      <main className="mx-auto flex h-full max-h-full min-h-0 w-full max-w-[1480px] flex-col px-5 pb-6 pt-6">
         <PageHeader
           title="日志查询"
           description="查询业务操作及同一 Trace ID 下的模型调用；这里只显示你自己的记录。"
