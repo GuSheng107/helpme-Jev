@@ -55,9 +55,10 @@ export function updateAvatar(avatar: string | null): Promise<UserSummary> {
   return api.patch<UserSummary>('/api/account/avatar', { avatar })
 }
 
-export function changePassword(oldPassword: string, newPassword: string): Promise<UserSummary> {
+/** 首次登录（强制改密）传 null 免验原密码；其余场景必须带原密码。 */
+export function changePassword(oldPassword: string | null, newPassword: string): Promise<UserSummary> {
   return api.post<UserSummary>('/api/account/password', {
-    old_password: oldPassword,
+    ...(oldPassword ? { old_password: oldPassword } : {}),
     new_password: newPassword,
   })
 }

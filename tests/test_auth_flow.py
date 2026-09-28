@@ -121,6 +121,51 @@ def test_force_password_change_gate_blocks_other_endpoints(
     assert client.get("/api/providers", headers=headers).status_code == 200
 
 
+def test_forced_change_password_allows_missing_old_password(
+    client: TestClient, db: Session
+) -> None:
+    """首次登录改密：用户本就用初始密码登录，不再要求回传原密码。"""
+    user = User(
+        username="forceduser",
+        display_name="Forced",
+        password_hash=hash_password("Forced!Passw0rd"),
+        role=UserRole.USER.value,
+        must_change_password=True,
+        is_active=True,
+    )
+    UserRepository().add(db, user)
+    db.commit()
+    resp = _login(client, "forceduser", "Forced!Passw0rd")
+    assert resp.status_code == 200, resp.text
+    headers = {"Authorization": f"Bearer {resp.json()['access_token']}"}
+
+    changed = client.post(
+        "/api/account/password",
+        json={"new_password": "Forced!NewPassw0rd"},
+        headers=headers,
+    )
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["must_change_password"] is False
+    assert _login(client, "forceduser", "Forced!NewPassw0rd").status_code == 200
+
+    # 改密后恢复正常路径：不带原密码必须被拒
+    again = _login(client, "forceduser", "Forced!NewPassw0rd")
+    normal = {"Authorization": f"Bearer {again.json()['access_token']}"}
+    rejected = client.post(
+        "/api/account/password",
+        json={"new_password": "Forced!NewPassw0rd2"},
+        headers=normal,
+    )
+    assert rejected.status_code == 422, rejected.text
+    # 带错误原密码同样被拒
+    wrong = client.post(
+        "/api/account/password",
+        json={"old_password": "not-the-password", "new_password": "Forced!NewPassw0rd2"},
+        headers=normal,
+    )
+    assert wrong.status_code == 401, wrong.text
+
+
 def test_after_password_change_capabilities_expand(client: TestClient, db: Session) -> None:
     _activate_admin(client, db)
     resp = _login(client, "admin", ADMIN_NEW_PASSWORD)

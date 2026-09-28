@@ -27,7 +27,9 @@ class RegisterRequest(StrictModel):
 
 
 class PasswordChangeRequest(StrictModel):
-    old_password: str = Field(min_length=1, max_length=512)
+    """首次登录（强制改密）时可以不传 ``old_password``——用户本就用初始密码登录。"""
+
+    old_password: str | None = Field(default=None, min_length=1, max_length=512)
     new_password: str = Field(min_length=10, max_length=512)
 
 
