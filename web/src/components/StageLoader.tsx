@@ -7,32 +7,33 @@ export interface LoaderStep {
   state: 'pending' | 'running' | 'done'
 }
 
-/** 分阶段 loading：逐步显示进行中 / 已完成，把上游的真实进度摊给用户看。 */
+/** 分阶段 loading：同一次只展示当前这一步，完成后换成下一句。 */
 export default function StageLoader({ steps }: { steps: LoaderStep[] }) {
+  const current = steps.find((step) => step.state === 'running')
+    ?? [...steps].reverse().find((step) => step.state === 'done')
+  if (!current) return null
+  const done = current.state === 'done'
   return (
-    <ul className="space-y-2">
-      {steps.map((step) => (
-        <li key={step.key} className="flex items-center gap-2 whitespace-nowrap text-[13px]">
-          <StepMark state={step.state} />
-          <span className={step.state === 'pending' ? 'text-ink-muted' : 'font-medium text-ink'}>
-            {step.state === 'done' ? step.done : step.running}
-          </span>
-        </li>
-      ))}
-    </ul>
+    <p key={current.key + current.state} role="status" className="flex items-center gap-2.5 whitespace-nowrap text-[14px]">
+      {done ? <DoneMark /> : <Spinner />}
+      <span className="font-medium text-ink">{done ? current.done : current.running}</span>
+    </p>
   )
 }
 
-function StepMark({ state }: { state: LoaderStep['state'] }) {
-  if (state === 'done') {
-    return (
-      <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-success" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-        <path d="M20 6 9 17l-5-5" />
-      </svg>
-    )
-  }
-  if (state === 'running') {
-    return <span className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-  }
-  return <span className="h-4 w-4 shrink-0 rounded-full border-2 border-border" />
+function Spinner() {
+  return (
+    <span className="relative h-4 w-4 shrink-0" aria-hidden>
+      <span className="absolute inset-0 animate-spin rounded-full border-2 border-primary/25 border-t-primary" />
+      <span className="absolute inset-[3px] animate-ping rounded-full bg-primary/50" />
+    </span>
+  )
+}
+
+function DoneMark() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-success" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M20 6 9 17l-5-5" />
+    </svg>
+  )
 }

@@ -21,8 +21,8 @@ const tabs: { key: EditorTab; label: string }[] = [
   { key: 'persona', label: '人设题集' },
 ]
 const fieldClass = 'mt-1.5 w-full rounded-[6px] border border-border bg-surface px-3 py-2 text-[14px] text-ink'
-// 收尾状态停留一下再收起，否则"已完成"一闪而过看不见（与决策页一致）
-const DONE_HOLD_MS = 600
+// 完成态只停留一瞬间（与决策页一致），随即收起并回填结果。
+const DONE_HOLD_MS = 280
 const GEN_LABELS: Record<GenerateTarget, { running: string; done: string; notice: string }> = {
   prompt: { running: '正在生成回复提示词', done: '回复提示词生成完成', notice: '回复提示词已生成，请检查后保存' },
   judge: { running: '正在生成判断题集', done: '判断题集生成完成', notice: '判断题已生成，请检查后保存' },

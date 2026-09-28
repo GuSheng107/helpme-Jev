@@ -145,51 +145,46 @@ def purge_old_call_logs(db: Session) -> int:
 
 
 def ensure_builtin_scenarios(db: Session) -> None:
-    """内置场景（恋爱 / 职场）播种：题目快照来自代码，幂等。
+    """初次运行时把内置场景（恋爱 / 职场）落库，已存在的行不再改写。
 
-    题目的**唯一来源是代码**（scenarios/ 包），场景行只是身份 + 快照；
-    判断 / 建模时按 ``kind`` 回代码取题，快照仅供导出与后续自定义编辑。
+    代码里的题集只作为第一次写入的内容。落库之后以数据库为准，
+    管理员的修改和删除都会保留，重启不会把它们覆盖回来。
     """
     import json
 
     from ..repositories.models import Scenario
     from ..scenarios.packs import all_packs
     from ..scenarios.persona_questions import persona_questions_for
+    from ..scenarios.reply_prompts import builtin_draft_prompt
 
     names = {
         "romance": ("恋爱助手", "亲密关系沟通：意图、需求、情绪与危险度。"),
         "workplace": ("职场助手", "职场沟通：同事 / 上下级 / 客户的意图、利害与最佳动作。"),
     }
     for pack in all_packs().values():
-        name, description = names.get(pack.kind, (pack.kind, ""))
-        judge = json.dumps(pack.questions(), ensure_ascii=False)
-        persona = json.dumps(persona_questions_for(pack.kind, "other"), ensure_ascii=False)
-        row = (
-            db.scalars(
-                select(Scenario).where(
-                    Scenario.owner_user_id.is_(None), Scenario.slug == pack.kind
-                )
-            ).first()
-        )
-        if row is None:
-            db.add(
-                Scenario(
-                    owner_user_id=None,
-                    slug=pack.kind,
-                    name=name,
-                    kind=pack.kind,
-                    description=description,
-                    judge_questions=judge,
-                    persona_questions=persona,
-                    is_builtin=True,
-                )
+        exists = db.scalars(
+            select(Scenario.id).where(
+                Scenario.owner_user_id.is_(None), Scenario.slug == pack.kind
             )
-        else:
-            # 内置题目以代码为准，分别刷新判断题和人设题快照。
-            if row.judge_questions != judge:
-                row.judge_questions = judge
-            if row.persona_questions != persona:
-                row.persona_questions = persona
+        ).first()
+        if exists is not None:
+            continue
+        name, description = names.get(pack.kind, (pack.kind, ""))
+        db.add(
+            Scenario(
+                owner_user_id=None,
+                slug=pack.kind,
+                name=name,
+                kind=pack.kind,
+                description=description,
+                judge_questions=json.dumps(pack.questions(), ensure_ascii=False),
+                persona_questions=json.dumps(
+                    persona_questions_for(pack.kind, "other"), ensure_ascii=False
+                ),
+                system_prompt=builtin_draft_prompt(pack.kind),
+                is_builtin=True,
+            )
+        )
     db.commit()
 
 

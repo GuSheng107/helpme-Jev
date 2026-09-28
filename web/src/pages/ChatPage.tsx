@@ -359,7 +359,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                     setScenarioId(event.target.value === '' ? null : Number(event.target.value))
                   }
                 >
-                  <optgroup label="系统场景">
+                  <optgroup label="系统内置">
                     {scenarios.filter((item) => item.is_builtin || item.is_system).map((item) => (
                       <option key={item.id} value={item.id}>{item.name}</option>
                     ))}
