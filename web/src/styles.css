@@ -63,13 +63,6 @@ body {
     ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
 }
 
-/* 移动端：软键盘弹出时不遮挡输入框 */
-@supports (height: 100dvh) {
-  .app-shell {
-    min-height: 100dvh;
-  }
-}
-
 /* iOS 上字号 < 16px 会触发自动放大 */
 input,
 textarea,
