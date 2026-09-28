@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from ..clients.llm_client import chat_json
 from ..domain.errors import DomainError, DomainErrorCode
 from .analyze_service import AnalyzeService
+from .model_log import record_model_call
 from .provider_service import ProviderService
 from .scenario_service import validate_persona_questions, validate_questions
 
@@ -46,6 +47,7 @@ def generate_question_set(
     name: str,
     description: str,
     requirements: str,
+    trace_id: str = "",
 ) -> str:
     llm = _ANALYZE._require_provider(db, owner_user_id=owner_user_id, kind="llm")
     result = chat_json(
@@ -63,7 +65,16 @@ def generate_question_set(
             }, ensure_ascii=False)},
         ],
     )
+    request_data = {
+        "kind": kind, "name": name, "description": description,
+        "requirements": requirements,
+    }
     if not result.ok:
+        record_model_call(
+            db, owner_user_id=owner_user_id, trace_id=trace_id,
+            kind="llm", phase="generate_questions", provider=llm, result=result,
+            request=request_data, response=result.payload, ok=False,
+        )
         raise DomainError(
             DomainErrorCode.LLM_UPSTREAM_ERROR,
             f"题集生成失败：{result.detail}",
@@ -77,9 +88,19 @@ def generate_question_set(
         else:
             validate_questions(raw)
     except ValueError as exc:
+        record_model_call(
+            db, owner_user_id=owner_user_id, trace_id=trace_id,
+            kind="llm", phase="generate_questions", provider=llm, result=result,
+            request=request_data, response=result.payload, ok=False,
+        )
         raise DomainError(
             DomainErrorCode.VALIDATION_FAILED,
             f"模型返回的题集不符合格式：{exc}",
             status_code=422,
         ) from exc
+    record_model_call(
+        db, owner_user_id=owner_user_id, trace_id=trace_id,
+        kind="llm", phase="generate_questions", provider=llm, result=result,
+        request=request_data, response=result.payload, ok=True,
+    )
     return json.dumps(questions, ensure_ascii=False, indent=2)

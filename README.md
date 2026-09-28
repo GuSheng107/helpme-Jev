@@ -52,7 +52,7 @@ JEV (TypeSafe System One) answers typed questions such as yes/no probability, op
 | Memory | Let the LLM summarize useful context into dated entries; review, revert, or delete it. |
 | Images | Paste or upload PNG/JPEG/WEBP screenshots, up to 9 per message; a vision-capable LLM describes them. HelpMe JEV does not run OCR. |
 | Wording help | Polish a message, ask for clarification, generate candidate replies, then let JEV rank them. |
-| Data controls | SQLite storage, account export, account deletion, owner-level isolation, trace-linked call logs, and encrypted provider keys. |
+| Data controls | SQLite storage, account export, account deletion, owner-level isolation, trace-linked activity logs, and encrypted provider keys. |
 
 ## The basic loop
 
@@ -168,7 +168,7 @@ Copy <code>.env.example</code> to <code>.env</code>. The file is ignored by Git.
 | <code>DEFAULT_ADMIN_PASSWORD</code> | See <code>.env.example</code> | First admin password; only used when no user exists. |
 | <code>PORT</code> | <code>8790</code> | Application port. |
 | <code>DATABASE_PATH</code> | <code>./data/helpme_jev.db</code> | SQLite database path. |
-| <code>RETENTION_DAYS</code> | <code>15</code> | Retention window for upstream call logs. |
+| <code>RETENTION_DAYS</code> | <code>15</code> | Retention window for activity and upstream call logs. |
 | <code>SESSION_TTL_HOURS</code> | <code>8</code> | Server session lifetime. |
 | <code>WEB_DIST_DIR</code> | <code>./web/dist</code> | Built frontend directory served by FastAPI. |
 
@@ -213,8 +213,9 @@ The interactive API reference is available at <code>/docs</code> when the backen
 - Provider API keys are encrypted at rest with HKDF-SHA256 and AES-256-GCM; the UI receives a mask, never the key.
 - Passwords use Argon2id. Bearer tokens are handled as server sessions and stored in hashed form.
 - User-owned conversations, memories, personas, provider settings, and logs are isolated by owner. Admin does not automatically get access to another user's content.
-- Request logs pass through redaction. <code>Authorization</code>, cookies, and common token formats are removed before logging.
-- Call logs are purged after <code>RETENTION_DAYS</code> at startup. Conversations are not deleted just because call logs expire.
+- Activity logs connect business actions, failures, and model calls by trace ID. The logs page reads this unified history; home judgment counts still use upstream call logs. Log queries and decision history reads do not add entries.
+- Request summaries never include request bodies. Model details pass through redaction; <code>Authorization</code>, cookies, and common token formats are removed before logging.
+- Activity and call logs are purged after <code>RETENTION_DAYS</code> at startup. Conversations are not deleted when logs expire.
 - You can export your data or delete the account. Account deletion is intentionally irreversible.
 
 > [!WARNING]

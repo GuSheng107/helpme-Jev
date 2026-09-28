@@ -53,6 +53,17 @@ class CallLogLevel(StrEnum):
     ERROR = "error"
 
 
+class ActivityCategory(StrEnum):
+    AUTH = "auth"
+    CHAT = "chat"
+    DECISION = "decision"
+    PERSONA = "persona"
+    SCENARIO = "scenario"
+    ADMIN = "admin"
+    SETTINGS = "settings"
+    MODEL = "model"
+
+
 class MemoryOp(StrEnum):
     """记忆写入决策（借鉴 Mem0）。"""
 

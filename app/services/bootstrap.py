@@ -45,6 +45,7 @@ EXPECTED_TABLES = {
     "materials",
     "call_logs",
     "audit_logs",
+    "activity_logs",
 }
 
 
@@ -119,9 +120,9 @@ def purge_stale_sessions(db: Session) -> int:
 
 
 def purge_old_call_logs(db: Session) -> int:
-    """``call_logs`` 滚动清理（默认 15 天，皇上定的保留期）。
+    """原始调用和统一活动日志按同一保留期滚动清理。
 
-    只清调用日志：``messages`` 不按天数清 —— 只清"已被滚动摘要覆盖"的旧消息，
+    ``messages`` 不按天数清 —— 只清"已被滚动摘要覆盖"的旧消息，
     保证人设 evidence、情绪轨迹、复盘原料不断档（DESIGN.md 已定事项 23）。
     """
     from datetime import timedelta
@@ -130,14 +131,16 @@ def purge_old_call_logs(db: Session) -> int:
 
     from ..core.config import get_settings
     from ..core.time import utc_now
-    from ..repositories.models import CallLog
+    from ..repositories.models import ActivityLog, CallLog
 
     cutoff = utc_now() - timedelta(days=get_settings().retention_days)
     result = db.execute(delete(CallLog).where(CallLog.created_at < cutoff))
+    activity_result = db.execute(delete(ActivityLog).where(ActivityLog.created_at < cutoff))
     db.commit()
     purged = int(result.rowcount or 0)
-    if purged:
-        logger.info("已清理 %d 天前的调用日志 %d 条", get_settings().retention_days, purged)
+    activity_purged = int(activity_result.rowcount or 0)
+    if purged or activity_purged:
+        logger.info("已清理 %d 天前的调用日志 %d 条、活动日志 %d 条", get_settings().retention_days, purged, activity_purged)
     return purged
 
 

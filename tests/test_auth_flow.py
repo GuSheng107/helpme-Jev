@@ -154,6 +154,20 @@ def test_admin_delete_user_removes_uploaded_files(
     deleted = client.delete(f"/api/admin/users/{user_id}", headers=headers)
     assert deleted.status_code == 204, deleted.text
     assert not folder.exists()
+    activity = client.get(
+        "/api/logs", headers=headers,
+        params={"trace_id": deleted.headers["x-trace-id"]},
+    ).json()["items"]
+    assert {item["source"] for item in activity} >= {"用户", "系统"}
+    assert all(item["category"] == "admin" for item in activity)
+    assert any(item["summary"] == "删除用户成功" for item in activity)
+    failed = client.delete(f"/api/admin/users/{user_id}", headers=headers)
+    assert failed.status_code == 404
+    failure_activity = client.get(
+        "/api/logs", headers=headers,
+        params={"trace_id": failed.headers["x-trace-id"]},
+    ).json()["items"]
+    assert any(item["source"] == "用户" and item["level"] == "error" for item in failure_activity)
 
 
 # ------------------------------------------------------------------ 登录

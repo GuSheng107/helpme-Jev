@@ -1,8 +1,7 @@
-"""调用日志接口：只能查自己的（admin 亦不可查他人，皇上明令）。"""
+"""统一活动日志接口：只能查自己的（管理员亦不可查他人）。"""
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -11,8 +10,8 @@ from sqlalchemy.orm import Session
 
 from ..core.db import get_db
 from ..core.time import iso_utc, to_naive_utc
-from ..domain.enums import CallLogLevel
-from ..repositories.models import CallLog, User
+from ..domain.enums import ActivityCategory, CallLogLevel
+from ..repositories.models import ActivityLog, CallLog, User
 from .deps import require_active_user
 
 router = APIRouter(prefix="/api/logs", tags=["logs"])
@@ -39,52 +38,41 @@ def log_stats(
     return {"judgment_count": int(count or 0)}
 
 
-def _maybe_json(raw: str):
-    """body 存的是 JSON 字符串；解析失败（截断等）原样返回。"""
-    try:
-        return json.loads(raw or "")
-    except json.JSONDecodeError:
-        return raw or ""
-
-
 @router.get("")
 def list_logs(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    level: str = Query(default="", pattern="^(|info|warn|error)$"),
-    kind: str = Query(default="", pattern="^(|jev|llm)$"),
-    phase: str = Query(default="", max_length=32),
+    level: CallLogLevel | None = Query(default=None),
+    category: ActivityCategory | None = Query(default=None),
     trace_id: str = Query(default="", max_length=64),
     start_time: datetime | None = Query(default=None),
     end_time: datetime | None = Query(default=None),
     db: Session = Depends(get_db),
     user: User = Depends(require_active_user),
 ) -> dict:
-    """按时间倒序查询自己的调用日志，支持类型、阶段和时间范围筛选。"""
+    """按时间倒序查询自己的统一日志。查询本身不写活动日志。"""
     start = to_naive_utc(start_time)
     end = to_naive_utc(end_time)
     if start is not None and end is not None and start > end:
         raise HTTPException(status_code=422, detail="开始时间不能晚于结束时间")
 
-    conditions = [CallLog.owner_user_id == user.id]
-    if level:
-        conditions.append(CallLog.level == level)
-    if kind:
-        conditions.append(CallLog.kind == kind)
-    if phase.strip():
-        conditions.append(CallLog.phase == phase.strip())
+    conditions = [ActivityLog.owner_user_id == user.id]
+    if level is not None:
+        conditions.append(ActivityLog.level == level.value)
+    if category is not None:
+        conditions.append(ActivityLog.category == category.value)
     if trace_id.strip():
-        conditions.append(CallLog.trace_id == trace_id.strip())
+        conditions.append(ActivityLog.trace_id == trace_id.strip())
     if start is not None:
-        conditions.append(CallLog.created_at >= start)
+        conditions.append(ActivityLog.created_at >= start)
     if end is not None:
-        conditions.append(CallLog.created_at <= end)
+        conditions.append(ActivityLog.created_at <= end)
 
-    total = db.scalar(select(func.count()).select_from(CallLog).where(*conditions))
+    total = db.scalar(select(func.count()).select_from(ActivityLog).where(*conditions))
     rows = db.scalars(
-        select(CallLog)
+        select(ActivityLog)
         .where(*conditions)
-        .order_by(CallLog.created_at.desc(), CallLog.id.desc())
+        .order_by(ActivityLog.created_at.desc(), ActivityLog.id.desc())
         .limit(limit)
         .offset(offset)
     ).all()
@@ -95,17 +83,15 @@ def list_logs(
             {
                 "id": row.id,
                 "trace_id": row.trace_id,
-                "kind": row.kind,
+                "category": row.category,
+                "source": row.source,
                 "level": row.level,
-                "phase": row.phase,
-                "model": row.model,
+                "summary": row.summary,
+                "detail": row.detail,
                 "status_code": row.status_code,
                 "latency_ms": row.latency_ms,
-                "error": row.error,
-                "truncated": row.truncated,
+                "error_code": row.error_code,
                 "created_at": iso_utc(row.created_at) or "",
-                "request": _maybe_json(row.request_body),
-                "response": _maybe_json(row.response_body),
             }
             for row in rows
         ],

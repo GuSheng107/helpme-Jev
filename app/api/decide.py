@@ -20,6 +20,7 @@ from ..domain.enums import CallLogLevel
 from ..domain.errors import DomainError, error_body
 from ..domain.schemas.auth import StrictModel
 from ..repositories.models import CallLog, User
+from ..services.activity_service import mark_stream_result
 from ..services.decide_service import DecideService
 from .deps import require_active_user
 
@@ -97,9 +98,20 @@ def decide_stream(
                 context=payload.context,
                 trace_id=trace_id,
             ):
+                if event.get("stage") == "done":
+                    level = db.scalar(select(CallLog.level).where(
+                        CallLog.owner_user_id == owner_user_id,
+                        CallLog.trace_id == trace_id,
+                        CallLog.phase == "decide",
+                    ).order_by(CallLog.id.desc()))
+                    mark_stream_result(trace_id, owner_user_id, level=level or "info")
                 yield _frame(event)
         except DomainError as exc:
+            mark_stream_result(trace_id, owner_user_id, level="error", error_code=exc.code.value)
             yield _frame({"stage": "error", "error": error_body(exc, trace_id)})
+        except Exception:
+            mark_stream_result(trace_id, owner_user_id, level="error", error_code="INTERNAL_ERROR")
+            raise
         finally:
             db.close()
 

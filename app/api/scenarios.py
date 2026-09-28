@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -67,6 +67,7 @@ def list_scenarios(
 @router.post("/generate-questions")
 def generate_questions(
     payload: ScenarioGenerate,
+    request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(require_active_user),
 ) -> dict:
@@ -77,6 +78,7 @@ def generate_questions(
         name=payload.name.strip(),
         description=payload.description.strip(),
         requirements=payload.requirements.strip(),
+        trace_id=getattr(request.state, "trace_id", ""),
     )}
 
 

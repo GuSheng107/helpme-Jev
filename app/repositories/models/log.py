@@ -1,6 +1,6 @@
-"""日志域模型：调用日志（JEV / LLM）与审计日志。
+"""日志域模型：统一活动日志及供统计、历史回溯使用的原始日志。
 
-权限红线：用户只能查自己的调用日志，**admin 亦不可查看他人日志**（皇上明令）。
+权限红线：用户只能查自己的活动日志，管理员也不可查看他人日志。
 """
 
 from __future__ import annotations
@@ -60,3 +60,28 @@ class AuditLog(Base, TimestampMixin):
     result: Mapped[str] = mapped_column(String(16), nullable=False, default="ok")
     request_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     meta: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+
+
+class ActivityLog(Base, TimestampMixin):
+    """日志页的唯一数据源：请求摘要与同一 trace 下的业务明细。"""
+
+    __tablename__ = "activity_logs"
+    __table_args__ = (
+        Index("ix_activity_logs_owner_created", "owner_user_id", "created_at"),
+        Index("ix_activity_logs_owner_category_created", "owner_user_id", "category", "created_at"),
+        Index("ix_activity_logs_trace", "trace_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    trace_id: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    level: Mapped[str] = mapped_column(String(8), nullable=False, default="info")
+    summary: Mapped[str] = mapped_column(String(240), nullable=False)
+    detail: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_code: Mapped[str] = mapped_column(String(64), nullable=False, default="")

@@ -322,14 +322,19 @@ def test_jev_protocol_mismatch(client: TestClient, db: Session, monkeypatch: pyt
     headers = _auth(token)
     created = _create_jev(client, headers)
 
-    body = client.post(f"/api/providers/{created['id']}/test", headers=headers).json()
+    tested = client.post(f"/api/providers/{created['id']}/test", headers=headers)
+    body = tested.json()
     assert body["ok"] is False
     assert body["error_code"] == "PROTOCOL_MISMATCH"
     provider = client.get("/api/providers", headers=headers).json()[0]
     assert provider["last_test_ok"] is False
     assert provider["is_enabled"] is False
-    logs = client.get("/api/logs", headers=headers, params={"level": "error"}).json()["items"]
-    assert any(item["kind"] == "jev" and item["phase"] == "connect" for item in logs)
+    logs = client.get(
+        "/api/logs", headers=headers,
+        params={"trace_id": tested.headers["x-trace-id"], "level": "error"},
+    ).json()["items"]
+    assert any(item["source"] == "JEV" and "连通测试" in item["summary"] for item in logs)
+    assert any(item["source"] == "用户" and item["summary"] == "测试模型连接失败" for item in logs)
 
 
 def test_jev_skip_smoke(client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch) -> None:

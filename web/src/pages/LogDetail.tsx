@@ -5,7 +5,7 @@ import Modal from '../components/Modal'
 import { Notice, StatusTag } from '../components/layout'
 import { toast } from '../components/toast'
 import { formatLocalTime } from '../utils/datetime'
-import { KIND_LABELS, levelLabel, levelTone, PHASE_LABELS, prettyLogValue } from './logPresentation'
+import { CATEGORY_LABELS, levelLabel, levelTone, prettyLogValue } from './logPresentation'
 
 function DetailField({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -71,7 +71,7 @@ export default function LogDetail({
           <div>
             <h3 id={titleId} className="text-[17px] font-semibold text-ink">日志详情</h3>
             <p className="mt-1 text-[13px] text-ink-muted">
-              {KIND_LABELS[item.kind]} · {PHASE_LABELS[item.phase] ?? item.phase}
+              {CATEGORY_LABELS[item.category] ?? item.category} · {item.source}
             </p>
           </div>
           <Button size="sm" variant="text" onClick={onClose} aria-label="关闭日志详情">关闭</Button>
@@ -81,9 +81,9 @@ export default function LogDetail({
             <DetailField label="级别">
               <StatusTag tone={levelTone(item.level)}>{levelLabel(item.level)}</StatusTag>
             </DetailField>
-            <DetailField label="类型 / 阶段">{KIND_LABELS[item.kind]} / {PHASE_LABELS[item.phase] ?? item.phase}</DetailField>
+            <DetailField label="类型 / 来源">{CATEGORY_LABELS[item.category] ?? item.category} / {item.source}</DetailField>
             <DetailField label="创建时间">{formatLocalTime(item.created_at)}</DetailField>
-            <DetailField label="模型">{item.model}</DetailField>
+            <DetailField label="摘要">{item.summary}</DetailField>
             <DetailField label="HTTP 状态">{item.status_code ?? '—'}</DetailField>
             <DetailField label="耗时">{item.latency_ms} ms</DetailField>
           </dl>
@@ -98,12 +98,10 @@ export default function LogDetail({
               )}
             </div>
           </div>
-          {item.error && (
-            <Notice tone={levelTone(item.level) === 'danger' ? 'danger' : 'warning'}>{item.error}</Notice>
+          {item.error_code && (
+            <Notice tone={levelTone(item.level) === 'danger' ? 'danger' : 'warning'}>错误码：{item.error_code}</Notice>
           )}
-          {item.truncated && <Notice tone="warning">日志内容已截断，下面展示的是服务端保留的部分。</Notice>}
-          <PayloadSection title="请求内容" value={item.request} />
-          <PayloadSection title="响应内容" value={item.response} />
+          <PayloadSection title="日志详情" value={item.detail} />
         </div>
         <footer className="flex justify-end border-t border-border-subtle px-5 py-3">
           <Button size="sm" onClick={onClose}>关闭</Button>

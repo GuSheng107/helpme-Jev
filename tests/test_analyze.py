@@ -354,6 +354,11 @@ def test_reply_returns_native_text_and_chinese_percent(
     assert [item["text"] for item in body["candidates"]] == ["怎么了？", "想说就说。", "我在。"]
     assert body["candidates"][0]["percent"] == 50
     assert "Nothing much" not in replied.text
+    reply_logs = client.get(
+        "/api/logs", headers=headers,
+        params={"trace_id": replied.headers["x-trace-id"]},
+    ).json()["items"]
+    assert {item["source"] for item in reply_logs} >= {"用户", "LLM", "JEV"}
 
 
 def test_polish_replaces_and_clarify_asks(
@@ -377,6 +382,11 @@ def test_polish_replaces_and_clarify_asks(
     asked = client.post("/api/chat/clarify", headers=headers, json={"conversation_id": conv_id})
     assert asked.status_code == 200, asked.text
     assert asked.json()["questions"] == ["上次是因为什么？"]
+    clarify_logs = client.get(
+        "/api/logs", headers=headers,
+        params={"trace_id": asked.headers["x-trace-id"]},
+    ).json()["items"]
+    assert any(item["source"] == "LLM" and "澄清问题" in item["summary"] for item in clarify_logs)
 
 
 def test_high_danger_refuses_candidates(

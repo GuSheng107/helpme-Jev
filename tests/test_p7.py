@@ -135,30 +135,28 @@ def test_logs_list_and_trace_filter(
     listed = client.get("/api/logs", headers=headers)
     assert listed.status_code == 200, listed.text
     body = listed.json()
-    assert body["total"] >= 2  # 翻译 + 判断各一条
+    assert body["total"] >= 3  # 请求摘要 + 翻译 + 判断
     translate = next(
-        item for item in body["items"] if item["kind"] == "llm" and item["phase"] == "translate"
+        item for item in body["items"] if item["source"] == "LLM" and item["summary"].startswith("翻译")
     )
     # 中英并排：请求里就带着 原文/译文 成对
-    lines = translate["request"]["lines"]
+    lines = json.loads(translate["detail"])["request"]["lines"]
     assert lines[0]["original"] == "你是不是又忘了。"
     assert "Again?" in lines[0]["annotated"]
     # 密钥绝不出现
     assert "sk-abcdefghijklmnop" not in json.dumps(body, ensure_ascii=False)
 
     filtered = client.get("/api/logs", headers=headers, params={"trace_id": trace_id})
-    assert all(item["trace_id"] == trace_id for item in filtered.json()["items"])
+    trace_items = filtered.json()["items"]
+    assert all(item["trace_id"] == trace_id for item in trace_items)
+    assert {item["source"] for item in trace_items} >= {"用户", "LLM", "JEV"}
+    assert any(item["summary"].startswith("发起聊天判断") for item in trace_items)
 
     by_level = client.get("/api/logs", headers=headers, params={"level": "info"})
     assert all(item["level"] == "info" for item in by_level.json()["items"])
-    by_kind_and_phase = client.get(
-        "/api/logs", headers=headers, params={"kind": "llm", "phase": "translate"}
-    )
-    assert by_kind_and_phase.status_code == 200
-    assert all(
-        item["kind"] == "llm" and item["phase"] == "translate"
-        for item in by_kind_and_phase.json()["items"]
-    )
+    by_category = client.get("/api/logs", headers=headers, params={"category": "chat"})
+    assert by_category.status_code == 200
+    assert all(item["category"] == "chat" for item in by_category.json()["items"])
 
     logged_at = datetime.fromisoformat(translate["created_at"].replace("Z", "+00:00"))
     local_time = logged_at.astimezone(timezone(timedelta(hours=8))).isoformat()
@@ -166,14 +164,13 @@ def test_logs_list_and_trace_filter(
         "/api/logs",
         headers=headers,
         params={
-            "kind": "llm",
-            "phase": "translate",
+            "category": "chat",
             "trace_id": trace_id,
             "start_time": local_time,
             "end_time": local_time,
         },
     )
-    assert exact_window.json()["total"] == 1
+    assert any(item["id"] == translate["id"] for item in exact_window.json()["items"])
     assert client.get(
         "/api/logs", headers=headers,
         params={"start_time": (logged_at + timedelta(days=1)).isoformat()},
@@ -195,6 +192,37 @@ def test_logs_list_and_trace_filter(
     stats = client.get("/api/logs/stats", headers=headers)
     assert stats.status_code == 200
     assert stats.json()["judgment_count"] == 1
+    assert client.get("/api/logs", headers=headers).json()["total"] == body["total"]
+
+
+def test_failed_and_limited_login_are_logged_without_password(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    headers, password = _user(client, db, "loginaction")
+    wrong = client.post(
+        "/api/auth/login",
+        headers={"X-Trace-Id": "login-failed-trace"},
+        json={"username": "loginaction", "password": "wrong-password"},
+    )
+    assert wrong.status_code == 401
+    monkeypatch.setattr("app.core.login_throttle.allow", lambda _key: False)
+    limited = client.post(
+        "/api/auth/login",
+        headers={"X-Trace-Id": "login-limited-trace"},
+        json={"username": "loginaction", "password": password},
+    )
+    assert limited.status_code == 429
+    logs = client.get("/api/logs", headers=headers, params={"category": "auth"}).json()["items"]
+    assert any(
+        item["source"] == "系统"
+        and any(peer["source"] == "用户" and peer["trace_id"] == item["trace_id"] for peer in logs)
+        for item in logs
+    )
+    assert any(item["trace_id"] == "login-failed-trace" and item["level"] == "error" for item in logs)
+    assert any(item["trace_id"] == "login-limited-trace" and item["level"] == "warn" for item in logs)
+    serialized = json.dumps(logs, ensure_ascii=False)
+    assert password not in serialized
+    assert "wrong-password" not in serialized
 
 
 def test_logs_isolated_between_users(client: TestClient, db: Session) -> None:
