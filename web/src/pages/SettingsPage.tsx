@@ -215,7 +215,7 @@ export default function SettingsPage({ user, onUserChange, onLogout }: Props) {
 
   return (
     <PageShell>
-      <PageBody className="flex h-full min-h-0 flex-col !py-0">
+      <PageBody className="flex h-full max-h-full min-h-0 w-full flex-col !py-0">
         <div className="pt-6">
           <PageHeader title="设置" description="账号、表达模型和决策模型。" />
         </div>

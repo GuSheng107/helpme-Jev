@@ -68,14 +68,17 @@ export default function ScenarioPage({ user }: { user: UserSummary }) {
 
   return (
     <PageShell>
-      <PageBody className="flex h-full min-h-0 flex-col !py-0">
+      <PageBody className="flex h-full max-h-full min-h-0 w-full flex-col !py-0">
         <div className="pt-6">
         <PageHeader
           title="场景"
           description={isAdmin
             ? '查看系统内置场景；你新建的场景会发布为系统内置，所有用户可见。'
             : '查看系统内置场景，或创建自己的场景。'}
-          actions={<Button size="sm" variant="primary" onClick={() => openEditor({ mode: 'new' })}>新建场景</Button>}
+          actions={<>
+            <Button size="sm" loading={loading} disabled={loading} disabledReason="正在载入" onClick={() => { setLoading(true); void reload() }}>刷新</Button>
+            <Button size="sm" variant="primary" onClick={() => openEditor({ mode: 'new' })}>新建场景</Button>
+          </>}
         />
         {error && <div className="mb-3"><Notice tone="danger">{error}</Notice></div>}
         {notice && <div className="mb-3"><Notice tone="success">{notice}</Notice></div>}
