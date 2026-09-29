@@ -13,7 +13,7 @@ from ..core.time import iso_utc
 from ..domain.errors import DomainError, DomainErrorCode
 from ..domain.schemas.conversation import parse_members
 from ..repositories.conversations_repo import MessageRepository
-from ..repositories.models import Conversation, Persona, Scenario
+from ..repositories.models import Conversation, Persona, PersonaProfile, Scenario
 from ..scenarios.persona_questions import (
     TRAIT_LABELS,
     WEAK_SCIENCE_TRAITS,
@@ -44,6 +44,35 @@ def _load(raw: str, fallback):
         return json.loads(raw or "")
     except json.JSONDecodeError:
         return fallback
+
+
+def trait_items(stored: str) -> list[dict]:
+    """把人设 traits JSON 转成可直接展示的列表（key / 中文标题 / 文案 / 弱框架标记）。
+
+    人设库档案与推断档案共用同一存储格式，也共用这一渲染。
+    """
+    stored_data = _load(stored, {})
+    if isinstance(stored_data, dict) and stored_data.get("_schema") == "custom_v1":
+        values = stored_data.get("values", {})
+        metadata = stored_data.get("meta", {})
+    else:
+        values = stored_data
+        metadata = {}
+    if not isinstance(values, dict):
+        values = {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    return [
+        {
+            "key": key,
+            "title": str(meta.get("title") or TRAIT_LABELS.get(key, key)),
+            "text": _trait_text_with_meta(key, value, meta),
+            "value": value,
+            "weak_science": key in WEAK_SCIENCE_TRAITS,
+        }
+        for key, value in values.items()
+        for meta in [metadata.get(key) if isinstance(metadata.get(key), dict) else {}]
+    ]
 
 
 def _percent(value: object) -> int:
@@ -261,31 +290,66 @@ class PersonaService:
         }
 
     def member_persona_lines(
-        self, db: Session, *, owner_user_id: int, conversation: Conversation
+        self, db: Session, *, owner_user_id: int, conversation: Conversation,
+        extra_keys: tuple[str, ...] | list[str] = (),
     ) -> list[str]:
-        """群聊判断的背景：每位有人设的成员一行摘要，供 JEV 分清谁是谁。
+        """判断的背景：每位有人设的成员一行摘要，供 JEV 分清谁是谁。
 
-        整体受字符预算约束 —— JEV 背景总预算有限，人设摘要不能把
-        记忆挤出去。
+        单聊传 ``extra_keys=[counterpart_key]`` 也会并入 —— 人设库档案
+        （key 命中）优先于推断档案。整体受字符预算约束：JEV 背景
+        总预算有限，人设摘要不能把记忆挤出去。
         """
         context = persona_context_of(db, conversation)
-        lines: list[str] = []
-        used = 0
-        for member in parse_members(conversation.members):
-            row = self._find(
-                db, owner_user_id=owner_user_id,
-                counterpart_key=member.key, subject="other", context=context,
+        if conversation.is_group:
+            targets = [(member.key, member.name) for member in parse_members(conversation.members)]
+        else:
+            targets = [(conversation.counterpart_key, conversation.counterpart_name or "对方")]
+        targets.extend((key, key) for key in extra_keys if key)
+        seen: set[str] = set()
+        ordered: list[tuple[str, str]] = []
+        for key, name in targets:
+            if key and key not in seen:
+                seen.add(key)
+                ordered.append((key, name))
+        if not ordered:
+            return []
+
+        profiles = {
+            profile.key: profile
+            for profile in db.scalars(
+                select(PersonaProfile).where(
+                    PersonaProfile.owner_user_id == owner_user_id,
+                    PersonaProfile.key.in_([key for key, _ in ordered]),
+                )
             )
-            if row is None:
-                continue
-            traits = self._view(row)["traits"][:6]
-            if not traits:
-                continue
+        }
+
+        def _line(name: str, traits: list[dict]) -> str:
             # 带上特质名：裸分数（3/8）JEV 读不出含义
-            line = (
-                f"{member.name}的人设："
+            return (
+                f"{name}的人设："
                 + "、".join(f"{trait['title']}{trait['text']}" for trait in traits)
             )
+
+        lines: list[str] = []
+        used = 0
+        for key, name in ordered:
+            profile = profiles.get(key)
+            if profile is not None:
+                traits = trait_items(profile.traits)[:6]
+                if traits:
+                    line = _line(profile.nickname or name, traits)
+            else:
+                row = self._find(
+                    db, owner_user_id=owner_user_id,
+                    counterpart_key=key, subject="other", context=context,
+                )
+                if row is None:
+                    continue
+                traits = self._view(row)["traits"][:6]
+                if not traits:
+                    continue
+                line = _line(name, traits)
             if used + len(line) > PERSONA_LINES_BUDGET_CHARS:
                 break
             used += len(line) + 1
@@ -384,33 +448,11 @@ class PersonaService:
                 "version": 0,
                 "updated_at": None,
             }
-        stored = _load(row.traits, {})
-        if isinstance(stored, dict) and stored.get("_schema") == "custom_v1":
-            values = stored.get("values", {})
-            metadata = stored.get("meta", {})
-        else:
-            values = stored
-            metadata = {}
-        if not isinstance(values, dict):
-            values = {}
-        if not isinstance(metadata, dict):
-            metadata = {}
-        traits = [
-            {
-                "key": key,
-                "title": str(meta.get("title") or TRAIT_LABELS.get(key, key)),
-                "text": _trait_text_with_meta(key, value, meta),
-                "value": value,
-                "weak_science": key in WEAK_SCIENCE_TRAITS,
-            }
-            for key, value in values.items()
-            for meta in [metadata.get(key) if isinstance(metadata.get(key), dict) else {}]
-        ]
         return {
             "counterpart_key": row.counterpart_key,
             "subject": row.subject,
             "context": row.context,
-            "traits": traits,
+            "traits": trait_items(row.traits),
             "confidence": round(row.confidence * 100),
             "version": row.version,
             "updated_at": iso_utc(row.updated_at),

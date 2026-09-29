@@ -4,17 +4,23 @@ import { listConversations, type Conversation } from '../api/chat'
 import {
   buildPersona,
   commitChat,
+  createProfile,
+  deleteProfile,
   fetchPersonaBatch,
   getPersona,
   importQa,
+  listProfiles,
   personaUsage,
   previewChat,
+  updateProfile,
   type ChatPreview,
   type PersonaBatch,
   type PersonaContext,
+  type PersonaProfileView,
   type PersonaView,
 } from '../api/personas'
 import Button from '../components/Button'
+import { confirmAction } from '../components/confirm'
 import { DataCard, EmptyState, Notice, PageBody, PageHeader, PageShell } from '../components/layout'
 
 type SelfItem =
@@ -98,6 +104,15 @@ export default function PersonaPage() {
   const [notice, setNotice] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  // 人设库
+  const [profiles, setProfiles] = useState<PersonaProfileView[]>([])
+  const [wizardOpen, setWizardOpen] = useState(false)
+  const [pNickname, setPNickname] = useState('')
+  const [pAvatar, setPAvatar] = useState('')
+  const [pContext, setPContext] = useState<PersonaContext>('romance')
+  const [pAnswers, setPAnswers] = useState<Record<string, string | number>>({})
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [eNickname, setENickname] = useState('')
 
   const current = conversations.find((item) => item.id === currentId) ?? null
 
@@ -119,6 +134,7 @@ export default function PersonaPage() {
       })
       .catch(() => setError('会话未能载入'))
     personaUsage().then(setUsage).catch(() => undefined)
+    listProfiles().then(setProfiles).catch(() => undefined)
   }, [])
 
   useEffect(() => {
@@ -246,6 +262,93 @@ export default function PersonaPage() {
   }
 
   const selfItems = SELF_FORMS[context]
+  const wizardItems = SELF_FORMS[pContext]
+
+  function onProfileAvatarFile(file: File) {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const img = new Image()
+      img.onload = () => {
+        const canvas = document.createElement('canvas')
+        canvas.width = 96
+        canvas.height = 96
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return
+        const scale = Math.max(96 / img.width, 96 / img.height)
+        const w = img.width * scale
+        const h = img.height * scale
+        ctx.drawImage(img, (96 - w) / 2, (96 - h) / 2, w, h)
+        setPAvatar(canvas.toDataURL('image/jpeg', 0.85))
+      }
+      img.src = String(reader.result)
+    }
+    reader.readAsDataURL(file)
+  }
+
+  async function saveProfile() {
+    if (!pNickname.trim()) {
+      setError('请先填写昵称')
+      return
+    }
+    if (Object.keys(pAnswers).length === 0) {
+      setError('请至少回答一道题')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      await createProfile({
+        nickname: pNickname.trim(),
+        avatar_base64: pAvatar,
+        context: pContext,
+        answers: pAnswers,
+      })
+      setProfiles(await listProfiles())
+      setWizardOpen(false)
+      setPNickname('')
+      setPAvatar('')
+      setPAnswers({})
+      setNotice('人设已保存，聊天里可以直接选用')
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '人设未生成')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function renameProfile(profile: PersonaProfileView) {
+    const nickname = eNickname.trim()
+    if (!nickname) return
+    setBusy(true)
+    setError(null)
+    try {
+      const updated = await updateProfile(profile.id, { nickname })
+      setProfiles((prev) => prev.map((item) => (item.id === updated.id ? updated : item)))
+      setEditingId(null)
+      setNotice('昵称已更新')
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '更新未完成')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function removeProfile(profile: PersonaProfileView) {
+    const confirmed = await confirmAction({
+      title: '删除人设',
+      message: `删除「${profile.nickname}」后，已有聊天不受影响，但判断时不再带上这份人设。`,
+      confirmText: '删除',
+      tone: 'danger',
+    })
+    if (!confirmed) return
+    try {
+      await deleteProfile(profile.id)
+      setProfiles((prev) => prev.filter((item) => item.id !== profile.id))
+      setNotice('人设已删除')
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '删除未完成')
+    }
+  }
 
   return (
     <PageShell>
@@ -259,11 +362,184 @@ export default function PersonaPage() {
         )}
         {error && <Notice tone="danger">{error}</Notice>}
         {notice && <div className="mb-3"><Notice tone="info">{notice}</Notice></div>}
-        {conversations.length === 0 ? (
-          <EmptyState title="还没有对象" description="先在聊天里新建一位对象，再回来建模。" />
+        <div className="space-y-4">
+            <DataCard title={`人设库${profiles.length > 0 ? `（${profiles.length}）` : ''}`}>
+              <p className="mb-3 text-[13px] text-ink-muted">
+                先答题、由语言模型生成人设，聊天（单聊 / 群聊）创建时直接选用。
+              </p>
+              {profiles.length === 0 && !wizardOpen && (
+                <p className="text-[14px] text-ink-secondary">还没有人设，点「新建人设」开始。</p>
+              )}
+              {profiles.length > 0 && (
+                <ul className="mb-3 space-y-2">
+                  {profiles.map((profile) => (
+                    <li key={profile.id} className="flex items-start gap-3 rounded-[6px] bg-surface-muted px-3 py-2">
+                      {profile.avatar_base64 ? (
+                        <img
+                          src={profile.avatar_base64}
+                          alt=""
+                          className="h-10 w-10 shrink-0 rounded-full object-cover"
+                        />
+                      ) : (
+                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary-soft text-[16px] text-primary">
+                          {profile.nickname.slice(0, 1)}
+                        </span>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        {editingId === profile.id ? (
+                          <div className="flex items-center gap-2">
+                            <input
+                              className="w-40 rounded-[6px] border border-border px-2 py-1 text-[14px]"
+                              value={eNickname}
+                              onChange={(event) => setENickname(event.target.value)}
+                            />
+                            <Button size="sm" variant="primary" loading={busy} onClick={() => void renameProfile(profile)}>
+                              保存
+                            </Button>
+                            <Button size="sm" onClick={() => setEditingId(null)}>取消</Button>
+                          </div>
+                        ) : (
+                          <p className="text-[14px] text-ink">
+                            {profile.nickname}
+                            <span className="ml-2 text-[12px] text-ink-muted">
+                              {CONTEXT_LABELS[profile.context]}　置信度 {profile.confidence}%
+                            </span>
+                          </p>
+                        )}
+                        {profile.summary && (
+                          <p className="mt-0.5 text-[13px] leading-5 text-ink-secondary">{profile.summary}</p>
+                        )}
+                        {profile.traits.length > 0 && (
+                          <p className="mt-0.5 truncate text-[12px] text-ink-muted">
+                            {profile.traits.map((trait) => `${trait.title} ${trait.text}`).join('　')}
+                          </p>
+                        )}
+                      </div>
+                      {editingId !== profile.id && (
+                        <div className="flex shrink-0 gap-1">
+                          <Button
+                            size="sm"
+                            onClick={() => {
+                              setEditingId(profile.id)
+                              setENickname(profile.nickname)
+                            }}
+                          >
+                            改名
+                          </Button>
+                          <Button size="sm" onClick={() => void removeProfile(profile)}>删除</Button>
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {!wizardOpen ? (
+                <Button size="sm" variant="primary" onClick={() => setWizardOpen(true)}>新建人设</Button>
+              ) : (
+                <div className="space-y-3 rounded-[6px] border border-border p-3">
+                  <div className="flex items-center gap-3">
+                    {pAvatar ? (
+                      <img src={pAvatar} alt="" className="h-14 w-14 rounded-full object-cover" />
+                    ) : (
+                      <span className="flex h-14 w-14 items-center justify-center rounded-full bg-surface-muted text-[12px] text-ink-muted">
+                        头像
+                      </span>
+                    )}
+                    <label className="cursor-pointer text-[13px] text-primary">
+                      上传头像
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp"
+                        className="hidden"
+                        onChange={(event) => {
+                          const file = event.target.files?.[0]
+                          event.target.value = ''
+                          if (file) onProfileAvatarFile(file)
+                        }}
+                      />
+                    </label>
+                  </div>
+                  <div>
+                    <span className="mb-1 block text-[12px] text-ink-muted">昵称</span>
+                    <input
+                      className="w-full rounded-[6px] border border-border px-2 py-1.5 text-[14px]"
+                      value={pNickname}
+                      onChange={(event) => setPNickname(event.target.value)}
+                      placeholder="给这个人设起个名字"
+                    />
+                  </div>
+                  <div>
+                    <span className="mb-1 block text-[12px] text-ink-muted">场景</span>
+                    <div className="flex rounded-[6px] border border-border p-0.5">
+                      {(['romance', 'workplace'] as const).map((item) => (
+                        <button
+                          key={item}
+                          type="button"
+                          className={`rounded-[4px] px-3 py-1 text-[13px] ${
+                            pContext === item ? 'bg-primary text-white' : 'text-ink-secondary'
+                          }`}
+                          onClick={() => {
+                            setPContext(item)
+                            setPAnswers({})
+                          }}
+                        >
+                          {CONTEXT_LABELS[item]}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <ul className="space-y-2">
+                    {wizardItems.map((item) => (
+                      <li key={item.key} className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-[13px] leading-5 text-ink-secondary">{item.statement}</span>
+                        <select
+                          className="rounded-[6px] border border-border px-2 py-1 text-[13px]"
+                          value={String(pAnswers[item.key] ?? '')}
+                          onChange={(event) => {
+                            const raw = event.target.value
+                            if (!raw) {
+                              setPAnswers((prev) => {
+                                const next = { ...prev }
+                                delete next[item.key]
+                                return next
+                              })
+                              return
+                            }
+                            setPAnswers((prev) => ({
+                              ...prev,
+                              [item.key]: item.kind === 'score' ? Number(raw) : raw,
+                            }))
+                          }}
+                        >
+                          <option value="">未作答</option>
+                          {item.kind === 'score'
+                            ? SCORE_OPTIONS.map(([label, value]) => (
+                                <option key={value} value={value}>{label}</option>
+                              ))
+                            : item.options.map(([label, value]) => (
+                                <option key={value} value={value}>{label}</option>
+                              ))}
+                        </select>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="text-[12px] text-ink-muted">
+                    以「TA」的口吻作答即可，保存后由语言模型生成人设速写。
+                  </p>
+                  <div className="flex gap-2">
+                    <Button variant="primary" size="sm" loading={busy} onClick={() => void saveProfile()}>
+                      生成并保存
+                    </Button>
+                    <Button size="sm" onClick={() => setWizardOpen(false)}>取消</Button>
+                  </div>
+                </div>
+              )}
+            </DataCard>
+            {conversations.length === 0 ? (
+          <EmptyState title="还没有聊天对象" description="人设保存后，去聊天里新建会话并选用它。" />
         ) : (
-          <div className="space-y-4">
-            <DataCard title="档案">
+            <>
+                <DataCard title="档案">
               <div className="mb-3 flex flex-wrap items-center gap-2">
                 <select
                   className="rounded-[6px] border border-border px-2 py-1 text-[14px]"
@@ -440,8 +716,9 @@ export default function PersonaPage() {
                 导入
               </Button>
             </DataCard>
+              </>
+            )}
           </div>
-        )}
       </PageBody>
     </PageShell>
   )

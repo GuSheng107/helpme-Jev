@@ -63,6 +63,34 @@ class Scenario(Base, TimestampMixin):
     is_builtin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
+class PersonaProfile(Base, TimestampMixin):
+    """人设库档案：先答题、LLM 生成速写，聊天（单聊 / 群聊）创建时选用。
+
+    ``key`` 是归一化昵称，与会话 ``_counterpart_key`` 同规则，**创建后冻结**：
+    会话与消息靠它关联人设，改名只影响显示。
+    ``traits`` 与 ``personas.traits`` 同格式；判断链路里 key 命中即优先用档案。
+    """
+
+    __tablename__ = "persona_profiles"
+    __table_args__ = (
+        UniqueConstraint("owner_user_id", "key", name="uq_persona_profiles_owner_key"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    owner_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    key: Mapped[str] = mapped_column(String(64), nullable=False)
+    nickname: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    avatar_base64: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    context: Mapped[str] = mapped_column(String(16), nullable=False, default="romance")
+    answers: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    traits: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    confidence: Mapped[float] = mapped_column(nullable=False, default=0.9)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+
 class Conversation(Base, TimestampMixin):
     """一个聊天对象一条会话（人设按 ``counterpart_key`` 跨会话共用）。
 

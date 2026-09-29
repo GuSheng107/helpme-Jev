@@ -554,3 +554,248 @@ def test_batch_hidden_from_other_users(client: TestClient, db: Session) -> None:
     )
     assert peeked.status_code == 404
     assert peeked.json()["error"]["code"] == "NOT_FOUND"
+
+
+# ------------------------------------------------------------------ 人设库
+class _SummaryRouter:
+    """LLM 返回固定速写；记录请求供断言。"""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def post(self, url, json=None, headers=None, timeout=None):  # noqa: A002
+        self.calls.append({"url": url, "json": json})
+        return _Response(
+            {"choices": [{"message": {"content": _json.dumps({"summary": "做事有计划，容易焦虑，需要被肯定。"})}}]}
+        )
+
+
+_PROFILE_ANSWERS = {
+    "openness": 7,
+    "conscientiousness": 7,
+    "extraversion": 4,
+    "agreeableness": 7,
+    "emotional_stability": 1,
+    "attachment": "anxious",
+    "love_language": "words",
+    "conflict_style": "avoiding",
+}
+
+
+def test_profile_create_maps_answers_and_summarizes(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """答题 → traits 落库 + LLM 生成速写；同名人设 409；非法作答 422。"""
+    headers = _user(client, db, "profilelib")
+    _ready(client, headers)
+    router = _SummaryRouter()
+    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: router)
+
+    created = client.post(
+        "/api/personas/profiles",
+        headers=headers,
+        json={"nickname": "小美", "context": "romance", "answers": _PROFILE_ANSWERS},
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["key"] == "小美"
+    assert body["summary"] == "做事有计划，容易焦虑，需要被肯定。"
+    traits = {item["key"]: item for item in body["traits"]}
+    assert traits["openness"]["value"] == 7
+    assert traits["attachment"]["text"] == "焦虑型"
+    assert traits["love_language"]["weak_science"] is True
+
+    duplicate = client.post(
+        "/api/personas/profiles",
+        headers=headers,
+        json={"nickname": " 小美 ", "context": "workplace", "answers": {"disc": "dominance"}},
+    )
+    assert duplicate.status_code == 409
+
+    bad = client.post(
+        "/api/personas/profiles",
+        headers=headers,
+        json={"nickname": "小华", "context": "romance", "answers": {"openness": 99}},
+    )
+    assert bad.status_code == 422
+    unknown = client.post(
+        "/api/personas/profiles",
+        headers=headers,
+        json={"nickname": "小华", "context": "romance", "answers": {"mbti": "INTJ"}},
+    )
+    assert unknown.status_code == 422
+
+    # LLM 失败 → 502，且不落库
+    def _boom(*args, **kwargs):
+        raise AssertionError("not used")
+
+    class _FailRouter:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def post(self, url, json=None, headers=None, timeout=None):  # noqa: A002
+            return _Response({"choices": [{"message": {"content": "not json"}}]})
+
+    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: _FailRouter())
+    reset_client()
+    failed = client.post(
+        "/api/personas/profiles",
+        headers=headers,
+        json={"nickname": "小华", "context": "romance", "answers": _PROFILE_ANSWERS},
+    )
+    assert failed.status_code == 502
+    listed = client.get("/api/personas/profiles", headers=headers).json()
+    assert [item["nickname"] for item in listed] == ["小美"]
+
+
+def test_conversation_selects_profiles(client: TestClient, db: Session) -> None:
+    """聊天创建选人设：单聊整档带入，群聊成员与人设合并去重，跨用户 404。"""
+    import json as _json
+
+    from sqlalchemy import select
+
+    from app.core.db import SessionLocal
+    from app.repositories.models import PersonaProfile
+
+    password = "chatprofile!Passw0rd"
+    UserRepository().add(
+        db,
+        User(
+            username="chatprofile",
+            display_name="chatprofile",
+            password_hash=hash_password(password),
+            role=UserRole.USER.value,
+            must_change_password=False,
+            is_active=True,
+        ),
+    )
+    db.commit()
+    resp = client.post("/api/auth/login", json={"username": "chatprofile", "password": password})
+    headers = {"Authorization": f"Bearer {resp.json()['access_token']}"}
+    owner = int(resp.json()["id"])
+
+    session = SessionLocal()
+    for nickname, context in (("小美", "romance"), ("阿花", "workplace")):
+        session.add(
+            PersonaProfile(
+                owner_user_id=owner,
+                key=nickname,
+                nickname=nickname,
+                context=context,
+                traits=_json.dumps({"openness": 5}, ensure_ascii=False),
+            )
+        )
+    session.commit()
+    profiles = {
+        p.nickname: p.id
+        for p in session.scalars(
+            select(PersonaProfile).where(PersonaProfile.owner_user_id == owner)
+        )
+    }
+    session.close()
+
+    solo = client.post(
+        "/api/conversations",
+        headers=headers,
+        json={"title": "和小美的聊天", "profile_id": profiles["小美"]},
+    )
+    assert solo.status_code == 201, solo.text
+    assert solo.json()["counterpart_key"] == "小美"
+    assert solo.json()["counterpart_name"] == "小美"
+    assert solo.json()["is_group"] is False
+
+    group = client.post(
+        "/api/conversations",
+        headers=headers,
+        json={
+            "title": "项目组",
+            "member_profile_ids": [profiles["小美"], profiles["阿花"]],
+            "members": ["小美", "小林"],  # 小美与档案重复，按 key 去重
+        },
+    )
+    assert group.status_code == 201, group.text
+    keys = [m["key"] for m in group.json()["members"]]
+    assert keys == ["小美", "阿花", "小林"]
+    assert group.json()["is_group"] is True
+    assert group.json()["counterpart_key"] == "项目组"
+
+    missing = client.post(
+        "/api/conversations", headers=headers, json={"title": "x", "profile_id": 99999}
+    )
+    assert missing.status_code == 404
+
+
+def test_member_persona_lines_prefers_profiles(client: TestClient, db: Session) -> None:
+    """判断背景：人设库档案优先于推断档案；单聊也并入。"""
+    import json as _json
+
+    from app.repositories.models import Conversation, Persona, PersonaProfile
+    from app.services.persona_service import PersonaService
+
+    password = "proflines!Passw0rd"
+    UserRepository().add(
+        db,
+        User(
+            username="proflines",
+            display_name="proflines",
+            password_hash=hash_password(password),
+            role=UserRole.USER.value,
+            must_change_password=False,
+            is_active=True,
+        ),
+    )
+    db.commit()
+    resp = client.post("/api/auth/login", json={"username": "proflines", "password": password})
+    owner = int(resp.json()["id"])
+
+    conv = Conversation(
+        owner_user_id=owner,
+        title="单聊会话",
+        counterpart_name="小美",
+        counterpart_key="小美",
+    )
+    db.add(conv)
+    db.flush()
+    # 推断档案（应被档案库覆盖）
+    db.add(
+        Persona(
+            owner_user_id=owner,
+            counterpart_key="小美",
+            subject="other",
+            context="romance",
+            traits=_json.dumps({"openness": 1}, ensure_ascii=False),
+            evidence="[]",
+            confidence=0.5,
+            version=1,
+        )
+    )
+    db.add(
+        PersonaProfile(
+            owner_user_id=owner,
+            key="小美",
+            nickname="小美",
+            context="romance",
+            traits=_json.dumps(
+                {"_schema": "custom_v1",
+                 "values": {"attachment": "anxious"},
+                 "meta": {"attachment": {"title": "依恋倾向", "labels": {"anxious": "焦虑型"}}}},
+                ensure_ascii=False,
+            ),
+        )
+    )
+    db.commit()
+
+    lines = PersonaService().member_persona_lines(db, owner_user_id=owner, conversation=conv)
+    assert len(lines) == 1
+    assert lines[0].startswith("小美的人设：")
+    assert "焦虑型" in lines[0]
+    assert "1/8" not in lines[0]  # 推断档案的裸分没有出现

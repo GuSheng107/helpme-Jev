@@ -72,6 +72,10 @@ class ConversationCreate(StrictModel):
     scenario_id: int | None = None
     # 群聊成员名字列表；非空即按群聊建立
     members: list[MemberName] = Field(default_factory=list, max_length=MAX_GROUP_MEMBERS)
+    # 单聊从人设库选用：对方昵称 / key / 头像随档案带入（优先于 counterpart_name）
+    profile_id: int | None = None
+    # 群聊从人设库选成员：与手输名字合并去重（key 相同只留一份）
+    member_profile_ids: list[int] = Field(default_factory=list, max_length=MAX_GROUP_MEMBERS)
 
 
 class ConversationUpdate(StrictModel):

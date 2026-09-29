@@ -20,9 +20,11 @@ from ..core.db import get_db
 from ..core.time import iso_utc
 from ..domain.errors import DomainError, DomainErrorCode
 from ..domain.schemas.conversation import (
+    MAX_GROUP_MEMBERS,
     ConversationCreate,
     ConversationUpdate,
     ConversationView,
+    GroupMember,
     MessageCreate,
     MessageView,
     normalize_member_names,
@@ -45,6 +47,16 @@ def _counterpart_key(name: str, fallback: str) -> str:
     """
     key = "".join((name or "").split()).lower()
     return key or fallback.strip().lower()
+
+
+def _profile_or_404(db: Session, *, owner_user_id: int, profile_id: int):
+    """人设库档案归属校验：拿不到别人的档案。"""
+    from ..repositories.models import PersonaProfile
+
+    row = db.get(PersonaProfile, profile_id)
+    if row is None or row.owner_user_id != owner_user_id:
+        raise DomainError(DomainErrorCode.NOT_FOUND, "人设不存在", status_code=404)
+    return row
 
 
 def _conversation_view(db: Session, row: Conversation) -> ConversationView:
@@ -127,20 +139,50 @@ def create_conversation(
         raise DomainError(
             DomainErrorCode.VALIDATION_FAILED, "成员名不能全是空白", status_code=422
         )
+
+    # 人设库选用：单聊整档带入；群聊成员与手输名字合并（key 去重）
+    if payload.profile_id is not None and payload.member_profile_ids:
+        raise DomainError(
+            DomainErrorCode.VALIDATION_FAILED,
+            "单聊人设和群聊成员不能同时选择", status_code=422
+        )
+    profile_members: list[GroupMember] = []
+    solo_profile = None
+    if payload.profile_id is not None:
+        solo_profile = _profile_or_404(db, owner_user_id=user.id, profile_id=payload.profile_id)
+        if members:
+            raise DomainError(
+                DomainErrorCode.VALIDATION_FAILED, "选了人设就不要再手填成员", status_code=422
+            )
+    for profile_id in payload.member_profile_ids:
+        profile = _profile_or_404(db, owner_user_id=user.id, profile_id=profile_id)
+        profile_members.append(GroupMember(key=profile.key, name=profile.nickname))
+    merged: dict[str, GroupMember] = {}
+    for member in [*profile_members, *members]:
+        merged.setdefault(member.key, member)
+    members = list(merged.values())[:MAX_GROUP_MEMBERS]
+
     is_group = bool(members)
     if is_group and not payload.title.strip():
         # title 在 schema 里必填；群聊的 key 取群名，得有名字才能稳住人设档
         raise DomainError(DomainErrorCode.VALIDATION_FAILED, "群聊需要一个群名", status_code=422)
 
+    if is_group:
+        # 群聊没有单一对象：key 取群名，群级记忆挂这里
+        counterpart_name, counterpart_key = "", _counterpart_key("", payload.title)
+    elif solo_profile is not None:
+        counterpart_name, counterpart_key = solo_profile.nickname, solo_profile.key
+    else:
+        counterpart_name = payload.counterpart_name.strip()
+        counterpart_key = _counterpart_key(counterpart_name, payload.title)
+
     row = Conversation(
         owner_user_id=user.id,
         scenario_id=payload.scenario_id,
         title=payload.title.strip(),
-        counterpart_name="" if is_group else payload.counterpart_name.strip(),
+        counterpart_name=counterpart_name,
         relationship=payload.relationship.strip(),
-        counterpart_key=_counterpart_key(
-            "" if is_group else payload.counterpart_name, payload.title
-        ),
+        counterpart_key=counterpart_key,
         is_group=is_group,
         members=json.dumps(
             [member.model_dump() for member in members], ensure_ascii=False
