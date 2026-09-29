@@ -419,3 +419,35 @@ def test_group_blank_members_rejected(client: TestClient, db: Session) -> None:
     )
     assert resp.status_code == 422
     assert resp.json()["error"]["code"] == "VALIDATION_FAILED"
+
+
+def test_group_members_can_be_updated(client: TestClient, db: Session) -> None:
+    """群聊可改成员表；单聊不能加成员；全空白拒绝。"""
+    token = _make_user(client, db, "editmember")
+    headers = _auth(token)
+    conv_id = client.post(
+        "/api/conversations",
+        json={"title": "可编辑群", "members": ["小林"]},
+        headers=headers,
+    ).json()["id"]
+
+    updated = client.patch(
+        f"/api/conversations/{conv_id}",
+        json={"members": ["小林", "阿花", "  "]},
+        headers=headers,
+    )
+    assert updated.status_code == 200, updated.text
+    assert [m["key"] for m in updated.json()["members"]] == ["小林", "阿花"]
+
+    blank = client.patch(
+        f"/api/conversations/{conv_id}", json={"members": ["   "]}, headers=headers
+    )
+    assert blank.status_code == 422
+
+    solo_id = client.post(
+        "/api/conversations", json={"title": "单聊", "counterpart_name": "小美"}, headers=headers
+    ).json()["id"]
+    refused = client.patch(
+        f"/api/conversations/{solo_id}", json={"members": ["小林"]}, headers=headers
+    )
+    assert refused.status_code == 422

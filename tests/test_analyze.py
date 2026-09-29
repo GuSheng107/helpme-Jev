@@ -418,3 +418,119 @@ def test_high_danger_refuses_candidates(
     )
     assert explained.status_code == 200, explained.text
     assert explained.json()["reason"] == "对方在确认你是否在意。"
+
+
+def _group(client: TestClient, headers: dict) -> int:
+    created = client.post(
+        "/api/conversations",
+        json={"title": "项目小队", "relationship": "同事", "members": ["小林", "阿花"]},
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    conv_id = created.json()["id"]
+    for speaker, content in (
+        ("小林", "这个需求我看悬，先说好做不完别赖我。"),
+        ("阿花", "没事，一起拆任务就行。"),
+    ):
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages",
+            json={"role": "other", "content": content, "speaker": speaker},
+            headers=headers,
+        )
+        assert resp.status_code == 201, resp.text
+    return conv_id
+
+
+def test_group_analyze_uses_speaker_names_and_personas(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """群聊分析：JEV 收到的是成员名，不是 other；背景并入成员人设摘要。"""
+    import json as _json
+
+    from app.repositories.models import Conversation, Persona
+    from app.core.db import SessionLocal
+
+    token = _make_user(client, db, "groupanalyze")
+    headers = _auth(token)
+    _configure(client, headers)
+    conv_id = _group(client, headers)
+
+    # 给小林插一份人设（romance 情境：会话没挂场景）
+    session = SessionLocal()
+    conv = session.get(Conversation, conv_id)
+    session.add(
+        Persona(
+            owner_user_id=conv.owner_user_id,
+            counterpart_key="小林",
+            subject="other",
+            context="romance",
+            traits=_json.dumps(
+                {"_schema": "custom_v1",
+                 "values": {"style": "long"},
+                 "meta": {"style": {"title": "风格", "labels": {"long": "详" * 30}}}},
+                ensure_ascii=False,
+            ),
+            evidence="[]",
+            confidence=0.8,
+            version=1,
+        )
+    )
+    session.commit()
+    owner_id = conv.owner_user_id
+    session.close()
+
+    router = _Router()
+    _patch(monkeypatch, router)
+    judged = client.post("/api/chat/analyze", json={"conversation_id": conv_id}, headers=headers)
+    assert judged.status_code == 200, judged.text
+
+    jev_call = next(call for call in router.calls if "systemone" in call["url"])
+    state = jev_call["json"]["state"]
+    assert [msg["from"] for msg in state["chat"]["messages"]] == ["小林", "阿花"]
+    assert "小林的人设" in state.get("background", "")
+    assert "风格" in state.get("background", "")
+
+    # 复盘 payload 按发言人归属：reflect 是独立接口，直接调用让断言必然执行
+    reflected = client.post(
+        "/api/chat/reflect", json={"conversation_id": conv_id}, headers=headers
+    )
+    assert reflected.status_code == 200, reflected.text
+    reflect_call = next(
+        call for call in router.calls if "/chat/completions" in call["url"]
+        and "memory list" in call["json"]["messages"][0]["content"]
+    )
+    payload = json_loads(reflect_call["json"]["messages"][1]["content"])
+    assert {msg["from"] for msg in payload["messages"]} == {"小林", "阿花"}
+    # 群聊没有单一对象：counterpart 把群名给 LLM 当参照
+    assert payload["counterpart"] == "项目小队"
+
+
+def test_group_reply_uses_speaker_names(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """群聊候选起草：发给 LLM 的消息按成员名归属。"""
+    token = _make_user(client, db, "groupreply")
+    headers = _auth(token)
+    _configure(client, headers)
+    conv_id = _group(client, headers)
+
+    router = _Router()
+    _patch(monkeypatch, router)
+    replied = client.post(
+        "/api/chat/reply",
+        headers=headers,
+        json={
+            "conversation_id": conv_id,
+            "decision": {"best_action": {"text": "先对齐任务范围"}},
+        },
+    )
+    assert replied.status_code == 200, replied.text
+
+    draft_call = next(
+        call for call in router.calls
+        if "/chat/completions" in call["url"]
+        and "is_group" in json_loads(call["json"]["messages"][1]["content"])
+    )
+    payload = json_loads(draft_call["json"]["messages"][1]["content"])
+    assert payload["is_group"] is True
+    assert [msg["from"] for msg in payload["messages"]] == ["小林", "阿花"]
