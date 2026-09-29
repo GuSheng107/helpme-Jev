@@ -123,6 +123,11 @@ export default function PersonaPage() {
       : { key: memberKey, subject: 'other' as const }
     : { key: current?.counterpart_key ?? '', subject }
   const effectiveSubject = groupSel.subject
+  // 人设库档案优先展示（与判断链路同源）：key 命中档案时，推断档案不再显示
+  const linkedProfile =
+    current && effectiveSubject === 'other'
+      ? profiles.find((item) => item.key === groupSel.key)
+      : undefined
 
   useEffect(() => {
     listConversations()
@@ -591,7 +596,14 @@ export default function PersonaPage() {
                     ))}
                   </div>
                 )}
-                <Button size="sm" variant="primary" loading={busy} onClick={() => void build()}>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  loading={busy}
+                  disabled={Boolean(linkedProfile)}
+                  disabledReason="已有人设库档案，判断以档案为准；如需重建请先删除档案"
+                  onClick={() => void build()}
+                >
                   {effectiveSubject === 'me' ? '提交自评' : '从对话推断'}
                 </Button>
               </div>
@@ -628,10 +640,11 @@ export default function PersonaPage() {
                 {current?.is_group
                   ? `${memberKey === 'me' ? '我' : current.members.find((member) => member.key === memberKey)?.name ?? memberKey}　`
                   : ''}
-                {CONTEXT_LABELS[persona?.context ?? context]}情境　置信度 {persona?.confidence ?? 0}%　版本 {persona?.version ?? 0}
+                {CONTEXT_LABELS[linkedProfile?.context ?? persona?.context ?? context]}情境　置信度 {linkedProfile?.confidence ?? persona?.confidence ?? 0}%　版本 {linkedProfile?.version ?? persona?.version ?? 0}
+                {linkedProfile && <span className="ml-2 text-primary">（人设库档案）</span>}
               </p>
               <ul className="mt-2 space-y-1">
-                {(persona?.traits ?? []).map((trait) => (
+                {(linkedProfile?.traits ?? persona?.traits ?? []).map((trait) => (
                   <li key={trait.key} className="flex justify-between gap-2 text-[14px]">
                     <span className="text-ink-secondary">
                       {trait.title}

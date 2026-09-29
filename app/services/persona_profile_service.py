@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..core.time import iso_utc
@@ -156,7 +157,14 @@ class PersonaProfileService:
             version=1,
         )
         db.add(row)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            # 与前面的查重之间存在并发窗口，撞唯一约束时按 409 处理而非 500
+            db.rollback()
+            raise DomainError(
+                DomainErrorCode.CONFLICT, "已有同名人设，请换一个昵称", status_code=409
+            ) from exc
         db.refresh(row)
         return self._view(row)
 

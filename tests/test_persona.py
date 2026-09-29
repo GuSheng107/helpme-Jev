@@ -799,3 +799,140 @@ def test_member_persona_lines_prefers_profiles(client: TestClient, db: Session) 
     assert lines[0].startswith("小美的人设：")
     assert "焦虑型" in lines[0]
     assert "1/8" not in lines[0]  # 推断档案的裸分没有出现
+
+
+def test_profile_patch_and_delete(client: TestClient, db: Session) -> None:
+    """档案改名 / 删除：key 冻结、跨用户 404、删除后列表消失。"""
+    import json as _json
+
+    from sqlalchemy import select
+
+    from app.core.db import SessionLocal
+    from app.repositories.models import PersonaProfile
+
+    password = "patchdel!Passw0rd"
+    UserRepository().add(
+        db,
+        User(
+            username="patchdel",
+            display_name="patchdel",
+            password_hash=hash_password(password),
+            role=UserRole.USER.value,
+            must_change_password=False,
+            is_active=True,
+        ),
+    )
+    db.commit()
+    resp = client.post("/api/auth/login", json={"username": "patchdel", "password": password})
+    headers = {"Authorization": f"Bearer {resp.json()['access_token']}"}
+    owner = int(resp.json()["id"])
+
+    session = SessionLocal()
+    session.add(
+        PersonaProfile(
+            owner_user_id=owner, key="小雪", nickname="小雪",
+            context="romance", avatar_base64="data:image/jpeg;base64,AAAA",
+            traits=_json.dumps({"openness": 5}, ensure_ascii=False),
+        )
+    )
+    session.commit()
+    profile_id = session.scalars(
+        select(PersonaProfile).where(PersonaProfile.owner_user_id == owner)
+    ).first().id
+    session.close()
+
+    renamed = client.patch(
+        f"/api/personas/profiles/{profile_id}", headers=headers, json={"nickname": "小雪雪"}
+    )
+    assert renamed.status_code == 200, renamed.text
+    body = renamed.json()
+    assert body["nickname"] == "小雪雪"
+    assert body["key"] == "小雪"  # key 冻结
+    assert body["avatar_base64"].startswith("data:image/jpeg")
+
+    stranger = _user(client, db, "patchstranger")
+    forbidden = client.patch(
+        f"/api/personas/profiles/{profile_id}", headers=stranger, json={"nickname": "冒充"}
+    )
+    assert forbidden.status_code == 404
+
+    deleted = client.delete(f"/api/personas/profiles/{profile_id}", headers=headers)
+    assert deleted.status_code == 204
+    listed = client.get("/api/personas/profiles", headers=headers).json()
+    assert listed == []
+    again = client.delete(f"/api/personas/profiles/{profile_id}", headers=headers)
+    assert again.status_code == 404
+
+
+def test_profile_blocks_inference(client: TestClient, db: Session) -> None:
+    """已有人设库档案的成员：从对话推断 409，避免推断档案被判断链路无视。"""
+    import json as _json
+
+    from sqlalchemy import select
+
+    from app.core.db import SessionLocal
+    from app.repositories.models import PersonaProfile
+
+    headers = _user(client, db, "blockinfer")
+    conv_id = _group(client, headers, with_messages=False)
+
+    resp = client.post("/api/auth/login", json={
+        "username": "blockinfer", "password": "blockinfer!Passw0rd",
+    })
+    owner = int(resp.json()["id"])
+    session = SessionLocal()
+    session.add(
+        PersonaProfile(
+            owner_user_id=owner, key="小林", nickname="小林", context="workplace",
+            traits=_json.dumps({"disc": "steadiness"}, ensure_ascii=False),
+        )
+    )
+    session.commit()
+    session.close()
+
+    blocked = client.post(
+        "/api/personas/build",
+        headers=headers,
+        json={"conversation_id": conv_id, "subject": "other", "member_key": "小林"},
+    )
+    assert blocked.status_code == 409
+    assert blocked.json()["error"]["code"] == "CONFLICT"
+
+
+def test_batch_prefers_profiles(client: TestClient, db: Session) -> None:
+    """批量面板与人设库同源：档案成员显示档案 traits，而非『还没有档案』。"""
+    import json as _json
+
+    from sqlalchemy import select
+
+    from app.core.db import SessionLocal
+    from app.repositories.models import PersonaProfile
+
+    headers = _user(client, db, "batchprofile")
+    conv_id = _group(client, headers, with_messages=False)
+
+    resp = client.post("/api/auth/login", json={
+        "username": "batchprofile", "password": "batchprofile!Passw0rd",
+    })
+    owner = int(resp.json()["id"])
+    session = SessionLocal()
+    session.add(
+        PersonaProfile(
+            owner_user_id=owner, key="小林", nickname="小林", context="workplace",
+            traits=_json.dumps(
+                {"_schema": "custom_v1",
+                 "values": {"disc": "steadiness"},
+                 "meta": {"disc": {"title": "DISC 倾向", "labels": {"steadiness": "稳健型（S）"}}}},
+                ensure_ascii=False,
+            ),
+        )
+    )
+    session.commit()
+    session.close()
+
+    body = client.get(
+        "/api/personas/batch", headers=headers, params={"conversation_id": conv_id}
+    ).json()
+    xiaolin = next(item for item in body["participants"] if item["key"] == "小林")
+    assert xiaolin["persona"]["version"] == 1
+    assert xiaolin["persona"]["traits"][0]["text"] == "稳健型（S）"

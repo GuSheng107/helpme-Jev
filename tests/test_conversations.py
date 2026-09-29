@@ -451,3 +451,54 @@ def test_group_members_can_be_updated(client: TestClient, db: Session) -> None:
         f"/api/conversations/{solo_id}", json={"members": ["小林"]}, headers=headers
     )
     assert refused.status_code == 422
+
+
+def test_group_member_cap_after_merge(client: TestClient, db: Session) -> None:
+    """人设成员 + 手填成员去重后仍超 20：422，不静默砍人。"""
+    import json as _json
+
+    from sqlalchemy import select
+
+    from app.core.db import SessionLocal
+    from app.repositories.models import PersonaProfile
+
+    token = _make_user(client, db, "cappedgroup")
+    headers = _auth(token)
+    # schema 层先拦手填超量的情况
+    schema_reject = client.post(
+        "/api/conversations",
+        json={"title": "超大群", "members": [f"成员{i:02d}" for i in range(25)]},
+        headers=headers,
+    )
+    assert schema_reject.status_code == 422
+
+    # 各 15 个、合计 30 个（> 20）：落到 handler 的合并上限校验
+    resp = client.post("/api/auth/login", json={
+        "username": "cappedgroup", "password": "cappedgroup!Passw0rd",
+    })
+    owner = int(resp.json()["id"])
+    session = SessionLocal()
+    for i in range(15):
+        session.add(
+            PersonaProfile(
+                owner_user_id=owner, key=f"人设{i:02d}", nickname=f"人设{i:02d}",
+                context="romance", traits=_json.dumps({}),
+            )
+        )
+    session.commit()
+    profile_ids = list(session.scalars(
+        select(PersonaProfile.id).where(PersonaProfile.owner_user_id == owner)
+    ))
+    session.close()
+
+    merged_over = client.post(
+        "/api/conversations",
+        json={
+            "title": "超大群",
+            "member_profile_ids": profile_ids,
+            "members": [f"名字{i:02d}" for i in range(15)],
+        },
+        headers=headers,
+    )
+    assert merged_over.status_code == 422
+    assert "最多" in merged_over.json()["error"]["message"]

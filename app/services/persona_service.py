@@ -129,6 +129,20 @@ class PersonaService:
                 )
             target_key = member_key
             focus_name = members[member_key]
+        # 人设库档案优先：同一 key 已有档案时，推断结果会被判断链路无视，明确拒绝
+        if subject == "other":
+            profile_hit = db.scalars(
+                select(PersonaProfile).where(
+                    PersonaProfile.owner_user_id == owner_user_id,
+                    PersonaProfile.key == target_key,
+                )
+            ).first()
+            if profile_hit is not None:
+                raise DomainError(
+                    DomainErrorCode.CONFLICT,
+                    f"「{profile_hit.nickname}」已有人设库档案，判断时以档案为准；如需重建请先在档案里删除",
+                    status_code=409,
+                )
         # 档案情境可以由用户选择；题集始终取会话挂载的自定义场景。
         # persona_context_of 已把自定义场景映射到 romance / workplace，这里不可能再是 custom
         scenario_kind = kind_of(db, conversation)
@@ -224,36 +238,52 @@ class PersonaService:
         群聊返回每位成员 + 我；单聊返回对方 + 我。记忆是会话级的
         （群聊共享一份）， 人设按成员 key 各自取情境分档。
         ``context`` 不传则按会话挂的场景推断。
+        人设库档案（key 命中）优先于推断档案，与判断链路同源。
         """
         resolved = context or persona_context_of(db, conversation)
-        participants: list[dict] = []
         if conversation.is_group:
-            for member in parse_members(conversation.members):
-                row = self._find(
-                    db, owner_user_id=owner_user_id,
-                    counterpart_key=member.key, subject="other", context=resolved,
-                )
-                participants.append({
-                    "key": member.key,
-                    "name": member.name,
-                    "subject": "other",
-                    "persona": self._view(
-                        row, counterpart_key=member.key, subject="other", context=resolved
-                    ),
-                })
+            targets = [(member.key, member.name) for member in parse_members(conversation.members)]
         else:
+            targets = [
+                (conversation.counterpart_key, conversation.counterpart_name or "对方"),
+            ]
+        profiles = {
+            profile.key: profile
+            for profile in db.scalars(
+                select(PersonaProfile).where(
+                    PersonaProfile.owner_user_id == owner_user_id,
+                    PersonaProfile.key.in_([key for key, _ in targets]),
+                )
+            )
+        }
+        participants: list[dict] = []
+        for key, name in targets:
+            profile = profiles.get(key)
+            if profile is not None:
+                participants.append({
+                    "key": key,
+                    "name": profile.nickname or name,
+                    "subject": "other",
+                    "persona": {
+                        "counterpart_key": key,
+                        "subject": "other",
+                        "context": profile.context,
+                        "traits": trait_items(profile.traits),
+                        "confidence": round(profile.confidence * 100),
+                        "version": profile.version,
+                    },
+                })
+                continue
             row = self._find(
                 db, owner_user_id=owner_user_id,
-                counterpart_key=conversation.counterpart_key,
-                subject="other", context=resolved,
+                counterpart_key=key, subject="other", context=resolved,
             )
             participants.append({
-                "key": conversation.counterpart_key,
-                "name": conversation.counterpart_name or "对方",
+                "key": key,
+                "name": name,
                 "subject": "other",
                 "persona": self._view(
-                    row, counterpart_key=conversation.counterpart_key,
-                    subject="other", context=resolved,
+                    row, counterpart_key=key, subject="other", context=resolved,
                 ),
             })
         me_row = self._find(

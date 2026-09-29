@@ -160,7 +160,13 @@ def create_conversation(
     merged: dict[str, GroupMember] = {}
     for member in [*profile_members, *members]:
         merged.setdefault(member.key, member)
-    members = list(merged.values())[:MAX_GROUP_MEMBERS]
+    if len(merged) > MAX_GROUP_MEMBERS:
+        # 人设成员 + 手填成员去重后仍超上限：明确拒绝，不静默砍人
+        raise DomainError(
+            DomainErrorCode.VALIDATION_FAILED,
+            f"群成员最多 {MAX_GROUP_MEMBERS} 人（不含自己）", status_code=422
+        )
+    members = list(merged.values())
 
     is_group = bool(members)
     if is_group and not payload.title.strip():
