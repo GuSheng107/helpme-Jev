@@ -490,15 +490,19 @@ def test_group_analyze_uses_speaker_names_and_personas(
     assert "小林的人设" in state.get("background", "")
     assert "风格" in state.get("background", "")
 
-    # 复盘 payload 同样按发言人归属
-    reflect_call = next(
-        (call for call in router.calls if "/chat/completions" in call["url"]
-         and "memory list" in call["json"]["messages"][0]["content"]),
-        None,
+    # 复盘 payload 按发言人归属：reflect 是独立接口，直接调用让断言必然执行
+    reflected = client.post(
+        "/api/chat/reflect", json={"conversation_id": conv_id}, headers=headers
     )
-    if reflect_call is not None:
-        payload = json_loads(reflect_call["json"]["messages"][1]["content"])
-        assert {msg["from"] for msg in payload["messages"]} == {"小林", "阿花"}
+    assert reflected.status_code == 200, reflected.text
+    reflect_call = next(
+        call for call in router.calls if "/chat/completions" in call["url"]
+        and "memory list" in call["json"]["messages"][0]["content"]
+    )
+    payload = json_loads(reflect_call["json"]["messages"][1]["content"])
+    assert {msg["from"] for msg in payload["messages"]} == {"小林", "阿花"}
+    # 群聊没有单一对象：counterpart 把群名给 LLM 当参照
+    assert payload["counterpart"] == "项目小队"
 
 
 def test_group_reply_uses_speaker_names(
