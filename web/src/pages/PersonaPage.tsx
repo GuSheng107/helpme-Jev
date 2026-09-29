@@ -404,12 +404,16 @@ export default function PersonaPage() {
                 value={text}
                 onChange={(event) => setText(event.target.value)}
               />
-              <input
-                className="mt-2 w-full rounded-[6px] border border-border px-2 py-1 text-[13px]"
-                placeholder="对方标签（选填，逗号分隔，默认认 她 / 他 / TA，这里可以补充名字）"
-                value={otherLabels}
-                onChange={(event) => setOtherLabels(event.target.value)}
-              />
+              {current?.is_group ? (
+                <p className="mt-2 text-[13px] text-ink-muted">群聊按成员名识别发言归属，无需填标签</p>
+              ) : (
+                <input
+                  className="mt-2 w-full rounded-[6px] border border-border px-2 py-1 text-[13px]"
+                  placeholder="对方标签（选填，逗号分隔，默认认 她 / 他 / TA，这里可以补充名字）"
+                  value={otherLabels}
+                  onChange={(event) => setOtherLabels(event.target.value)}
+                />
+              )}
               <div className="mt-2 flex items-center gap-2">
                 <Button size="sm" loading={busy} onClick={() => void previewImport()}>预览</Button>
                 <Button size="sm" variant="primary" loading={busy} disabled={preview === null} disabledReason="请先预览" onClick={() => void confirmImport()}>

@@ -174,6 +174,34 @@ def test_chat_import_previews_before_saving(
     assert stored.json()[0]["source"] == "import"
 
 
+def test_solo_import_labels_append_to_defaults(
+    client: TestClient, db: Session
+) -> None:
+    """自定义对方标签是补充：默认的 她 / 他 / TA 始终认，不能被替换掉。"""
+    headers = _user(client, db, "labelappend")
+    conv_id = _ready(client, headers)
+    preview = client.post(
+        "/api/import/chat/preview",
+        headers=headers,
+        json={
+            "conversation_id": conv_id,
+            "text": "我: 好\n她: 嗯\nTA: 行\n小美: 明天见\n陌生人: 不认",
+            "other_labels": ["小美"],
+        },
+    )
+    assert preview.status_code == 200
+    body = preview.json()
+    assert body["count"] == 4
+    assert body["skipped"] == 1
+    labels = {(item["label"], item["role"]) for item in body["messages"]}
+    assert labels == {
+        ("我", "me"),
+        ("她", "other"),
+        ("TA", "other"),
+        ("小美", "other"),
+    }
+
+
 def test_qa_rejects_invalid_json(client: TestClient, db: Session) -> None:
     headers = _user(client, db, "qaone")
     _ready(client, headers)
