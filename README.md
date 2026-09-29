@@ -16,6 +16,7 @@
   <a href="https://github.com/GuSheng107/helpme-jev"><img src="https://img.shields.io/github/stars/GuSheng107/helpme-jev?style=flat-square" alt="GitHub stars"></a>
   <a href="https://github.com/GuSheng107/helpme-jev/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square" alt="AGPL-3.0"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.12%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+"></a>
+  <a href="https://fastapi.tiangolo.com/"><img src="https://img.shields.io/badge/FastAPI-0.115%2B-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI"></a>
   <a href="https://react.dev/"><img src="https://img.shields.io/badge/react-19-61DAFB?style=flat-square&logo=react&logoColor=black" alt="React 19"></a>
 </p>
 
@@ -24,16 +25,30 @@
 </p>
 
 > [!NOTE]
-> HelpMe JEV is a self-hosted <code>0.1.0</code> project. It is meant to help you think, not to speak for you. Provider behavior depends on the JEV and LLM endpoints you configure.
+> HelpMe JEV is a self-hosted `0.1.0` project. It is meant to help you think, not to speak for you. Provider behavior depends on the JEV and LLM endpoints you configure.
 
-## Why this exists
+- [Why this exists](#-why-this-exists)
+- [Features](#-features)
+- [How it works](#-how-it-works)
+- [Quick start](#-quick-start)
+- [Configure JEV and LLM](#-configure-jev-and-llm)
+- [Environment variables](#-environment-variables)
+- [Project layout](#-project-layout)
+- [API map](#-api-map)
+- [Privacy and security](#-privacy-and-security)
+- [Development](#-development)
+- [Contributing](#-contributing)
+- [Thanks](#-thanks)
+- [License](#-license)
+
+## 🤔 Why this exists
 
 Some questions are small but strangely difficult:
 
-- “Is this message actually negative, or am I overthinking it?”
-- “Should I reply now, ask one more question, or leave it alone?”
-- “What is the safest next step at work?”
-- “Can I say this more clearly without changing the tone?”
+> - “Is this message actually negative, or am I overthinking it?”
+> - “Should I reply now, ask one more question, or leave it alone?”
+> - “What is the safest next step at work?”
+> - “Can I say this more clearly without changing the tone?”
 
 Paste the message, a screenshot, or the situation. HelpMe JEV turns it into a few concrete checks and possible next moves. You can review the inputs, edit drafts, keep the useful context, and stop before anything is sent.
 
@@ -41,22 +56,22 @@ Paste the message, a screenshot, or the situation. HelpMe JEV turns it into a fe
 
 JEV (TypeSafe System One) answers typed questions such as yes/no probability, option probability, and scores. It does not write the final message. An LLM translates input for JEV and can clarify, draft, or polish text when you ask it to. The app supports OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages protocols.
 
-## What it can do
+## ✨ Features
 
 | Area | What you get |
 | --- | --- |
-| Chat helper | One-on-one or group chats: analyze intent, risk, emotion, needs, and possible next actions. |
-| Decision workbench | Ask <code>noul</code>, <code>choice</code>, or <code>score</code> questions without opening a chat. |
-| Scenarios | Built-in romance and workplace packs, plus editable copies for your own situations. |
-| People and context | Keep separate context for you and the other person; group members each get their own persona notes with evidence and confidence, fetched in one batch. |
-| Memory | Let the LLM summarize useful context into dated entries; review, revert, or delete it. |
-| Images | Paste or upload PNG/JPEG/WEBP screenshots, up to 9 per message; a vision-capable LLM describes them. HelpMe JEV does not run OCR. |
-| Wording help | Polish a message, ask for clarification, generate candidate replies, then let JEV rank them. |
-| Data controls | SQLite storage, account export, account deletion, owner-level isolation, trace-linked activity logs, and encrypted provider keys. |
+| 💬 Chat helper | One-on-one or group chats: analyze intent, risk, emotion, needs, and possible next actions. |
+| 🎯 Decision workbench | Ask `noul`, `choice`, or `score` questions without opening a chat. |
+| 🧩 Scenarios | Built-in romance and workplace packs, plus editable copies for your own situations. |
+| 👥 People and context | Keep separate context for you and the other person; group members each get their own persona notes with evidence and confidence, fetched in one batch. |
+| 🧠 Memory | Let the LLM summarize useful context into dated entries; review, revert, or delete it. |
+| 🖼️ Images | Paste or upload PNG/JPEG/WEBP screenshots, up to 9 per message; a vision-capable LLM describes them. HelpMe JEV does not run OCR. |
+| ✍️ Wording help | Polish a message, ask for clarification, generate candidate replies, then let JEV rank them. |
+| 🔐 Data controls | SQLite storage, account export, account deletion, owner-level isolation, trace-linked activity logs, and encrypted provider keys. |
 
-## The basic loop
+## 🔁 How it works
 
-~~~mermaid
+```mermaid
 flowchart LR
     A["Paste a message<br/>or screenshot"] --> B["Add context<br/>if needed"]
     B --> C["Translate to English<br/>when JEV needs it"]
@@ -64,11 +79,11 @@ flowchart LR
     D --> E["Optional LLM<br/>clarifies or drafts"]
     E --> F["JEV compares<br/>possible replies"]
     F --> G["You edit, send,<br/>wait, or stop"]
-~~~
+```
 
 Nothing is sent automatically. The final action stays with you.
 
-## Quick start
+## 🚀 Quick start
 
 ### Requirements
 
@@ -79,29 +94,29 @@ Nothing is sent automatically. The final action stays with you.
 
 ### 1. Clone and install
 
-~~~bash
+```bash
 git clone https://github.com/GuSheng107/helpme-jev.git
 cd helpme-jev
 
 uv sync --locked
 cp .env.example .env
-~~~
+```
 
-On PowerShell, use <code>Copy-Item .env.example .env</code> instead of <code>cp</code>.
+On PowerShell, use `Copy-Item .env.example .env` instead of `cp`.
 
-Generate a 32-byte secret and put the result in <code>.env</code> as <code>APP_SECRET</code>:
+Generate a 32-byte secret and put the result in `.env` as `APP_SECRET`:
 
-~~~bash
+```bash
 python -c "import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decode().rstrip('='))"
-~~~
+```
 
-Keep <code>APP_SECRET</code> safe. Changing it makes existing encrypted provider keys unreadable.
+Keep `APP_SECRET` safe. Changing it makes existing encrypted provider keys unreadable.
 
 ### 2. Start the backend
 
-~~~bash
+```bash
 uv run uvicorn app.main:app --reload --port 8790
-~~~
+```
 
 On the first start, the application:
 
@@ -110,7 +125,7 @@ On the first start, the application:
 3. creates the first admin user when the database is empty;
 4. seeds the built-in romance and workplace scenarios.
 
-The default admin values come from <code>DEFAULT_ADMIN_USERNAME</code> and <code>DEFAULT_ADMIN_PASSWORD</code> in <code>.env</code>. Change the password immediately; the first login requires a password change.
+The default admin values come from `DEFAULT_ADMIN_USERNAME` and `DEFAULT_ADMIN_PASSWORD` in `.env`. Change the password immediately; the first login requires a password change.
 
 Open the API health check at [http://127.0.0.1:8790/api/health](http://127.0.0.1:8790/api/health), or view the FastAPI schema at [http://127.0.0.1:8790/docs](http://127.0.0.1:8790/docs).
 
@@ -118,65 +133,65 @@ Open the API health check at [http://127.0.0.1:8790/api/health](http://127.0.0.1
 
 Keep the backend running, open another terminal, and run:
 
-~~~bash
+```bash
 cd web
 npm ci
 npm run dev
-~~~
+```
 
-Open [http://127.0.0.1:5173](http://127.0.0.1:5173). Vite proxies <code>/api</code> to the backend on port <code>8790</code>.
+Open [http://127.0.0.1:5173](http://127.0.0.1:5173). Vite proxies `/api` to the backend on port `8790`.
 
 ### Single-port build
 
 To let FastAPI serve the built React app:
 
-~~~bash
+```bash
 cd web
 npm ci
 npm run build
 cd ..
 uv run uvicorn app.main:app --host 127.0.0.1 --port 8790
-~~~
+```
 
-The backend serves <code>web/dist</code> when it exists. For a public deployment, put TLS and an access policy in front of the service, and do not expose the default admin credentials.
+The backend serves `web/dist` when it exists. For a public deployment, put TLS and an access policy in front of the service, and do not expose the default admin credentials.
 
-## Configure JEV and LLM
+## 🔌 Configure JEV and LLM
 
 After signing in, open **Settings → Providers**.
 
-1. Add a provider with kind <code>jev</code>.
+1. Add a provider with kind `jev`.
    - Use the full endpoint URL for the System One-compatible API.
    - Enter its API key and model name.
    - Run the connection test and the JEV smoke test.
-2. Add a provider with kind <code>llm</code>.
+2. Add a provider with kind `llm`.
    - Select OpenAI Chat Completions, OpenAI Responses, or Anthropic Messages.
-   - Enter the API base URL (for example, <code>https://api.openai.com/v1</code>); the app appends the path for the selected protocol. Existing full endpoint URLs are also accepted.
+   - Enter the API base URL (for example, `https://api.openai.com/v1`); the app appends the path for the selected protocol. Existing full endpoint URLs are also accepted.
    - Enter its API key and model name.
    - Mark it as vision-capable if it should read screenshots.
 3. Run the connection test for each provider. New providers are enabled after a successful test.
 
 The LLM is used where the workflow needs language work: translation, clarification, image description, reply drafts, and polishing. JEV remains the structured decision layer. Admins can create invitation codes and copy any visible code repeatedly from the invitation page.
 
-## Environment variables
+## 🔧 Environment variables
 
-Copy <code>.env.example</code> to <code>.env</code>. The file is ignored by Git.
+Copy `.env.example` to `.env`. The file is ignored by Git.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| <code>APP_SECRET</code> | — | Required 32-byte base64url secret used to derive encryption keys. |
-| <code>DEFAULT_ADMIN_USERNAME</code> | <code>admin</code> | First admin username; only used when no user exists. |
-| <code>DEFAULT_ADMIN_PASSWORD</code> | See <code>.env.example</code> | First admin password; only used when no user exists. |
-| <code>PORT</code> | <code>8790</code> | Application port. |
-| <code>DATABASE_PATH</code> | <code>./data/helpme_jev.db</code> | SQLite database path. |
-| <code>RETENTION_DAYS</code> | <code>15</code> | Retention window for activity and upstream call logs. |
-| <code>SESSION_TTL_HOURS</code> | <code>8</code> | Server session lifetime. |
-| <code>WEB_DIST_DIR</code> | <code>./web/dist</code> | Built frontend directory served by FastAPI. |
+| `APP_SECRET` | — | Required 32-byte base64url secret used to derive encryption keys. |
+| `DEFAULT_ADMIN_USERNAME` | `admin` | First admin username; only used when no user exists. |
+| `DEFAULT_ADMIN_PASSWORD` | See `.env.example` | First admin password; only used when no user exists. |
+| `PORT` | `8790` | Application port. |
+| `DATABASE_PATH` | `./data/helpme_jev.db` | SQLite database path. |
+| `RETENTION_DAYS` | `15` | Retention window for activity and upstream call logs. |
+| `SESSION_TTL_HOURS` | `8` | Server session lifetime. |
+| `WEB_DIST_DIR` | `./web/dist` | Built frontend directory served by FastAPI. |
 
-Advanced context budgets are also available in <code>app/core/config.py</code>.
+Advanced context budgets are also available in `app/core/config.py`.
 
-## Project layout
+## 🧱 Project layout
 
-~~~text
+```text
 app/
 ├── api/            HTTP endpoints
 ├── clients/        JEV, LLM, translation, and retry clients
@@ -189,41 +204,49 @@ app/
 web/                React 19 + TypeScript + Vite frontend
 migrations/         Alembic migrations
 tests/              backend tests
-~~~
+```
 
-## API map
+**Built with**
 
-The interactive API reference is available at <code>/docs</code> when the backend is running.
+| | |
+| --- | --- |
+| Backend | Python 3.12+ · FastAPI · SQLAlchemy 2 · Alembic · Pydantic v2 · Argon2id · SQLite |
+| Frontend | React 19 · TypeScript · Vite · Tailwind CSS 4 · React Router 7 |
+| Tooling | uv · pytest · GitHub Actions CI |
+
+## 🌐 API map
+
+The interactive API reference is available at `/docs` when the backend is running.
 
 | Area | Prefix |
 | --- | --- |
-| Health | <code>GET /api/health</code> |
-| Authentication | <code>/api/auth</code> |
-| Account export/delete | <code>/api/account</code> |
-| Provider settings | <code>/api/providers</code> |
-| Scenarios | <code>/api/scenarios</code> |
-| Conversations and images | <code>/api/conversations</code> |
-| Chat analysis and memory | <code>/api/chat</code> |
-| Direct decisions | <code>/api/decide</code> |
-| Personas and imports | <code>/api/personas</code>, <code>/api/import</code>, <code>/api/materials</code> |
-| Trace-linked logs | <code>/api/logs</code> |
+| Health | `GET /api/health` |
+| Authentication | `/api/auth` |
+| Account export/delete | `/api/account` |
+| Provider settings | `/api/providers` |
+| Scenarios | `/api/scenarios` |
+| Conversations and images | `/api/conversations` |
+| Chat analysis and memory | `/api/chat` |
+| Direct decisions | `/api/decide` |
+| Personas and imports | `/api/personas`, `/api/import`, `/api/materials` |
+| Trace-linked logs | `/api/logs` |
 
-## Privacy and security
+## 🔒 Privacy and security
 
 - Provider API keys are encrypted at rest with HKDF-SHA256 and AES-256-GCM; the UI receives a mask, never the key.
 - Passwords use Argon2id. Bearer tokens are handled as server sessions and stored in hashed form.
 - User-owned conversations, memories, personas, provider settings, and logs are isolated by owner. Admin does not automatically get access to another user's content.
 - Activity logs connect business actions, failures, and model calls by trace ID. The logs page reads this unified history; home judgment counts still use upstream call logs. Log queries and decision history reads do not add entries.
-- Request summaries never include request bodies. Model details pass through redaction; <code>Authorization</code>, cookies, and common token formats are removed before logging.
-- Activity and call logs are purged after <code>RETENTION_DAYS</code> at startup. Conversations are not deleted when logs expire.
+- Request summaries never include request bodies. Model details pass through redaction; `Authorization`, cookies, and common token formats are removed before logging.
+- Activity and call logs are purged after `RETENTION_DAYS` at startup. Conversations are not deleted when logs expire.
 - You can export your data or delete the account. Account deletion is intentionally irreversible.
 
 > [!WARNING]
 > “Self-hosted” does not mean “nothing leaves the machine.” If you configure a remote JEV or LLM endpoint, the text or images required for that operation are sent there. Read the provider's policy before using private conversations.
 
-## Development
+## 🧪 Development
 
-~~~bash
+```bash
 # Backend
 uv run pytest -q
 
@@ -231,17 +254,17 @@ uv run pytest -q
 cd web
 npm run typecheck
 npm run build
-~~~
+```
 
 The current baseline is checked in CI: backend tests, frontend type checking, and a production build.
 
-## Contributing
+## 🤝 Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Security issues go through
 [SECURITY.md](SECURITY.md), not a public issue. Community standards are in
 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
-## Thanks
+## 🙏 Thanks
 
 Thanks to the [Linux.do community](https://linux.do/) for the early feedback, questions, and discussions that helped shape this project.
 
@@ -249,7 +272,7 @@ This project is independent and is not affiliated with or endorsed by Linux.do.
 
 The bilingual README layout and self-hosting notes were shaped in part by the author's related project, [human-llm-gateway](https://github.com/GuSheng107/human-llm-gateway).
 
-## License
+## 📄 License
 
 [AGPL-3.0](LICENSE) © 2026 故笙
 
