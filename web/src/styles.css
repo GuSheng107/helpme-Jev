@@ -70,6 +70,16 @@ select {
   font-size: 16px;
 }
 
+/* 日期控件：日历图标始终可见，光标呈可选状态，配合 Field 的 showPicker 整框可点 */
+input[type='date'] {
+  cursor: pointer;
+}
+
+input[type='date']::-webkit-calendar-picker-indicator {
+  opacity: 1;
+  cursor: pointer;
+}
+
 @media (min-width: 640px) {
   input,
   textarea,

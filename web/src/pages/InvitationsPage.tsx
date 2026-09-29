@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useId, useState } from 'react'
 import { ApiError } from '../api/client'
 import { createInvitation, listInvitations, revokeInvitation, type Invitation } from '../api/admin'
 import Button from '../components/Button'
 import { confirmAction } from '../components/confirm'
 import Field from '../components/Field'
+import Modal from '../components/Modal'
 import { toast } from '../components/toast'
 import { DataCard, EmptyState, Notice, PageBody, PageHeader, PageShell, StatusTag } from '../components/layout'
 
@@ -14,13 +15,15 @@ const STATUS: Record<Invitation['status'], string> = {
   exhausted: '已用完',
 }
 
+function expiryLabel(row: Invitation) {
+  return row.expires_at ? `截止 ${row.expires_at.slice(0, 10)}` : '永久有效'
+}
+
 /** 邀请码明文保存，可以反复复制。 */
 export default function InvitationsPage() {
   const [rows, setRows] = useState<Invitation[]>([])
-  const [note, setNote] = useState('')
-  const [maxUses, setMaxUses] = useState('1')
+  const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
 
   const reload = useCallback(async () => {
     try {
@@ -33,22 +36,6 @@ export default function InvitationsPage() {
   useEffect(() => {
     void reload()
   }, [reload])
-
-  async function add(event: React.FormEvent) {
-    event.preventDefault()
-    setBusy(true)
-    setError(null)
-    try {
-      await createInvitation({ note, max_uses: Math.max(1, Number(maxUses) || 1) })
-      setNote('')
-      setMaxUses('1')
-      await reload()
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : '生成失败')
-    } finally {
-      setBusy(false)
-    }
-  }
 
   async function copy(row: Invitation) {
     try {
@@ -77,17 +64,12 @@ export default function InvitationsPage() {
   return (
     <PageShell>
       <PageBody>
-        <PageHeader title="邀请码" description="邀请码以 JEV- 开头，生成后可以反复复制。" />
+        <PageHeader
+          title="邀请码"
+          description="邀请码以 JEV- 开头，生成后可以反复复制。"
+          actions={<Button variant="primary" onClick={() => setCreating(true)}>生成邀请码</Button>}
+        />
         {error && <div className="mb-4"><Notice tone="danger">{error}</Notice></div>}
-        <div className="mb-4">
-          <DataCard title="生成">
-            <form onSubmit={add} className="grid gap-3 sm:grid-cols-[1fr_140px_auto] sm:items-end">
-              <Field label="备注" value={note} onChange={(event) => setNote(event.target.value)} placeholder="发给谁，可不填" />
-              <Field label="可用次数" type="number" value={maxUses} onChange={(event) => setMaxUses(event.target.value)} />
-              <Button type="submit" variant="primary" loading={busy}>生成</Button>
-            </form>
-          </DataCard>
-        </div>
         <DataCard title="已生成">
           {rows.length === 0 ? (
             <EmptyState title="还没有邀请码" description="生成一个，复制给对方注册。" />
@@ -101,7 +83,7 @@ export default function InvitationsPage() {
                       <StatusTag tone={row.status === 'active' ? 'success' : 'info'}>{STATUS[row.status]}</StatusTag>
                     </div>
                     <p className="mt-1 text-[13px] text-ink-muted">
-                      已用 {row.used_count}/{row.max_uses}
+                      已用 {row.used_count}/{row.max_uses} · {expiryLabel(row)}
                       {row.note ? ` · ${row.note}` : ''}
                     </p>
                   </div>
@@ -117,7 +99,88 @@ export default function InvitationsPage() {
           )}
         </DataCard>
       </PageBody>
+      {creating && (
+        <CreateInvitationModal
+          onClose={() => setCreating(false)}
+          onCreated={async () => {
+            setCreating(false)
+            await reload()
+          }}
+          onError={setError}
+        />
+      )}
     </PageShell>
+  )
+}
+
+function CreateInvitationModal({
+  onClose,
+  onCreated,
+  onError,
+}: {
+  onClose: () => void
+  onCreated: () => Promise<void>
+  onError: (message: string) => void
+}) {
+  const titleId = useId()
+  const [note, setNote] = useState('')
+  const [maxUses, setMaxUses] = useState('1')
+  const [expiresAt, setExpiresAt] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [problem, setProblem] = useState<string | null>(null)
+
+  const maxUsesNumber = Math.max(1, Number(maxUses) || 1)
+  const incomplete = maxUses.trim() === '' || Number(maxUses) < 1
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault()
+    setBusy(true)
+    setProblem(null)
+    try {
+      await createInvitation({
+        note,
+        max_uses: maxUsesNumber,
+        expires_at: expiresAt || null,
+      })
+      await onCreated()
+    } catch (err) {
+      setProblem(err instanceof ApiError ? err.message : '生成失败')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal size="sm" scroll="hidden" onClose={onClose} busy={busy} labelledBy={titleId} initialFocusSelector="input" className="flex flex-col">
+      <form onSubmit={submit} className="flex min-h-0 flex-col">
+        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border-subtle px-4 py-3 sm:px-5">
+          <h3 id={titleId} className="text-[17px] font-semibold text-ink">生成邀请码</h3>
+          <Button size="sm" variant="text" type="button" disabled={busy} onClick={onClose} aria-label="关闭生成邀请码弹窗">关闭</Button>
+        </header>
+        <div className="space-y-3 px-4 py-4 sm:px-5">
+          <Field label="备注" value={note} onChange={(event) => setNote(event.target.value)} placeholder="发给谁，可不填" />
+          <Field
+            label="可用次数"
+            type="number"
+            min={1}
+            value={maxUses}
+            onChange={(event) => setMaxUses(event.target.value)}
+            hint="最多 1000 次"
+          />
+          <Field
+            label="截止日期"
+            type="date"
+            value={expiresAt}
+            onChange={(event) => setExpiresAt(event.target.value)}
+            hint="不填视为永久有效"
+          />
+          {problem && <p className="text-[12px] text-danger">{problem}</p>}
+        </div>
+        <footer className="flex shrink-0 justify-end gap-2 border-t border-border-subtle px-4 py-3 sm:px-5">
+          <Button type="button" disabled={busy} onClick={onClose}>取消</Button>
+          <Button type="submit" variant="primary" loading={busy} disabled={incomplete} disabledReason="请填写可用次数">生成</Button>
+        </footer>
+      </form>
+    </Modal>
   )
 }
 

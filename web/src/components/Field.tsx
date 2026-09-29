@@ -25,12 +25,25 @@ export default function Field({
   required,
   id,
   type,
+  onClick,
   ...rest
 }: FieldProps) {
   const inputId = id ?? `field-${label}`
   const describedBy = error ? `${inputId}-error` : hint ? `${inputId}-hint` : undefined
   const secret = type === 'password'
   const [visible, setVisible] = useState(false)
+
+  // 日期控件：点输入框任意位置都弹出日历，而不只是右侧小图标
+  function handleClick(event: React.MouseEvent<HTMLInputElement>) {
+    onClick?.(event)
+    if (type === 'date' && !event.defaultPrevented) {
+      try {
+        event.currentTarget.showPicker?.()
+      } catch {
+        // 非用户手势等场景浏览器会拒绝，忽略即可
+      }
+    }
+  }
 
   return (
     <div>
@@ -44,6 +57,7 @@ export default function Field({
           {...rest}
           id={inputId}
           type={secret && visible ? 'text' : type}
+          onClick={handleClick}
           aria-invalid={Boolean(error)}
           aria-describedby={describedBy}
           className={
