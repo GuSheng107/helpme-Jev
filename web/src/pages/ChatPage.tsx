@@ -501,6 +501,19 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                 </span>
               )}
             </div>
+            <button
+              type="button"
+              aria-label="新建聊天"
+              className="rounded-[6px] p-1.5 text-primary transition-colors hover:bg-surface-muted lg:hidden"
+              onClick={() => {
+                setListOpen(true)
+                setCreating(true)
+              }}
+            >
+              <svg viewBox="0 0 20 20" className="block h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+                <path d="M10 4v12M4 10h12" strokeLinecap="round" />
+              </svg>
+            </button>
           </header>
 
           {error && (
@@ -517,7 +530,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
           )}
 
           {current === null ? (
-            <EmptyState title="请选择聊天" description="在左侧新建或打开已有聊天。手机端点击左上角「聊天」。" />
+            <EmptyState title="请选择聊天" description="在左侧新建或打开已有聊天。手机端点击右上角「+」新建。" />
           ) : (
             <>
               {step && <p className="px-4 pt-3 text-[13px] text-ink-muted">{step}</p>}
