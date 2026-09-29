@@ -321,20 +321,18 @@ class PersonaService:
 
     def member_persona_lines(
         self, db: Session, *, owner_user_id: int, conversation: Conversation,
-        extra_keys: tuple[str, ...] | list[str] = (),
     ) -> list[str]:
-        """判断的背景：每位有人设的成员一行摘要，供 JEV 分清谁是谁。
+        """判断的背景：有人设的成员各一行摘要，供 JEV 分清谁是谁。
 
-        单聊传 ``extra_keys=[counterpart_key]`` 也会并入 —— 人设库档案
-        （key 命中）优先于推断档案。整体受字符预算约束：JEV 背景
-        总预算有限，人设摘要不能把记忆挤出去。
+        群聊按成员表、单聊取对方 —— 人设库档案（key 命中）优先于
+        推断档案。整体受字符预算约束：JEV 背景总预算有限，人设摘要
+        不能把记忆挤出去。
         """
         context = persona_context_of(db, conversation)
         if conversation.is_group:
             targets = [(member.key, member.name) for member in parse_members(conversation.members)]
         else:
             targets = [(conversation.counterpart_key, conversation.counterpart_name or "对方")]
-        targets.extend((key, key) for key in extra_keys if key)
         seen: set[str] = set()
         ordered: list[tuple[str, str]] = []
         for key, name in targets:

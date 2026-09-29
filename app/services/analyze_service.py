@@ -46,7 +46,7 @@ def _danger_tone(level: int | None) -> str:
 
 
 def _member_persona_lines(db, *, owner_user_id: int, conversation) -> list[str]:
-    """群聊背景用：每位有人设的成员一行摘要。
+    """判断背景用：群聊每位有人设的成员、单聊对方，各一行摘要。
 
     函数内导入，避免与 persona_service 的模块级相互引用。
     """

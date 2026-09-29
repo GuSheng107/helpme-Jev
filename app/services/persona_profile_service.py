@@ -150,7 +150,9 @@ class PersonaProfileService:
             nickname=nickname,
             avatar_base64=payload.avatar_base64 or "",
             context=payload.context,
-            answers=json.dumps(payload.answers, ensure_ascii=False),
+            # 存清洗后的作答（score 为档位整数、choice 为枚举值），
+            # 不存原始 payload —— 将来校验放宽也不会把未消毒值写进库
+            answers=json.dumps(values, ensure_ascii=False),
             traits=json.dumps(traits, ensure_ascii=False),
             summary=summary,
             confidence=0.9,  # 作答来源，置信度按自评口径
@@ -179,7 +181,13 @@ class PersonaProfileService:
         row = self.get_or_404(db, owner_user_id=owner_user_id, profile_id=profile_id)
         if payload.nickname is not None:
             # 只改显示名；key 冻结，否则会话与历史消息关联会变孤儿
-            row.nickname = payload.nickname.strip()
+            nickname = payload.nickname.strip()
+            if not nickname:
+                # schema 的 min_length=1 挡不住全空白，这里兜底
+                raise DomainError(
+                    DomainErrorCode.VALIDATION_FAILED, "昵称不能全是空白", status_code=422
+                )
+            row.nickname = nickname
         if payload.avatar_base64 is not None:
             row.avatar_base64 = payload.avatar_base64
         db.commit()

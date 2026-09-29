@@ -611,12 +611,46 @@ def test_profile_create_maps_answers_and_summarizes(
     assert traits["attachment"]["text"] == "焦虑型"
     assert traits["love_language"]["weak_science"] is True
 
+    # answers 列存的是清洗后的作答（档位整数 / 枚举值），不是原始 payload
+    import json as _json
+
+    from sqlalchemy import select
+
+    from app.core.db import SessionLocal
+    from app.repositories.models import PersonaProfile
+
+    session = SessionLocal()
+    stored = session.scalars(
+        select(PersonaProfile).where(PersonaProfile.key == "小美")
+    ).first()
+    stored_answers = _json.loads(stored.answers)
+    session.close()
+    assert stored_answers == _PROFILE_ANSWERS
+    assert stored_answers["openness"] == 7
+
     duplicate = client.post(
         "/api/personas/profiles",
         headers=headers,
         json={"nickname": " 小美 ", "context": "workplace", "answers": {"disc": "dominance"}},
     )
     assert duplicate.status_code == 409
+
+    blank = client.post(
+        "/api/personas/profiles",
+        headers=headers,
+        json={"nickname": "   ", "context": "romance", "answers": {"openness": 7}},
+    )
+    assert blank.status_code == 422
+    bad_avatar = client.post(
+        "/api/personas/profiles",
+        headers=headers,
+        json={
+            "nickname": "小华", "context": "romance",
+            "avatar_base64": "<script>alert(1)</script>",
+            "answers": {"openness": 7},
+        },
+    )
+    assert bad_avatar.status_code == 422
 
     bad = client.post(
         "/api/personas/profiles",
@@ -849,6 +883,15 @@ def test_profile_patch_and_delete(client: TestClient, db: Session) -> None:
     assert body["nickname"] == "小雪雪"
     assert body["key"] == "小雪"  # key 冻结
     assert body["avatar_base64"].startswith("data:image/jpeg")
+
+    blank = client.patch(
+        f"/api/personas/profiles/{profile_id}", headers=headers, json={"nickname": "   "}
+    )
+    assert blank.status_code == 422
+    bad_avatar = client.patch(
+        f"/api/personas/profiles/{profile_id}", headers=headers, json={"avatar_base64": "http://x/y.png"}
+    )
+    assert bad_avatar.status_code == 422
 
     stranger = _user(client, db, "patchstranger")
     forbidden = client.patch(
