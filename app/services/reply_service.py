@@ -103,6 +103,7 @@ class ReplyService:
             "scenario": pack.kind,
             "scenario_name": scenario.name if scenario else "",
             "scenario_description": scenario.description if scenario else "",
+            "is_group": conversation.is_group,
             "judgments": decision,
             "decision": {
                 "intent": _text(decision, "true_intent"),
@@ -110,7 +111,7 @@ class ReplyService:
                 "needs": _text(decision, pack.needs_key),
                 "risk": _text(decision, pack.risk_key),
             },
-            "messages": [{"from": row.role, "text": row.content} for row in rows],
+            "messages": [{"from": _from_of(row, conversation), "text": row.content} for row in rows],
         }
         drafted = chat_json(
             endpoint_url=llm.endpoint_url,
@@ -150,7 +151,7 @@ class ReplyService:
         ranked = self._rank(
             db=db, owner_user_id=owner_user_id, trace_id=trace_id,
             jev=jev,
-            state=_state(rows, conversation.relationship),
+            state=_state(rows, conversation.relationship, conversation),
             annotated=[annotated[str(index)] for index in range(3)],
         )
         ordered = sorted(
@@ -201,7 +202,7 @@ class ReplyService:
                 ),
             }
         }
-        state = _state(rows, conversation.relationship)
+        state = _state(rows, conversation.relationship, conversation)
         state["candidate_reply"] = annotated["0"]
         result = jev_client.call_with_fallback(
             endpoint_url=jev.endpoint_url,
@@ -412,8 +413,15 @@ def _text(decision: dict, key: str) -> str:
     return ""
 
 
-def _state(rows, relationship: str) -> dict:
-    tail = [{"from": row.role, "text": row.content} for row in rows][-RECENT_MESSAGE_LIMIT:]
+def _from_of(row, conversation: Conversation) -> str:
+    """消息归属：群聊显示发言人名，单人会话保持 me / other。"""
+    return (row.speaker or row.role) if conversation.is_group else row.role
+
+
+def _state(rows, relationship: str, conversation: Conversation) -> dict:
+    tail = [{"from": _from_of(row, conversation), "text": row.content} for row in rows][
+        -RECENT_MESSAGE_LIMIT:
+    ]
     return {
         "chat": {
             "relationship": relationship or "未说明",

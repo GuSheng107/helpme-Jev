@@ -60,6 +60,9 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
   const [creating, setCreating] = useState(false)
   const [name, setName] = useState('')
   const [relationship, setRelationship] = useState('')
+  const [groupMode, setGroupMode] = useState(false)
+  const [membersInput, setMembersInput] = useState('')
+  const [speakerKey, setSpeakerKey] = useState('')
   const [scenarios, setScenarios] = useState<Scenario[]>([])
   const [scenarioId, setScenarioId] = useState<number | null>(null)
   const [result, setResult] = useState<AnalyzeResult | null>(null)
@@ -107,26 +110,57 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
       prev.forEach((item) => URL.revokeObjectURL(item.url))
       return []
     })
+    setSpeakerKey('')
+    setRole('other')
+    let cancelled = false
     void listMessages(currentId)
-      .then(setMessages)
-      .catch((err: unknown) => setError(err instanceof ApiError ? err.message : '内容加载失败'))
+      .then((rows) => {
+        // 快速切换会话时，慢的旧响应不能覆盖新会话的内容
+        if (!cancelled) setMessages(rows)
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(err instanceof ApiError ? err.message : '内容加载失败')
+      })
+    return () => {
+      cancelled = true
+    }
   }, [currentId])
 
   async function create() {
-    if (!name.trim()) return
+    const memberNames = membersInput
+      .split(/[,，、\s]+/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+    if (groupMode) {
+      if (memberNames.length === 0) {
+        setError('群聊至少要一位成员')
+        return
+      }
+    } else if (!name.trim()) {
+      return
+    }
     setBusy(true)
     setError(null)
     try {
-      const created = await createConversation({
-        title: `和${name.trim()}的聊天`,
-        counterpart_name: name.trim(),
-        relationship: relationship.trim(),
-        scenario_id: scenarioId,
-      })
+      const created = groupMode
+        ? await createConversation({
+            title: name.trim() || `和${memberNames[0]}的群聊`,
+            relationship: relationship.trim(),
+            scenario_id: scenarioId,
+            members: memberNames,
+          })
+        : await createConversation({
+            title: `和${name.trim()}的聊天`,
+            counterpart_name: name.trim(),
+            relationship: relationship.trim(),
+            scenario_id: scenarioId,
+          })
       await reloadList()
       setCurrentId(created.id)
       setCreating(false)
       setName('')
+      setMembersInput('')
+      setGroupMode(false)
       setListOpen(false)
       setResult(null)
       setReflection(null)
@@ -186,6 +220,11 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
 
   async function send() {
     if (currentId === null || (!draft.trim() && images.length === 0)) return
+    const wantsSpeaker = current?.is_group && role === 'other'
+    if (wantsSpeaker && !speakerKey) {
+      setError('请先选这条话是谁说的')
+      return
+    }
     setBusy(true)
     setError(null)
     try {
@@ -201,6 +240,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
         draft.trim(),
         source,
         images.map((item) => item.materialId),
+        wantsSpeaker ? speakerKey : '',
       )
       setPickedText(null)
       setMessages((prev) => [...prev, message])
@@ -349,7 +389,27 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
           </div>
           {creating && (
             <div className="space-y-2 px-4 pb-3">
-              <Field label="对方" value={name} onChange={(event) => setName(event.target.value)} />
+              <label className="flex items-center gap-1.5 text-[13px] text-ink-secondary">
+                <input
+                  type="checkbox"
+                  className="h-3.5 w-3.5"
+                  checked={groupMode}
+                  onChange={(event) => setGroupMode(event.target.checked)}
+                />
+                群聊
+              </label>
+              {groupMode ? (
+                <>
+                  <Field label="群名（选填）" value={name} onChange={(event) => setName(event.target.value)} />
+                  <Field
+                    label="成员（逗号分隔，不含自己）"
+                    value={membersInput}
+                    onChange={(event) => setMembersInput(event.target.value)}
+                  />
+                </>
+              ) : (
+                <Field label="对方" value={name} onChange={(event) => setName(event.target.value)} />
+              )}
               <div>
                 <span className="mb-1 block text-[12px] text-ink-muted">场景</span>
                 <select
@@ -404,6 +464,9 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                   >
                     <span className="flex items-center gap-1.5">
                       <span className="truncate">{item.counterpart_name || item.title}</span>
+                      {item.is_group && (
+                        <span className="shrink-0 rounded-[4px] bg-surface-muted px-1 text-[11px] text-ink-muted">群聊</span>
+                      )}
                       {item.scenario_kind === 'workplace' && (
                         <span className="shrink-0 rounded-[4px] bg-surface-muted px-1 text-[11px] text-ink-muted">职场</span>
                       )}
@@ -432,6 +495,11 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
               <span className="truncate text-[16px] font-semibold text-ink">
                 {current ? current.counterpart_name || current.title : 'HelpMe'}
               </span>
+              {current?.is_group && (
+                <span className="shrink-0 text-[12px] text-ink-muted">
+                  {current.members.length + 1} 人
+                </span>
+              )}
             </div>
           </header>
 
@@ -509,11 +577,19 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                   const imageAttachments = (message.attachments ?? []).filter(
                     (item) => item.type === 'image',
                   )
+                  const speakerName =
+                    current?.is_group && message.role === 'other' && message.speaker
+                      ? current.members.find((member) => member.key === message.speaker)?.name ??
+                        message.speaker
+                      : null
                   return (
                     <div
                       key={message.id}
                       className={`flex flex-col ${message.role === 'me' ? 'items-end' : 'items-start'}`}
                     >
+                      {speakerName && (
+                        <span className="mb-0.5 text-[11px] text-ink-muted">{speakerName}</span>
+                      )}
                       {message.content && (
                         <p
                           className={`max-w-[80%] whitespace-pre-wrap break-words rounded-[12px] px-3 py-2 text-[14px] leading-[22px] ${
@@ -564,6 +640,18 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                     我
                   </button>
                 </div>
+                {current?.is_group && role === 'other' && (
+                  <select
+                    className="mb-2 w-full rounded-[6px] border border-border px-2 py-1.5 text-[13px] text-ink"
+                    value={speakerKey}
+                    onChange={(event) => setSpeakerKey(event.target.value)}
+                  >
+                    <option value="">这条话是谁说的？</option>
+                    {current.members.map((member) => (
+                      <option key={member.key} value={member.key}>{member.name}</option>
+                    ))}
+                  </select>
+                )}
                 {role === 'me' && pickedText !== null && (
                   <div className="mb-2 flex items-center justify-between gap-2 rounded-[6px] bg-primary-soft px-3 py-1.5">
                     <p className="text-[12px] leading-5 text-ink-secondary">
@@ -618,7 +706,9 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                         ? '粘贴对方发来的内容（当前模型不支持看图，图片无法添加）'
                         : '写下你要回复的话'
                       : role === 'other'
-                        ? '粘贴对方发来的内容，也可以直接贴聊天截图'
+                        ? current?.is_group
+                          ? '粘贴群里的发言，上方选好是谁说的'
+                          : '粘贴对方发来的内容，也可以直接贴聊天截图'
                         : '写下你要回复的话'
                   }
                   className="w-full resize-none rounded-[6px] border border-border px-3 py-2 text-ink outline-none"

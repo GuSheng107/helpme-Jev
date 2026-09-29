@@ -22,9 +22,23 @@ _MAX_QA_CHARS = 20000
 _MAX_IMAGE_BYTES = 4 * 1024 * 1024
 
 
-def parse_chat(text: str, me_labels: list[str], other_labels: list[str]) -> list[dict]:
+def parse_chat(
+    text: str,
+    me_labels: list[str],
+    other_labels: list[str],
+    members: dict[str, str] | None = None,
+) -> list[dict]:
+    """逐行解析粘贴的聊天记录。
+
+    ``members``（成员名 → key）给了就走群聊模式：认不出的标签一律跳过，
+    认出的成员行带 ``speaker``；单人模式与旧逻辑一致。
+    """
     me = {item.strip() for item in me_labels if item.strip()} or {"我"}
-    other = {item.strip() for item in other_labels if item.strip()} or {"她", "他", "TA"}
+    # 对方标签是"补充"而不是"替换"：默认的 她 / 他 / TA 始终认，
+    # 否则用户填了"他"之后 TA 开头的行会被跳过（与输入框文案一致）
+    other = {"她", "他", "TA"} | {item.strip() for item in other_labels if item.strip()}
+    if members:
+        other = set()
     parsed: list[dict] = []
     skipped = 0
     for raw in text.splitlines():
@@ -37,20 +51,28 @@ def parse_chat(text: str, me_labels: list[str], other_labels: list[str]) -> list
             continue
         label, content = matched.group(1).strip(), matched.group(2).strip()
         if label in me:
-            role = "me"
+            role, speaker = "me", ""
         elif label in other:
-            role = "other"
+            role, speaker = "other", ""
+        elif members is not None and label in members:
+            role, speaker = "other", members[label]
         else:
             skipped += 1
             continue
         if content:
-            parsed.append({"role": role, "content": content, "label": label})
+            parsed.append({"role": role, "content": content, "label": label, "speaker": speaker})
     return parsed if not skipped else [*parsed, {"skipped": skipped}]
 
 
 class ImportService:
-    def preview_chat(self, text: str, me_labels: list[str], other_labels: list[str]) -> dict:
-        rows = parse_chat(text, me_labels, other_labels)
+    def preview_chat(
+        self,
+        text: str,
+        me_labels: list[str],
+        other_labels: list[str],
+        members: dict[str, str] | None = None,
+    ) -> dict:
+        rows = parse_chat(text, me_labels, other_labels, members)
         skipped = 0
         messages = []
         for row in rows:
@@ -69,12 +91,13 @@ class ImportService:
         text: str,
         me_labels: list[str],
         other_labels: list[str],
+        members: dict[str, str] | None = None,
     ) -> dict:
-        preview = self.preview_chat(text, me_labels, other_labels)
+        preview = self.preview_chat(text, me_labels, other_labels, members)
         if preview["count"] == 0:
             raise DomainError(DomainErrorCode.VALIDATION_FAILED, "没有认出任何一条对话", status_code=422)
         seq = _messages.next_seq(db, conversation_id=conversation.id)
-        for item in parse_chat(text, me_labels, other_labels):
+        for item in parse_chat(text, me_labels, other_labels, members):
             if "skipped" in item:
                 continue
             _messages.add(
@@ -85,6 +108,7 @@ class ImportService:
                     role=item["role"],
                     content=item["content"],
                     source="import",
+                    speaker=item.get("speaker", ""),
                 ),
             )
             seq += 1

@@ -88,10 +88,17 @@ class MemoryService:
         )
         known = {row.id: row for row in existing}
         payload = {
-            "counterpart": conversation.counterpart_name,
+            # 群聊没有单一对象，把群名给 LLM 当参照
+            "counterpart": conversation.counterpart_name
+            or (conversation.title if conversation.is_group else ""),
             "relationship": conversation.relationship,
             "messages": [
-                {"seq": row.seq, "from": row.role, "text": row.content} for row in rows
+                {
+                    "seq": row.seq,
+                    "from": (row.speaker or row.role) if conversation.is_group else row.role,
+                    "text": row.content,
+                }
+                for row in rows
             ],
             "memories": [
                 {

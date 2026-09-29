@@ -77,7 +77,7 @@ _summaries = SummaryRepository()
 def ensure_summary(
     db: Session,
     *,
-    conversation_id: int,
+    conversation,  # Conversation：群聊摘要需要按发言人归属
     owner_user_id: int,
     endpoint_url: str,
     api_key: str,
@@ -86,10 +86,10 @@ def ensure_summary(
     trace_id: str = "",
 ) -> str:
     """最近 10 条之外积压超过阈值时，把更早的内容压成一条摘要。失败则沿用旧摘要。"""
-    current = _summaries.latest(db, conversation_id=conversation_id)
+    current = _summaries.latest(db, conversation_id=conversation.id)
     upto = current.upto_seq if current else 0
     older = _messages.list_by_conversation(
-        db, conversation_id=conversation_id, after_seq=upto
+        db, conversation_id=conversation.id, after_seq=upto
     )
     pending = older[:-10] if len(older) > 10 else []
     if len(pending) < SUMMARY_GAP:
@@ -97,7 +97,14 @@ def ensure_summary(
 
     payload = {
         "previous": current.summary if current else "",
-        "messages": [{"from": row.role, "text": row.content} for row in pending],
+        "messages": [
+            {
+                "seq": row.seq,
+                "from": (row.speaker or row.role) if conversation.is_group else row.role,
+                "text": row.content,
+            }
+            for row in pending
+        ],
     }
     result = chat_json(
         endpoint_url=endpoint_url,
@@ -125,7 +132,7 @@ def ensure_summary(
     _summaries.add(
         db,
         SessionSummary(
-            conversation_id=conversation_id,
+            conversation_id=conversation.id,
             upto_seq=pending[-1].seq,
             summary=text[:500],
         ),

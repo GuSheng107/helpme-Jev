@@ -13,6 +13,8 @@ class PersonaBuildRequest(StrictModel):
     self_report: dict = Field(default_factory=dict)
     # 情境不传则按会话挂的场景推断；同一对象恋爱 / 职场各一份档案
     context: str | None = Field(default=None, pattern="^(romance|workplace)$")
+    # 群聊里给"other"建档案时必填：目标成员 key；单人会话忽略
+    member_key: str = Field(default="", max_length=64)
 
 
 class ChatImportRequest(StrictModel):

@@ -4,11 +4,13 @@ import { listConversations, type Conversation } from '../api/chat'
 import {
   buildPersona,
   commitChat,
+  fetchPersonaBatch,
   getPersona,
   importQa,
   personaUsage,
   previewChat,
   type ChatPreview,
+  type PersonaBatch,
   type PersonaContext,
   type PersonaView,
 } from '../api/personas'
@@ -91,11 +93,21 @@ export default function PersonaPage() {
   const [otherLabels, setOtherLabels] = useState('')
   const [qa, setQa] = useState('')
   const [selfAnswers, setSelfAnswers] = useState<Record<string, string | number>>({})
+  const [memberKey, setMemberKey] = useState('me')
+  const [batch, setBatch] = useState<PersonaBatch | null>(null)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
   const current = conversations.find((item) => item.id === currentId) ?? null
+
+  // 群聊：选中的是我还是哪位成员；单聊不用这个状态
+  const groupSel = current?.is_group
+    ? memberKey === 'me'
+      ? { key: current.counterpart_key, subject: 'me' as const }
+      : { key: memberKey, subject: 'other' as const }
+    : { key: current?.counterpart_key ?? '', subject }
+  const effectiveSubject = groupSel.subject
 
   useEffect(() => {
     listConversations()
@@ -113,14 +125,42 @@ export default function PersonaPage() {
     if (!current) return
     const kind = current.scenario_kind
     if (kind === 'romance' || kind === 'workplace') setContext(kind)
+    setMemberKey('me')
+    setPersona(null)
+    setBatch(null)
   }, [current])
 
   useEffect(() => {
+    if (!current?.is_group) return
+    let cancelled = false
+    // 情境跟随恋爱 / 职场切换，和下方单份档案保持一致
+    fetchPersonaBatch(current.id, context)
+      .then((result) => {
+        // 快速切换会话时，慢的旧响应不能覆盖新会话的批量档案
+        if (!cancelled) setBatch(result)
+      })
+      .catch(() => {
+        if (!cancelled) setError('群成员档案未能载入')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [current, context])
+
+  useEffect(() => {
     if (!current) return
-    getPersona(current.counterpart_key, subject, context)
-      .then(setPersona)
-      .catch(() => setPersona(null))
-  }, [current, subject, context])
+    let cancelled = false
+    getPersona(groupSel.key, groupSel.subject, context)
+      .then((view) => {
+        if (!cancelled) setPersona(view)
+      })
+      .catch(() => {
+        if (!cancelled) setPersona(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [current, groupSel.key, groupSel.subject, context])
 
   function pickConversation(id: number) {
     setCurrentId(id)
@@ -129,7 +169,7 @@ export default function PersonaPage() {
 
   async function build() {
     if (currentId === null) return
-    if (subject === 'me' && Object.keys(selfAnswers).length === 0) {
+    if (effectiveSubject === 'me' && Object.keys(selfAnswers).length === 0) {
       setError('请先作答，至少选一项')
       return
     }
@@ -138,12 +178,16 @@ export default function PersonaPage() {
     try {
       const built = await buildPersona(
         currentId,
-        subject,
-        subject === 'me' ? selfAnswers : {},
+        effectiveSubject,
+        effectiveSubject === 'me' ? selfAnswers : {},
         context,
+        current?.is_group && effectiveSubject === 'other' ? groupSel.key : '',
       )
       setPersona(built)
       setNotice(built.kept ? built.reason || '已保留原档案' : '档案已更新')
+      if (current?.is_group) {
+        fetchPersonaBatch(current.id, context).then(setBatch).catch(() => undefined)
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '建模未完成')
     } finally {
@@ -227,7 +271,7 @@ export default function PersonaPage() {
                   onChange={(event) => pickConversation(Number(event.target.value))}
                 >
                   {conversations.map((item) => (
-                    <option key={item.id} value={item.id}>{item.counterpart_name}</option>
+                    <option key={item.id} value={item.id}>{item.counterpart_name || item.title}</option>
                   ))}
                 </select>
                 <div className="flex rounded-[6px] border border-border p-0.5">
@@ -244,25 +288,38 @@ export default function PersonaPage() {
                     </button>
                   ))}
                 </div>
-                <div className="flex rounded-[6px] border border-border p-0.5">
-                  {(['other', 'me'] as const).map((item) => (
-                    <button
-                      key={item}
-                      type="button"
-                      className={`rounded-[4px] px-2 py-0.5 text-[13px] ${
-                        subject === item ? 'bg-primary text-white' : 'text-ink-secondary'
-                      }`}
-                      onClick={() => setSubject(item)}
-                    >
-                      {item === 'me' ? '我' : '对方'}
-                    </button>
-                  ))}
-                </div>
+                {current?.is_group ? (
+                  <select
+                    className="rounded-[6px] border border-border px-2 py-1 text-[14px]"
+                    value={memberKey}
+                    onChange={(event) => setMemberKey(event.target.value)}
+                  >
+                    <option value="me">我（自评）</option>
+                    {current.members.map((member) => (
+                      <option key={member.key} value={member.key}>{member.name}（从对话推断）</option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="flex rounded-[6px] border border-border p-0.5">
+                    {(['other', 'me'] as const).map((item) => (
+                      <button
+                        key={item}
+                        type="button"
+                        className={`rounded-[4px] px-2 py-0.5 text-[13px] ${
+                          subject === item ? 'bg-primary text-white' : 'text-ink-secondary'
+                        }`}
+                        onClick={() => setSubject(item)}
+                      >
+                        {item === 'me' ? '我' : '对方'}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <Button size="sm" variant="primary" loading={busy} onClick={() => void build()}>
-                  {subject === 'me' ? '提交自评' : '从对话推断'}
+                  {effectiveSubject === 'me' ? '提交自评' : '从对话推断'}
                 </Button>
               </div>
-              {subject === 'me' && (
+              {effectiveSubject === 'me' && (
                 <ul className="mb-3 space-y-2">
                   {selfItems.map((item) => (
                     <li key={item.key} className="flex flex-wrap items-center justify-between gap-2">
@@ -292,6 +349,9 @@ export default function PersonaPage() {
                 </ul>
               )}
               <p className="text-[13px] text-ink-muted">
+                {current?.is_group
+                  ? `${memberKey === 'me' ? '我' : current.members.find((member) => member.key === memberKey)?.name ?? memberKey}　`
+                  : ''}
                 {CONTEXT_LABELS[persona?.context ?? context]}情境　置信度 {persona?.confidence ?? 0}%　版本 {persona?.version ?? 0}
               </p>
               <ul className="mt-2 space-y-1">
@@ -311,6 +371,32 @@ export default function PersonaPage() {
                 直接采用 {usage.adopted} 次，手动改写 {usage.rewritten} 次
               </p>
             </DataCard>
+            {current?.is_group && batch && (
+              <DataCard title={`群成员档案（${batch.participants.length} 人）`}>
+                <ul className="space-y-2">
+                  {batch.participants.map((participant) => (
+                    <li key={participant.key} className="rounded-[6px] bg-surface-muted px-3 py-2">
+                      <p className="text-[14px] text-ink">
+                        {participant.name}
+                        <span className="ml-2 text-[12px] text-ink-muted">
+                          置信度 {participant.persona.confidence}%　版本 {participant.persona.version}
+                        </span>
+                      </p>
+                      <p className="mt-0.5 text-[13px] leading-5 text-ink-secondary">
+                        {participant.persona.traits.length > 0
+                          ? participant.persona.traits
+                              .map((trait) => `${trait.title} ${trait.text}`)
+                              .join('　')
+                          : '还没有档案，可在上方选中后「从对话推断」'}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-2 text-[13px] text-ink-muted">
+                  共享上下文（记忆）{batch.memories.length} 条
+                </p>
+              </DataCard>
+            )}
             <DataCard title="导入聊天记录">
               <textarea
                 className="min-h-28 w-full rounded-[6px] border border-border p-2 text-[14px]"
@@ -318,17 +404,24 @@ export default function PersonaPage() {
                 value={text}
                 onChange={(event) => setText(event.target.value)}
               />
-              <input
-                className="mt-2 w-full rounded-[6px] border border-border px-2 py-1 text-[13px]"
-                placeholder="对方标签（选填，逗号分隔，默认认 她 / 他 / TA，也可以是名字）"
-                value={otherLabels}
-                onChange={(event) => setOtherLabels(event.target.value)}
-              />
-              <div className="mt-2 flex gap-2">
+              {current?.is_group ? (
+                <p className="mt-2 text-[13px] text-ink-muted">群聊按成员名识别发言归属，无需填标签</p>
+              ) : (
+                <input
+                  className="mt-2 w-full rounded-[6px] border border-border px-2 py-1 text-[13px]"
+                  placeholder="对方标签（选填，逗号分隔，默认认 她 / 他 / TA，这里可以补充名字）"
+                  value={otherLabels}
+                  onChange={(event) => setOtherLabels(event.target.value)}
+                />
+              )}
+              <div className="mt-2 flex items-center gap-2">
                 <Button size="sm" loading={busy} onClick={() => void previewImport()}>预览</Button>
                 <Button size="sm" variant="primary" loading={busy} disabled={preview === null} disabledReason="请先预览" onClick={() => void confirmImport()}>
                   确认导入
                 </Button>
+                {preview === null && (
+                  <span className="text-[12px] text-ink-muted">先点「预览」，确认结果后才能导入</span>
+                )}
               </div>
               {preview && (
                 <p className="mt-2 text-[13px] text-ink-secondary">

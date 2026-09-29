@@ -128,6 +128,18 @@ def _load_questions(raw: str) -> dict:
     return {str(key): value for key, value in parsed.items() if isinstance(value, dict)}
 
 
+def persona_context_of(db: Session, conversation: Conversation) -> str:
+    """人设档案情境（romance / workplace）：自定义场景按人设题集映射。"""
+    kind = kind_of(db, conversation)
+    if kind in {"romance", "workplace"}:
+        return kind
+    if conversation.scenario_id is not None:
+        scenario = db.get(Scenario, conversation.scenario_id)
+        if scenario is not None and "disc" in strip_meta(_load_questions(scenario.persona_questions)):
+            return "workplace"
+    return "romance"
+
+
 def validate_questions(raw: str) -> dict:
     """自定义题集的 JSON 校验：结构合法才能落库。
 

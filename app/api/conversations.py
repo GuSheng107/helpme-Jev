@@ -25,6 +25,8 @@ from ..domain.schemas.conversation import (
     ConversationView,
     MessageCreate,
     MessageView,
+    normalize_member_names,
+    parse_members,
 )
 from ..repositories.conversations_repo import ConversationRepository, MessageRepository
 from ..repositories.models import Conversation, Message, Scenario, User
@@ -58,6 +60,8 @@ def _conversation_view(db: Session, row: Conversation) -> ConversationView:
         relationship=row.relationship,
         scenario_id=row.scenario_id,
         scenario_kind=kind,
+        is_group=row.is_group,
+        members=parse_members(row.members),
         message_count=_messages.count(db, conversation_id=row.id),
         created_at=iso_utc(row.created_at) or "",
         updated_at=iso_utc(row.updated_at) or "",
@@ -76,6 +80,7 @@ def _message_view(row: Message) -> MessageView:
         content=row.content,
         attachments=attachments,
         source=row.source,
+        speaker=row.speaker or "",
         created_at=iso_utc(row.created_at) or "",
     )
 
@@ -116,13 +121,30 @@ def create_conversation(
         ):
             raise DomainError(DomainErrorCode.NOT_FOUND, "场景不存在", status_code=404)
 
+    members = normalize_member_names(payload.members)
+    if payload.members and not members:
+        # 传了成员但全是空白 —— 用户想要群聊，不能静默降级成单聊
+        raise DomainError(
+            DomainErrorCode.VALIDATION_FAILED, "成员名不能全是空白", status_code=422
+        )
+    is_group = bool(members)
+    if is_group and not payload.title.strip():
+        # title 在 schema 里必填；群聊的 key 取群名，得有名字才能稳住人设档
+        raise DomainError(DomainErrorCode.VALIDATION_FAILED, "群聊需要一个群名", status_code=422)
+
     row = Conversation(
         owner_user_id=user.id,
         scenario_id=payload.scenario_id,
         title=payload.title.strip(),
-        counterpart_name=payload.counterpart_name.strip(),
+        counterpart_name="" if is_group else payload.counterpart_name.strip(),
         relationship=payload.relationship.strip(),
-        counterpart_key=_counterpart_key(payload.counterpart_name, payload.title),
+        counterpart_key=_counterpart_key(
+            "" if is_group else payload.counterpart_name, payload.title
+        ),
+        is_group=is_group,
+        members=json.dumps(
+            [member.model_dump() for member in members], ensure_ascii=False
+        ),
     )
     _conversations.add(db, row)
     db.commit()
@@ -236,6 +258,16 @@ def append_message(
         raise DomainError(
             DomainErrorCode.VALIDATION_FAILED, "消息内容不能为空", status_code=422
         )
+    # 群聊：other 消息必须指认一位成员当发言人；单人会话一律不带 speaker
+    speaker = payload.speaker.strip().lower()
+    if conversation.is_group and payload.role == "other":
+        member_keys = {member.key for member in parse_members(conversation.members)}
+        if speaker not in member_keys:
+            raise DomainError(
+                DomainErrorCode.VALIDATION_FAILED, "发言人必须是群成员", status_code=422
+            )
+    else:
+        speaker = ""
     row = Message(
         conversation_id=conversation.id,
         seq=_messages.next_seq(db, conversation_id=conversation.id),
@@ -243,6 +275,7 @@ def append_message(
         content=payload.content,
         attachments=json.dumps(attachments, ensure_ascii=False),
         source=payload.source,
+        speaker=speaker,
     )
     try:
         _messages.add(db, row)
