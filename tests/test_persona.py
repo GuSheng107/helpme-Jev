@@ -541,3 +541,16 @@ def test_group_summary_keeps_speaker_names(
     )
     body = _json.loads(captured["messages"])
     assert body["messages"][0]["from"] == "小林"
+
+
+def test_batch_hidden_from_other_users(client: TestClient, db: Session) -> None:
+    """批量接口的越权隔离：别人的会话一律 404。"""
+    headers = _user(client, db, "batchowner")
+    conv_id = _group(client, headers, with_messages=False)
+
+    stranger = _user(client, db, "batchstranger")
+    peeked = client.get(
+        "/api/personas/batch", headers=stranger, params={"conversation_id": conv_id}
+    )
+    assert peeked.status_code == 404
+    assert peeked.json()["error"]["code"] == "NOT_FOUND"

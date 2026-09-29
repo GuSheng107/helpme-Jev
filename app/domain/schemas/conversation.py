@@ -78,6 +78,8 @@ class ConversationUpdate(StrictModel):
     title: str | None = Field(default=None, min_length=1, max_length=128)
     counterpart_name: str | None = Field(default=None, max_length=64)
     relationship: str | None = Field(default=None, max_length=64)
+    # 仅群聊可改：None = 不动；空列表 = 清空（会被 422 拒绝，群至少一人）
+    members: list[MemberName] | None = Field(default=None, max_length=MAX_GROUP_MEMBERS)
 
 
 class ConversationView(BaseModel):

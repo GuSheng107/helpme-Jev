@@ -179,6 +179,21 @@ def update_conversation(
             row.counterpart_key = _counterpart_key(row.counterpart_name, row.title)
     if payload.relationship is not None:
         row.relationship = payload.relationship.strip()
+    if payload.members is not None:
+        if not row.is_group:
+            raise DomainError(
+                DomainErrorCode.VALIDATION_FAILED, "单聊不能添加成员，请新建群聊", status_code=422
+            )
+        members = normalize_member_names(payload.members)
+        if not members:
+            raise DomainError(
+                DomainErrorCode.VALIDATION_FAILED, "群聊至少要一位成员", status_code=422
+            )
+        # 只换成员表，不动 counterpart_key：群级记忆不受影响，
+        # 被移除成员的历史消息保留原 speaker，旧消息仍可读
+        row.members = json.dumps(
+            [member.model_dump() for member in members], ensure_ascii=False
+        )
     db.commit()
     return _conversation_view(db, row)
 
