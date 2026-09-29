@@ -45,10 +45,10 @@ JEV (TypeSafe System One) answers typed questions such as yes/no probability, op
 
 | Area | What you get |
 | --- | --- |
-| Chat helper | Analyze intent, risk, emotion, needs, and possible next actions. |
+| Chat helper | One-on-one or group chats: analyze intent, risk, emotion, needs, and possible next actions. |
 | Decision workbench | Ask <code>noul</code>, <code>choice</code>, or <code>score</code> questions without opening a chat. |
 | Scenarios | Built-in romance and workplace packs, plus editable copies for your own situations. |
-| People and context | Keep separate context for you and the other person; build lightweight persona notes with evidence and confidence. |
+| People and context | Keep separate context for you and the other person; group members each get their own persona notes with evidence and confidence, fetched in one batch. |
 | Memory | Let the LLM summarize useful context into dated entries; review, revert, or delete it. |
 | Images | Paste or upload PNG/JPEG/WEBP screenshots, up to 9 per message; a vision-capable LLM describes them. HelpMe JEV does not run OCR. |
 | Wording help | Polish a message, ask for clarification, generate candidate replies, then let JEV rank them. |

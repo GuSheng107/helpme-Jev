@@ -222,7 +222,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
     if (currentId === null || (!draft.trim() && images.length === 0)) return
     const wantsSpeaker = current?.is_group && role === 'other'
     if (wantsSpeaker && !speakerKey) {
-      setError('请先选这条话是谁说的')
+      setError('请先选择发言成员')
       return
     }
     setBusy(true)
@@ -646,7 +646,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                     value={speakerKey}
                     onChange={(event) => setSpeakerKey(event.target.value)}
                   >
-                    <option value="">这条话是谁说的？</option>
+                    <option value="">请选择发言成员</option>
                     {current.members.map((member) => (
                       <option key={member.key} value={member.key}>{member.name}</option>
                     ))}
@@ -707,7 +707,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                         : '写下你要回复的话'
                       : role === 'other'
                         ? current?.is_group
-                          ? '粘贴群里的发言，上方选好是谁说的'
+                          ? '粘贴群里的发言，上方选择发言成员'
                           : '粘贴对方发来的内容，也可以直接贴聊天截图'
                         : '写下你要回复的话'
                   }
