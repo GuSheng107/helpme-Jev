@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime, time, timezone
+
 from fastapi import APIRouter, Depends, Response
 from pydantic import Field
 from sqlalchemy.orm import Session
@@ -9,7 +11,7 @@ from sqlalchemy.orm import Session
 from ..core.db import get_db
 from ..core.constants import INVITATION_MAX_USES
 from ..core.security import generate_invitation_code
-from ..core.time import iso_utc
+from ..core.time import iso_utc, utc_now
 from ..domain.enums import AuditAction
 from ..domain.errors import DomainError, DomainErrorCode
 from ..domain.schemas.auth import StrictModel
@@ -49,6 +51,33 @@ class UserCreateRequest(StrictModel):
 class InvitationCreateRequest(StrictModel):
     note: str = Field(default="", max_length=255)
     max_uses: int = Field(default=1, ge=1, le=INVITATION_MAX_USES)
+    # 截止日期 YYYY-MM-DD；不填视为永久有效
+    expires_at: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _parse_expires_at(raw: str | None) -> datetime | None:
+    """截止日期解释成本地时区当天 23:59:59，再转库里的 naive UTC。
+
+    用户按本地时间理解"截止到这天"；过期（<= 现在）直接拒绝。
+    """
+    if raw is None:
+        return None
+    try:
+        day = date.fromisoformat(raw)
+    except ValueError as exc:
+        raise DomainError(
+            DomainErrorCode.VALIDATION_FAILED, "截止日期格式应为 YYYY-MM-DD", status_code=422
+        ) from exc
+    deadline = (
+        datetime.combine(day, time(23, 59, 59))
+        .astimezone(timezone.utc)
+        .replace(tzinfo=None)
+    )
+    if deadline <= utc_now():
+        raise DomainError(
+            DomainErrorCode.VALIDATION_FAILED, "截止日期已经过去", status_code=422
+        )
+    return deadline
 
 
 @router.get("/users")
@@ -118,6 +147,7 @@ def _invitation_view(row: InvitationCode) -> dict:
         "note": row.note or "",
         "max_uses": row.max_uses,
         "used_count": row.used_count,
+        "expires_at": iso_utc(row.expires_at),
         "status": row.status(),
         "created_at": iso_utc(row.created_at) or "",
     }
@@ -145,6 +175,7 @@ def create_invitation(
             code=code,
             note=payload.note.strip(),
             max_uses=payload.max_uses,
+            expires_at=_parse_expires_at(payload.expires_at),
             created_by_user_id=admin.id,
         ),
     )

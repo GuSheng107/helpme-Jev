@@ -17,6 +17,8 @@ export interface Invitation {
   note: string
   max_uses: number
   used_count: number
+  /** 截止时间（ISO）；null 表示永久有效 */
+  expires_at: string | null
   status: 'active' | 'revoked' | 'expired' | 'exhausted'
   created_at: string
 }
@@ -45,7 +47,7 @@ export function listInvitations() {
   return api.get<Invitation[]>('/api/admin/invitations')
 }
 
-export function createInvitation(body: { note: string; max_uses: number }) {
+export function createInvitation(body: { note: string; max_uses: number; expires_at?: string | null }) {
   return api.post<Invitation>('/api/admin/invitations', body)
 }
 

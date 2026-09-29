@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.security import generate_invitation_code, hash_password
+from app.core.time import utc_now
 from app.domain.enums import UserRole
 from app.repositories.auth_repo import InvitationRepository, UserRepository
 from app.repositories.models import InvitationCode, User
@@ -47,7 +49,9 @@ def _activate_admin(client: TestClient, db: Session) -> str:
     return token
 
 
-def _new_invitation(db: Session, admin_id: int, *, max_uses: int = 1) -> str:
+def _new_invitation(
+    db: Session, admin_id: int, *, max_uses: int = 1, expires_at: datetime | None = None
+) -> str:
     code = generate_invitation_code()
     InvitationRepository().add(
         db,
@@ -55,6 +59,7 @@ def _new_invitation(db: Session, admin_id: int, *, max_uses: int = 1) -> str:
             code=code,
             max_uses=max_uses,
             used_count=0,
+            expires_at=expires_at,
             created_by_user_id=admin_id,
         ),
     )
@@ -324,6 +329,69 @@ def test_register_rejects_invalid_invitation(client: TestClient, db: Session) ->
             "username": "carol",
             "display_name": "Carol",
             "password": "C4rol!Passw0rd",
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "INVALID_INVITATION"
+
+
+def test_invitation_expiry_controlled_at_creation(
+    client: TestClient, db: Session
+) -> None:
+    """截止日期：不填永久有效；填未来日期可用且能注册；过去日期拒绝。"""
+    headers = {"Authorization": f"Bearer {_activate_admin(client, db)}"}
+
+    permanent = client.post("/api/admin/invitations", json={}, headers=headers)
+    assert permanent.status_code == 201, permanent.text
+    assert permanent.json()["expires_at"] is None
+    assert permanent.json()["status"] == "active"
+
+    future = (date.today() + timedelta(days=7)).isoformat()
+    dated = client.post(
+        "/api/admin/invitations", json={"expires_at": future}, headers=headers
+    )
+    assert dated.status_code == 201, dated.text
+    assert dated.json()["expires_at"] is not None
+    assert dated.json()["status"] == "active"
+
+    # 带截止日期的码在有效期内照常注册
+    ok = client.post(
+        "/api/auth/register",
+        json={
+            "invitation_code": dated.json()["code"],
+            "username": "dateduser",
+            "display_name": "Dated",
+            "password": "D4ted!Passw0rd",
+        },
+    )
+    assert ok.status_code == 201, ok.text
+
+    past = (date.today() - timedelta(days=1)).isoformat()
+    refused = client.post(
+        "/api/admin/invitations", json={"expires_at": past}, headers=headers
+    )
+    assert refused.status_code == 422
+    assert refused.json()["error"]["code"] == "VALIDATION_FAILED"
+
+    malformed = client.post(
+        "/api/admin/invitations", json={"expires_at": "2026-13-40"}, headers=headers
+    )
+    assert malformed.status_code == 422
+
+
+def test_register_rejects_expired_invitation(client: TestClient, db: Session) -> None:
+    _activate_admin(client, db)
+    admin = UserRepository().by_username(db, "admin")
+    assert admin is not None
+    code = _new_invitation(db, admin.id, expires_at=utc_now() - timedelta(hours=1))
+
+    resp = client.post(
+        "/api/auth/register",
+        json={
+            "invitation_code": code,
+            "username": "lateuser",
+            "display_name": "Late",
+            "password": "L4te!Passw0rd",
         },
     )
     assert resp.status_code == 400
