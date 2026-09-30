@@ -91,6 +91,13 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
   const fileInput = useRef<HTMLInputElement>(null)
 
   const current = conversations.find((item) => item.id === currentId) ?? null
+  const chosenSoloProfile = profiles.find((item) => item.id === soloProfileId) ?? null
+
+  // 显示名动态走人设库：档案改名后，列表 / 头部 / 发言人标签即时跟随新昵称，
+  // 无需回改会话快照（key 冻结，改名只影响显示）
+  function displayName(key: string, fallback: string): string {
+    return profiles.find((item) => item.key === key)?.nickname || fallback
+  }
 
   const reloadList = useCallback(async () => {
     setConversations(await listConversations())
@@ -140,7 +147,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
       .split(/[,，、\s]+/)
       .map((item) => item.trim())
       .filter(Boolean)
-    const chosenProfile = profiles.find((item) => item.id === soloProfileId) ?? null
+    const chosenProfile = chosenSoloProfile
     if (groupMode) {
       if (memberNames.length === 0 && memberProfileIds.length === 0) {
         setError('群聊至少要一位成员（手填或从人设库选）')
@@ -444,7 +451,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                                 )
                               }
                             >
-                              {profile.nickname}
+                              {profile.nickname}（{CONTEXT_LABELS[profile.context]}）
                             </button>
                           )
                         })}
@@ -476,6 +483,20 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                           </option>
                         ))}
                       </select>
+                    </div>
+                  )}
+                  {chosenSoloProfile && (
+                    <div className="flex items-center gap-2 rounded-[6px] bg-surface-muted px-2 py-1.5">
+                      {chosenSoloProfile.avatar_base64 ? (
+                        <img src={chosenSoloProfile.avatar_base64} alt="" className="h-8 w-8 shrink-0 rounded-full object-cover" />
+                      ) : (
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary-soft text-[14px] text-primary">
+                          {chosenSoloProfile.nickname.slice(0, 1)}
+                        </span>
+                      )}
+                      <span className="min-w-0 flex-1 truncate text-[13px] text-ink">
+                        {chosenSoloProfile.summary || '这个人设还没有速写'}
+                      </span>
                     </div>
                   )}
                   {!soloProfileId && (
@@ -536,7 +557,11 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                     }}
                   >
                     <span className="flex items-center gap-1.5">
-                      <span className="truncate">{item.counterpart_name || item.title}</span>
+                      <span className="truncate">
+                        {item.is_group
+                          ? item.title
+                          : displayName(item.counterpart_key, item.counterpart_name || item.title)}
+                      </span>
                       {item.is_group && (
                         <span className="shrink-0 rounded-[4px] bg-surface-muted px-1 text-[11px] text-ink-muted">群聊</span>
                       )}
@@ -576,7 +601,11 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                 ) : null
               })()}
               <span className="truncate text-[16px] font-semibold text-ink">
-                {current ? current.counterpart_name || current.title : 'HelpMe'}
+                {current
+                  ? current.is_group
+                    ? current.title
+                    : displayName(current.counterpart_key, current.counterpart_name || current.title)
+                  : 'HelpMe'}
               </span>
               {current?.is_group && (
                 <span className="shrink-0 text-[12px] text-ink-muted">
@@ -675,8 +704,11 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                   )
                   const speakerName =
                     current?.is_group && message.role === 'other' && message.speaker
-                      ? current.members.find((member) => member.key === message.speaker)?.name ??
-                        message.speaker
+                      ? displayName(
+                          message.speaker,
+                          current.members.find((member) => member.key === message.speaker)?.name ??
+                            message.speaker,
+                        )
                       : null
                   return (
                     <div
@@ -744,7 +776,9 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                   >
                     <option value="">请选择发言成员</option>
                     {current.members.map((member) => (
-                      <option key={member.key} value={member.key}>{member.name}</option>
+                      <option key={member.key} value={member.key}>
+                        {displayName(member.key, member.name)}
+                      </option>
                     ))}
                   </select>
                 )}
@@ -883,15 +917,21 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
             </>
           )}
         </section>
+        {decideOpen && current !== null && (
+          <QuickDecide
+            conversation={current}
+            messages={messages}
+            onClose={() => setDecideOpen(false)}
+            onPickReply={(text) => {
+              // 与点「生成候选」的行为一致：切到「我」、填入草稿，按采用推荐记录
+              setRole('me')
+              setDraft(text)
+              setPickedText(text)
+            }}
+          />
+        )}
       </div>
       {lightbox !== null && <Lightbox url={lightbox} onClose={() => setLightbox(null)} />}
-      {decideOpen && current !== null && (
-        <QuickDecide
-          conversation={current}
-          messages={messages}
-          onClose={() => setDecideOpen(false)}
-        />
-      )}
     </div>
   )
 }

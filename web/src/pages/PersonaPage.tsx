@@ -270,9 +270,17 @@ export default function PersonaPage() {
   const wizardItems = SELF_FORMS[pContext]
 
   function onProfileAvatarFile(file: File) {
+    // 现代浏览器解码 <img> 时会自动按 EXIF 方向摆正，drawImage 拿到的已是转正后的像素
+    if (!file.type.startsWith('image/')) {
+      setError('头像需要是图片文件')
+      return
+    }
+    setError(null)
     const reader = new FileReader()
+    reader.onerror = () => setError('头像读取失败，请换一张试试')
     reader.onload = () => {
       const img = new Image()
+      img.onerror = () => setError('头像读取失败，请换一张试试')
       img.onload = () => {
         const canvas = document.createElement('canvas')
         canvas.width = 96
@@ -492,6 +500,12 @@ export default function PersonaPage() {
                         </button>
                       ))}
                     </div>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[12px] text-ink-muted">题目作答（至少一题）</span>
+                    <span className={`text-[12px] ${Object.keys(pAnswers).length > 0 ? 'text-ink-muted' : 'text-ink-secondary'}`}>
+                      已答 {Object.keys(pAnswers).length}/{wizardItems.length}
+                    </span>
                   </div>
                   <ul className="space-y-2">
                     {wizardItems.map((item) => (
