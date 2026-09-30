@@ -138,6 +138,13 @@ class PersonaService:
                 )
             ).first()
             if profile_hit is not None:
+                if profile_hit.answers in ("{}", "") and profile_hit.traits in ("{}", ""):
+                    # 占位档案：删掉会触发「无档案不能聊天」，正确路径是向导补全
+                    raise DomainError(
+                        DomainErrorCode.CONFLICT,
+                        f"「{profile_hit.nickname}」已有待补全的档案：请在人设库向导里用同名昵称补全",
+                        status_code=409,
+                    )
                 raise DomainError(
                     DomainErrorCode.CONFLICT,
                     f"「{profile_hit.nickname}」已有人设库档案，判断时以档案为准；如需重建请先在档案里删除",

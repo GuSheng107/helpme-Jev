@@ -14,6 +14,7 @@ from app.core.security import hash_password
 from app.domain.enums import UserRole
 from app.repositories.auth_repo import UserRepository
 from app.repositories.models import CallLog, ProviderConfig, User
+from tests.profile_seed import seed_profile, user_id_by_name
 
 
 def _user(client: TestClient, db: Session, username: str) -> tuple[dict[str, str], str]:
@@ -108,11 +109,17 @@ class _FullRouter:
         )
 
 
-def _run_analysis(client: TestClient, headers: dict, monkeypatch: pytest.MonkeyPatch) -> str:
+def _run_analysis(
+    client: TestClient, db: Session, username: str, headers: dict, monkeypatch: pytest.MonkeyPatch
+) -> str:
+    # 人设前置：先给对象播种档案，再引用档案建单聊
     conv_id = client.post(
         "/api/conversations",
         headers=headers,
-        json={"title": "聊天", "counterpart_name": "小林"},
+        json={
+            "title": "聊天",
+            "profile_id": seed_profile(db, user_id_by_name(db, username), "小林"),
+        },
     ).json()["id"]
     client.post(
         f"/api/conversations/{conv_id}/messages",
@@ -130,7 +137,7 @@ def test_logs_list_and_trace_filter(
 ) -> None:
     headers, _ = _user(client, db, "logsone")
     _configure(client, db, headers)
-    trace_id = _run_analysis(client, headers, monkeypatch)
+    trace_id = _run_analysis(client, db, "logsone", headers, monkeypatch)
 
     listed = client.get("/api/logs", headers=headers)
     assert listed.status_code == 200, listed.text
@@ -251,7 +258,7 @@ def test_export_contains_personal_data(
 ) -> None:
     headers, _ = _user(client, db, "exportone")
     _configure(client, db, headers)
-    _run_analysis(client, headers, monkeypatch)
+    _run_analysis(client, db, "exportone", headers, monkeypatch)
     exported = client.get("/api/account/export", headers=headers)
     assert exported.status_code == 200, exported.text
     body = exported.json()
@@ -267,7 +274,7 @@ def test_account_deletion_requires_password_and_cascades(
 ) -> None:
     headers, password = _user(client, db, "deleteone")
     _configure(client, db, headers)
-    _run_analysis(client, headers, monkeypatch)
+    _run_analysis(client, db, "deleteone", headers, monkeypatch)
 
     wrong = client.request(
         "DELETE", "/api/account", headers=headers, json={"password": "wrong-password"}

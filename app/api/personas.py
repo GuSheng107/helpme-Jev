@@ -20,6 +20,7 @@ from ..repositories.models import User
 from ..services.import_service import ImportService
 from ..services.persona_profile_service import PersonaProfileService
 from ..services.persona_service import PersonaService
+from .conversations import _require_bound_profiles
 from .deps import require_active_user
 
 router = APIRouter(tags=["personas"])
@@ -179,6 +180,14 @@ def commit_chat(
 ) -> dict:
     conversation = _conversation_or_404(
         db, owner_user_id=user.id, conversation_id=payload.conversation_id
+    )
+    # 人设前置：先定人设、再导入聊天上下文
+    _require_bound_profiles(
+        db,
+        owner_user_id=user.id,
+        keys=[member.key for member in parse_members(conversation.members)]
+        if conversation.is_group
+        else [conversation.counterpart_key],
     )
     return _imports.commit_chat(
         db,

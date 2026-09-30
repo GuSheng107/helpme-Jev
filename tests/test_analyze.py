@@ -16,6 +16,7 @@ from app.repositories.models import User
 from app.scenarios.builders import BACKGROUND_NOTE
 from app.scenarios.questions_romance import PANEL_KEYS, romance_questions
 from app.services.analyze_service import present_answers
+from tests.profile_seed import seed_profile, user_id_by_name
 from tests.provider_setup import mark_provider_tested
 
 
@@ -163,10 +164,23 @@ def _configure(client: TestClient, headers: dict) -> None:
         mark_provider_tested(resp.json()["id"])
 
 
-def _conversation(client: TestClient, headers: dict) -> int:
+def _json_traits_profile() -> str:
+    """带展示 meta 的档案 traits（custom_v1），给成员摘要断言用。"""
+    import json as _json
+
+    return _json.dumps(
+        {"_schema": "custom_v1",
+         "values": {"style": "long"},
+         "meta": {"style": {"title": "风格", "labels": {"long": "详" * 30}}}},
+        ensure_ascii=False,
+    )
+
+
+def _conversation(client: TestClient, db: Session, username: str, headers: dict) -> int:
+    pid = seed_profile(db, user_id_by_name(db, username), "小美")
     created = client.post(
         "/api/conversations",
-        json={"title": "和小美", "counterpart_name": "小美", "relationship": "女朋友"},
+        json={"title": "和小美", "profile_id": pid, "relationship": "女朋友"},
         headers=headers,
     )
     assert created.status_code == 201, created.text
@@ -220,7 +234,7 @@ def test_analyze_translates_then_judges(
     token = _make_user(client, db, "judgeuser")
     headers = _auth(token)
     _configure(client, headers)
-    conv_id = _conversation(client, headers)
+    conv_id = _conversation(client, db, "judgeuser", headers)
     posted = client.post(
         f"/api/conversations/{conv_id}/messages",
         json={"role": "other", "content": "没怎么。"},
@@ -252,7 +266,7 @@ def test_analyze_skips_translation_for_english(
     token = _make_user(client, db, "enuser")
     headers = _auth(token)
     _configure(client, headers)
-    conv_id = _conversation(client, headers)
+    conv_id = _conversation(client, db, "enuser", headers)
     client.post(
         f"/api/conversations/{conv_id}/messages",
         json={"role": "other", "content": "Nothing much."},
@@ -270,7 +284,7 @@ def test_analyze_skips_translation_for_english(
 def test_analyze_requires_providers(client: TestClient, db: Session) -> None:
     token = _make_user(client, db, "noconfig")
     headers = _auth(token)
-    conv_id = _conversation(client, headers)
+    conv_id = _conversation(client, db, "noconfig", headers)
     client.post(
         f"/api/conversations/{conv_id}/messages",
         json={"role": "other", "content": "没怎么。"},
@@ -285,7 +299,7 @@ def test_analyze_empty_conversation(client: TestClient, db: Session) -> None:
     token = _make_user(client, db, "emptyconv")
     headers = _auth(token)
     _configure(client, headers)
-    conv_id = _conversation(client, headers)
+    conv_id = _conversation(client, db, "emptyconv", headers)
     resp = client.post("/api/chat/analyze", json={"conversation_id": conv_id}, headers=headers)
     assert resp.status_code == 422
 
@@ -296,7 +310,7 @@ def test_analyze_hides_other_users(
     owner = _auth(_make_user(client, db, "ownerjudge"))
     stranger = _auth(_make_user(client, db, "strangerjudge"))
     _configure(client, owner)
-    conv_id = _conversation(client, owner)
+    conv_id = _conversation(client, db, "ownerjudge", owner)
     client.post(
         f"/api/conversations/{conv_id}/messages",
         json={"role": "other", "content": "没怎么。"},
@@ -315,7 +329,7 @@ def test_analyze_upstream_failure_does_not_crash(
     token = _make_user(client, db, "failjudge")
     headers = _auth(token)
     _configure(client, headers)
-    conv_id = _conversation(client, headers)
+    conv_id = _conversation(client, db, "failjudge", headers)
     client.post(
         f"/api/conversations/{conv_id}/messages",
         json={"role": "me", "content": "在吗"},
@@ -334,7 +348,7 @@ def test_reply_returns_native_text_and_chinese_percent(
     token = _make_user(client, db, "replyuser")
     headers = _auth(token)
     _configure(client, headers)
-    conv_id = _conversation(client, headers)
+    conv_id = _conversation(client, db, "replyuser", headers)
     client.post(
         f"/api/conversations/{conv_id}/messages",
         json={"role": "other", "content": "没怎么。"},
@@ -367,7 +381,7 @@ def test_polish_replaces_and_clarify_asks(
     token = _make_user(client, db, "polishuser")
     headers = _auth(token)
     _configure(client, headers)
-    conv_id = _conversation(client, headers)
+    conv_id = _conversation(client, db, "polishuser", headers)
     client.post(
         f"/api/conversations/{conv_id}/messages",
         json={"role": "other", "content": "没怎么。"},
@@ -395,7 +409,7 @@ def test_high_danger_refuses_candidates(
     token = _make_user(client, db, "dangeruser")
     headers = _auth(token)
     _configure(client, headers)
-    conv_id = _conversation(client, headers)
+    conv_id = _conversation(client, db, "dangeruser", headers)
     client.post(
         f"/api/conversations/{conv_id}/messages",
         json={"role": "other", "content": "别烦我。"},
@@ -420,10 +434,18 @@ def test_high_danger_refuses_candidates(
     assert explained.json()["reason"] == "对方在确认你是否在意。"
 
 
-def _group(client: TestClient, headers: dict) -> int:
+def _group(client: TestClient, db: Session, username: str, headers: dict) -> int:
+    owner = user_id_by_name(db, username)
     created = client.post(
         "/api/conversations",
-        json={"title": "项目小队", "relationship": "同事", "members": ["小林", "阿花"]},
+        json={
+            "title": "项目小队",
+            "relationship": "同事",
+            "member_profile_ids": [
+                seed_profile(db, owner, "小林"),
+                seed_profile(db, owner, "阿花"),
+            ],
+        },
         headers=headers,
     )
     assert created.status_code == 201, created.text
@@ -445,38 +467,26 @@ def test_group_analyze_uses_speaker_names_and_personas(
     client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """群聊分析：JEV 收到的是成员名，不是 other；背景并入成员人设摘要。"""
-    import json as _json
+    from sqlalchemy import select
 
-    from app.repositories.models import Conversation, Persona
     from app.core.db import SessionLocal
+    from app.repositories.models import PersonaProfile
 
     token = _make_user(client, db, "groupanalyze")
     headers = _auth(token)
     _configure(client, headers)
-    conv_id = _group(client, headers)
+    conv_id = _group(client, db, "groupanalyze", headers)
 
-    # 给小林插一份人设（romance 情境：会话没挂场景）
+    # 给小林的档案填上 traits（人设前置后，成员摘要来自档案而非推断档案）
     session = SessionLocal()
-    conv = session.get(Conversation, conv_id)
-    session.add(
-        Persona(
-            owner_user_id=conv.owner_user_id,
-            counterpart_key="小林",
-            subject="other",
-            context="romance",
-            traits=_json.dumps(
-                {"_schema": "custom_v1",
-                 "values": {"style": "long"},
-                 "meta": {"style": {"title": "风格", "labels": {"long": "详" * 30}}}},
-                ensure_ascii=False,
-            ),
-            evidence="[]",
-            confidence=0.8,
-            version=1,
+    profile = session.scalars(
+        select(PersonaProfile).where(
+            PersonaProfile.owner_user_id == user_id_by_name(db, "groupanalyze"),
+            PersonaProfile.key == "小林",
         )
-    )
+    ).one()
+    profile.traits = _json_traits_profile()
     session.commit()
-    owner_id = conv.owner_user_id
     session.close()
 
     router = _Router()
@@ -512,7 +522,7 @@ def test_group_reply_uses_speaker_names(
     token = _make_user(client, db, "groupreply")
     headers = _auth(token)
     _configure(client, headers)
-    conv_id = _group(client, headers)
+    conv_id = _group(client, db, "groupreply", headers)
 
     router = _Router()
     _patch(monkeypatch, router)

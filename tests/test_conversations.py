@@ -12,6 +12,7 @@ from app.core.security import hash_password
 from app.domain.enums import UserRole
 from app.repositories.auth_repo import UserRepository
 from app.repositories.models import User
+from tests.profile_seed import seed_profile, user_id_by_name
 
 
 def _make_user(client: TestClient, db: Session, username: str) -> str:
@@ -41,10 +42,11 @@ def _auth(token: str) -> dict[str, str]:
 def test_conversation_crud(client: TestClient, db: Session) -> None:
     token = _make_user(client, db, "convuser")
     headers = _auth(token)
+    pid = seed_profile(db, user_id_by_name(db, "convuser"), "小美")
 
     created = client.post(
         "/api/conversations",
-        json={"title": "和小美的聊天", "counterpart_name": "小美", "relationship": "女朋友"},
+        json={"title": "和小美的聊天", "profile_id": pid, "relationship": "女朋友"},
         headers=headers,
     )
     assert created.status_code == 201, created.text
@@ -80,7 +82,9 @@ def test_message_append_and_list(client: TestClient, db: Session) -> None:
     headers = _auth(token)
 
     conv_id = client.post(
-        "/api/conversations", json={"title": "对话", "counterpart_name": "她"}, headers=headers
+        "/api/conversations",
+        json={"title": "对话", "profile_id": seed_profile(db, user_id_by_name(db, "msguser"), "她")},
+        headers=headers,
     ).json()["id"]
 
     first = client.post(
@@ -115,7 +119,11 @@ def test_message_append_and_list(client: TestClient, db: Session) -> None:
 def test_empty_message_rejected(client: TestClient, db: Session) -> None:
     token = _make_user(client, db, "emptyuser")
     headers = _auth(token)
-    conv_id = client.post("/api/conversations", json={"title": "空"}, headers=headers).json()["id"]
+    conv_id = client.post(
+        "/api/conversations",
+        json={"title": "空", "profile_id": seed_profile(db, user_id_by_name(db, "emptyuser"), "她")},
+        headers=headers,
+    ).json()["id"]
 
     resp = client.post(
         f"/api/conversations/{conv_id}/messages",
@@ -129,7 +137,11 @@ def test_empty_message_rejected(client: TestClient, db: Session) -> None:
 def test_delete_conversation_cascades_messages(client: TestClient, db: Session) -> None:
     token = _make_user(client, db, "cascadeuser")
     headers = _auth(token)
-    conv_id = client.post("/api/conversations", json={"title": "级联"}, headers=headers).json()["id"]
+    conv_id = client.post(
+        "/api/conversations",
+        json={"title": "级联", "profile_id": seed_profile(db, user_id_by_name(db, "cascadeuser"), "她")},
+        headers=headers,
+    ).json()["id"]
 
     client.post(
         f"/api/conversations/{conv_id}/messages",
@@ -149,7 +161,10 @@ def test_user_cannot_read_others_conversation(client: TestClient, db: Session) -
 
     conv_id = client.post(
         "/api/conversations",
-        json={"title": "A 的私密会话", "counterpart_name": "某人"},
+        json={
+            "title": "A 的私密会话",
+            "profile_id": seed_profile(db, user_id_by_name(db, "owner_a"), "某人"),
+        },
         headers=_auth(token_a),
     ).json()["id"]
 
@@ -195,10 +210,14 @@ def test_conversation_list_is_scoped_to_owner(client: TestClient, db: Session) -
     token_b = _make_user(client, db, "list_b")
 
     a_conv = client.post(
-        "/api/conversations", json={"title": "A 的"}, headers=_auth(token_a)
+        "/api/conversations",
+        json={"title": "A 的", "profile_id": seed_profile(db, user_id_by_name(db, "list_a"), "某人")},
+        headers=_auth(token_a),
     ).json()["id"]
     b_conv = client.post(
-        "/api/conversations", json={"title": "B 的"}, headers=_auth(token_b)
+        "/api/conversations",
+        json={"title": "B 的", "profile_id": seed_profile(db, user_id_by_name(db, "list_b"), "某人")},
+        headers=_auth(token_b),
     ).json()["id"]
 
     a_ids = {item["id"] for item in client.get("/api/conversations", headers=_auth(token_a)).json()}
@@ -223,7 +242,10 @@ def test_counterpart_key_frozen_after_creation(client: TestClient, db: Session) 
 
     created = client.post(
         "/api/conversations",
-        json={"title": "对话", "counterpart_name": "宝宝"},
+        json={
+            "title": "对话",
+            "profile_id": seed_profile(db, user_id_by_name(db, "keyuser"), "宝宝"),
+        },
         headers=headers,
     ).json()
     original_key = created["counterpart_key"]
@@ -289,7 +311,11 @@ def test_attachments_limits(client: TestClient, db: Session) -> None:
     """附件条数与单条体积都应被限制（审核意见第 4 条）。"""
     token = _make_user(client, db, "attachuser")
     headers = _auth(token)
-    conv_id = client.post("/api/conversations", json={"title": "附件"}, headers=headers).json()["id"]
+    conv_id = client.post(
+        "/api/conversations",
+        json={"title": "附件", "profile_id": seed_profile(db, user_id_by_name(db, "attachuser"), "她")},
+        headers=headers,
+    ).json()["id"]
 
     # 超过 8 条 → 422
     too_many = client.post(
@@ -319,23 +345,26 @@ def test_attachments_limits(client: TestClient, db: Session) -> None:
 
 # ------------------------------------------------------------------ 群聊
 def test_group_conversation_and_speaker(client: TestClient, db: Session) -> None:
-    """群聊：成员列表落库、发言人必须认、单人会话不带 speaker。"""
+    """群聊：成员来自人设库、发言人必须认、单人会话不带 speaker。"""
     token = _make_user(client, db, "groupuser")
     headers = _auth(token)
+    owner = user_id_by_name(db, "groupuser")
+    lin = seed_profile(db, owner, "小林")
+    hua = seed_profile(db, owner, "阿花")
 
     created = client.post(
         "/api/conversations",
         json={
             "title": "周五饭局",
             "relationship": "朋友",
-            "members": ["小林", "阿花", "小林", "  "],
+            "member_profile_ids": [lin, lin, hua],
         },
         headers=headers,
     )
     assert created.status_code == 201, created.text
     body = created.json()
     assert body["is_group"] is True
-    # 重复与空白成员被清洗，key 归一化稳定
+    # 重复档案按 key 去重，key 归一化稳定
     assert [(m["key"], m["name"]) for m in body["members"]] == [("小林", "小林"), ("阿花", "阿花")]
     conv_id = body["id"]
     # 群聊没有单一对象：counterpart_key 取群名，人设记忆挂这里
@@ -370,7 +399,7 @@ def test_group_conversation_and_speaker(client: TestClient, db: Session) -> None
 
     solo_conv = client.post(
         "/api/conversations",
-        json={"title": "单聊", "counterpart_name": "小美", "members": []},
+        json={"title": "单聊", "profile_id": seed_profile(db, owner, "小美")},
         headers=headers,
     ).json()
     assert solo_conv["is_group"] is False
@@ -389,27 +418,23 @@ def test_group_conversation_and_speaker(client: TestClient, db: Session) -> None
     ]
 
 
-def test_group_member_name_length_capped(client: TestClient, db: Session) -> None:
-    """成员名与单聊 counterpart_name 同为 64 上限：key 要进 String 列。"""
+def test_group_hand_typed_members_rejected(client: TestClient, db: Session) -> None:
+    """人设前置：群聊不再接受手填成员，长名（schema 拦）短名（handler 拦）一律 422。"""
     token = _make_user(client, db, "groupnameuser")
     headers = _auth(token)
-    too_long = client.post(
-        "/api/conversations",
-        json={"title": "长名群", "members": ["a" * 65]},
-        headers=headers,
-    )
-    assert too_long.status_code == 422
-    ok = client.post(
-        "/api/conversations",
-        json={"title": "正常群", "members": ["a" * 64]},
-        headers=headers,
-    )
-    assert ok.status_code == 201, ok.text
-    assert ok.json()["members"][0]["key"] == "a" * 64
+    for name, with_envelope in (("a" * 65, False), ("a" * 64, True)):
+        resp = client.post(
+            "/api/conversations",
+            json={"title": "手填群", "members": [name]},
+            headers=headers,
+        )
+        assert resp.status_code == 422
+        if with_envelope:
+            assert resp.json()["error"]["code"] == "VALIDATION_FAILED"
 
 
 def test_group_blank_members_rejected(client: TestClient, db: Session) -> None:
-    """传了成员但全是空白：要 422，不能静默降级成单聊。"""
+    """传了成员（哪怕是空白）：要 422，不能静默降级成单聊。"""
     token = _make_user(client, db, "blankmember")
     headers = _auth(token)
     resp = client.post(
@@ -422,12 +447,15 @@ def test_group_blank_members_rejected(client: TestClient, db: Session) -> None:
 
 
 def test_group_members_can_be_updated(client: TestClient, db: Session) -> None:
-    """群聊可改成员表；单聊不能加成员；全空白拒绝。"""
+    """群聊可改成员表（成员须已建档）；单聊不能加成员；全空白拒绝。"""
     token = _make_user(client, db, "editmember")
     headers = _auth(token)
+    owner = user_id_by_name(db, "editmember")
+    lin = seed_profile(db, owner, "小林")
+    hua = seed_profile(db, owner, "阿花")
     conv_id = client.post(
         "/api/conversations",
-        json={"title": "可编辑群", "members": ["小林"]},
+        json={"title": "可编辑群", "member_profile_ids": [lin]},
         headers=headers,
     ).json()["id"]
 
@@ -445,7 +473,9 @@ def test_group_members_can_be_updated(client: TestClient, db: Session) -> None:
     assert blank.status_code == 422
 
     solo_id = client.post(
-        "/api/conversations", json={"title": "单聊", "counterpart_name": "小美"}, headers=headers
+        "/api/conversations",
+        json={"title": "单聊", "profile_id": seed_profile(db, owner, "小美")},
+        headers=headers,
     ).json()["id"]
     refused = client.patch(
         f"/api/conversations/{solo_id}", json={"members": ["小林"]}, headers=headers
@@ -453,52 +483,88 @@ def test_group_members_can_be_updated(client: TestClient, db: Session) -> None:
     assert refused.status_code == 422
 
 
-def test_group_member_cap_after_merge(client: TestClient, db: Session) -> None:
-    """人设成员 + 手填成员去重后仍超 20：422，不静默砍人。"""
-    import json as _json
-
-    from sqlalchemy import select
-
-    from app.core.db import SessionLocal
-    from app.repositories.models import PersonaProfile
-
+def test_group_member_cap(client: TestClient, db: Session) -> None:
+    """档案成员 schema 上限 20：21 个直接 422；恰好 20 个可用；手填成员一律拒绝。"""
     token = _make_user(client, db, "cappedgroup")
     headers = _auth(token)
-    # schema 层先拦手填超量的情况
-    schema_reject = client.post(
+    owner = user_id_by_name(db, "cappedgroup")
+
+    # 手填成员一律 422（哪怕只有 1 个）
+    hand = client.post(
         "/api/conversations",
-        json={"title": "超大群", "members": [f"成员{i:02d}" for i in range(25)]},
+        json={"title": "手填群", "members": ["成员01"]},
         headers=headers,
     )
-    assert schema_reject.status_code == 422
+    assert hand.status_code == 422
 
-    # 各 15 个、合计 30 个（> 20）：落到 handler 的合并上限校验
-    resp = client.post("/api/auth/login", json={
-        "username": "cappedgroup", "password": "cappedgroup!Passw0rd",
-    })
-    owner = int(resp.json()["id"])
+    # 恰好 20 个档案成员：可用
+    profile_ids = [seed_profile(db, owner, f"人设{i:02d}") for i in range(21)]
+    ok = client.post(
+        "/api/conversations",
+        json={"title": "满员群", "member_profile_ids": profile_ids[:20]},
+        headers=headers,
+    )
+    assert ok.status_code == 201, ok.text
+    assert len(ok.json()["members"]) == 20
+
+    # 21 个：schema 层（max_length=20）直接 422
+    over = client.post(
+        "/api/conversations",
+        json={"title": "超大群", "member_profile_ids": profile_ids},
+        headers=headers,
+    )
+    assert over.status_code == 422
+
+
+# ------------------------------------------------------------------ 人设前置规则
+def test_solo_requires_profile(client: TestClient, db: Session) -> None:
+    """单聊不带 profile_id：422，不能再手填名字开聊。"""
+    token = _make_user(client, db, "soloreq")
+    headers = _auth(token)
+    resp = client.post(
+        "/api/conversations",
+        json={"title": "和小美的聊天", "counterpart_name": "小美"},
+        headers=headers,
+    )
+    assert resp.status_code == 422
+    assert "请先从人设库选用档案" in resp.json()["error"]["message"]
+
+
+def test_message_blocked_without_profile(client: TestClient, db: Session) -> None:
+    """会话对象没有档案（如档案被删）时，不能新增消息。"""
+    from app.core.db import SessionLocal
+    from app.repositories.models import Conversation
+
+    token = _make_user(client, db, "blockedmsg")
+    headers = _auth(token)
+    owner = user_id_by_name(db, "blockedmsg")
+
     session = SessionLocal()
-    for i in range(15):
-        session.add(
-            PersonaProfile(
-                owner_user_id=owner, key=f"人设{i:02d}", nickname=f"人设{i:02d}",
-                context="romance", traits=_json.dumps({}),
-            )
+    session.add(
+        Conversation(
+            owner_user_id=owner,
+            title="和失踪者的聊天",
+            counterpart_name="失踪者",
+            counterpart_key="失踪者",
         )
+    )
     session.commit()
-    profile_ids = list(session.scalars(
-        select(PersonaProfile.id).where(PersonaProfile.owner_user_id == owner)
-    ))
     session.close()
 
-    merged_over = client.post(
-        "/api/conversations",
-        json={
-            "title": "超大群",
-            "member_profile_ids": profile_ids,
-            "members": [f"名字{i:02d}" for i in range(15)],
-        },
+    conv_id = client.get("/api/conversations", headers=headers).json()[0]["id"]
+    resp = client.post(
+        f"/api/conversations/{conv_id}/messages",
+        json={"role": "other", "content": "还能发吗"},
         headers=headers,
     )
-    assert merged_over.status_code == 422
-    assert "最多" in merged_over.json()["error"]["message"]
+    assert resp.status_code == 422
+    assert "建档" in resp.json()["error"]["message"]
+
+    # 补上同名档案后即可继续（key 命中自动恢复）
+    seed_profile(db, owner, "失踪者")
+    ok = client.post(
+        f"/api/conversations/{conv_id}/messages",
+        json={"role": "other", "content": "恢复了"},
+        headers=headers,
+    )
+    assert ok.status_code == 201, ok.text

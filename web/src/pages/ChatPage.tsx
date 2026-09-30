@@ -65,7 +65,6 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
   const [name, setName] = useState('')
   const [relationship, setRelationship] = useState('')
   const [groupMode, setGroupMode] = useState(false)
-  const [membersInput, setMembersInput] = useState('')
   const [speakerKey, setSpeakerKey] = useState('')
   const [profiles, setProfiles] = useState<PersonaProfileView[]>([])
   const [soloProfileId, setSoloProfileId] = useState<number | null>(null)
@@ -98,6 +97,27 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
   function displayName(key: string, fallback: string): string {
     return profiles.find((item) => item.key === key)?.nickname || fallback
   }
+
+  // 档案必选：新建弹窗里默认选中第一个档案；选中项被删时回落
+  useEffect(() => {
+    if (soloProfileId !== null && !profiles.some((item) => item.id === soloProfileId)) {
+      setSoloProfileId(profiles[0]?.id ?? null)
+    } else if (soloProfileId === null && profiles.length > 0) {
+      setSoloProfileId(profiles[0].id)
+    }
+  }, [profiles, soloProfileId])
+
+  // 人设前置兜底：会话涉及的对象/成员在档案库缺席（如档案被删）时禁止新增记录
+  const missingProfileNames = current
+    ? current.is_group
+      ? current.members
+          .filter((member) => !profiles.some((p) => p.key === member.key))
+          .map((member) => member.name)
+      : profiles.some((p) => p.key === current.counterpart_key)
+        ? []
+        : [current.counterpart_name || current.title]
+    : []
+  const chatLocked = current !== null && missingProfileNames.length > 0
 
   const reloadList = useCallback(async () => {
     setConversations(await listConversations())
@@ -143,52 +163,45 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
   }, [currentId])
 
   async function create() {
-    const memberNames = membersInput
-      .split(/[,，、\s]+/)
-      .map((item) => item.trim())
-      .filter(Boolean)
-    const chosenProfile = chosenSoloProfile
+    // 人设前置：单聊必选档案；群聊成员全部来自档案（后端同规则兜底）
     if (groupMode) {
-      if (memberNames.length === 0 && memberProfileIds.length === 0) {
-        setError('群聊至少要一位成员（手填或从人设库选）')
+      if (memberProfileIds.length === 0) {
+        setError('群聊至少要一位成员（从人设库选择）')
         return
       }
-    } else if (!name.trim() && !chosenProfile) {
+      await submitCreate({
+        title:
+          name.trim() ||
+          profiles.find((item) => item.id === memberProfileIds[0])?.nickname ||
+          '群聊',
+        relationship: relationship.trim(),
+        scenario_id: scenarioId,
+        member_profile_ids: memberProfileIds,
+      })
       return
     }
+    const soloProfile = chosenSoloProfile
+    if (!soloProfile) {
+      setError('请先从人设库选用一个档案')
+      return
+    }
+    await submitCreate({
+      title: `和${soloProfile.nickname}的聊天`,
+      relationship: relationship.trim(),
+      scenario_id: scenarioId,
+      profile_id: soloProfile.id,
+    })
+  }
+
+  async function submitCreate(payload: Parameters<typeof createConversation>[0]) {
     setBusy(true)
     setError(null)
     try {
-      const created = groupMode
-        ? await createConversation({
-            title:
-              name.trim() ||
-              memberNames[0] ||
-              profiles.find((item) => item.id === memberProfileIds[0])?.nickname ||
-              '群聊',
-            relationship: relationship.trim(),
-            scenario_id: scenarioId,
-            members: memberNames,
-            member_profile_ids: memberProfileIds,
-          })
-        : chosenProfile
-          ? await createConversation({
-              title: `和${chosenProfile.nickname}的聊天`,
-              relationship: relationship.trim(),
-              scenario_id: scenarioId,
-              profile_id: chosenProfile.id,
-            })
-          : await createConversation({
-              title: `和${name.trim()}的聊天`,
-              counterpart_name: name.trim(),
-              relationship: relationship.trim(),
-              scenario_id: scenarioId,
-            })
+      const created = await createConversation(payload)
       await reloadList()
       setCurrentId(created.id)
       setCreating(false)
       setName('')
-      setMembersInput('')
       setGroupMode(false)
       setSoloProfileId(null)
       setMemberProfileIds([])
@@ -251,6 +264,10 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
 
   async function send() {
     if (currentId === null || (!draft.trim() && images.length === 0)) return
+    if (chatLocked) {
+      setError('人设档案缺失，无法新增记录；请先在人设库重建同名档案')
+      return
+    }
     const wantsSpeaker = current?.is_group && role === 'other'
     if (wantsSpeaker && !speakerKey) {
       setError('请先选择发言成员')
@@ -432,9 +449,9 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
               {groupMode ? (
                 <>
                   <Field label="群名（选填）" value={name} onChange={(event) => setName(event.target.value)} />
-                  {profiles.length > 0 && (
+                  {profiles.length > 0 ? (
                     <div>
-                      <span className="mb-1 block text-[12px] text-ink-muted">从人设库选成员（可多选）</span>
+                      <span className="mb-1 block text-[12px] text-ink-muted">从人设库选成员（可多选，至少一位）</span>
                       <div className="flex flex-wrap gap-1.5">
                         {profiles.map((profile) => {
                           const picked = memberProfileIds.includes(profile.id)
@@ -457,34 +474,30 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                         })}
                       </div>
                     </div>
+                  ) : (
+                    <p className="text-[13px] leading-5 text-ink-secondary">
+                      人设库还是空的——先到「人设」页给每位成员建好人设，再回来建群聊。
+                    </p>
                   )}
-                  <Field
-                    label="成员（逗号分隔，不含自己）"
-                    value={membersInput}
-                    onChange={(event) => setMembersInput(event.target.value)}
-                  />
                 </>
-              ) : (
+              ) : profiles.length > 0 ? (
                 <>
-                  {profiles.length > 0 && (
-                    <div>
-                      <span className="mb-1 block text-[12px] text-ink-muted">从人设库选用（选填）</span>
-                      <select
-                        className="w-full rounded-[6px] border border-border px-2 py-1.5 text-[14px] text-ink"
-                        value={soloProfileId ?? ''}
-                        onChange={(event) =>
-                          setSoloProfileId(event.target.value === '' ? null : Number(event.target.value))
-                        }
-                      >
-                        <option value="">不选，手填对方</option>
-                        {profiles.map((profile) => (
-                          <option key={profile.id} value={profile.id}>
-                            {profile.nickname}（{CONTEXT_LABELS[profile.context]}）
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
+                  <div>
+                    <span className="mb-1 block text-[12px] text-ink-muted">从人设库选用</span>
+                    <select
+                      className="w-full rounded-[6px] border border-border px-2 py-1.5 text-[14px] text-ink"
+                      value={soloProfileId ?? ''}
+                      onChange={(event) =>
+                        setSoloProfileId(event.target.value === '' ? null : Number(event.target.value))
+                      }
+                    >
+                      {profiles.map((profile) => (
+                        <option key={profile.id} value={profile.id}>
+                          {profile.nickname}（{CONTEXT_LABELS[profile.context]}）
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                   {chosenSoloProfile && (
                     <div className="flex items-center gap-2 rounded-[6px] bg-surface-muted px-2 py-1.5">
                       {chosenSoloProfile.avatar_base64 ? (
@@ -499,10 +512,11 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                       </span>
                     </div>
                   )}
-                  {!soloProfileId && (
-                    <Field label="对方" value={name} onChange={(event) => setName(event.target.value)} />
-                  )}
                 </>
+              ) : (
+                <p className="text-[13px] leading-5 text-ink-secondary">
+                  人设库还是空的——先到「人设」页建一个人设，再回来开始聊天。
+                </p>
               )}
               <div>
                 <span className="mb-1 block text-[12px] text-ink-muted">场景</span>
@@ -532,7 +546,14 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                 value={relationship}
                 onChange={(event) => setRelationship(event.target.value)}
               />
-              <Button variant="primary" size="sm" loading={busy} onClick={() => void create()}>
+              <Button
+                variant="primary"
+                size="sm"
+                loading={busy}
+                disabled={groupMode ? memberProfileIds.length === 0 : !chosenSoloProfile}
+                disabledReason={groupMode ? '请先从人设库选择成员' : '请先从人设库选用档案'}
+                onClick={() => void create()}
+              >
                 创建
               </Button>
             </div>
@@ -825,11 +846,17 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                     </span>
                   </div>
                 )}
+                {chatLocked && (
+                  <Notice tone="danger">
+                    人设档案缺失（{missingProfileNames.join('、')}）：已锁定输入，先到「人设」页重建同名档案即可继续。
+                  </Notice>
+                )}
                 <textarea
                   value={draft}
                   onChange={(event) => setDraft(event.target.value)}
                   onPaste={onPaste}
                   rows={2}
+                  disabled={chatLocked}
                   placeholder={
                     visionReady === false
                       ? role === 'other'
@@ -899,7 +926,13 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                       评估这句
                     </Button>
                   )}
-                  <Button size="sm" loading={busy} disabled={!draft.trim() && images.length === 0} disabledReason="请先输入内容或贴图" onClick={() => void send()}>
+                  <Button
+                    size="sm"
+                    loading={busy}
+                    disabled={chatLocked || (!draft.trim() && images.length === 0)}
+                    disabledReason={chatLocked ? '人设档案缺失，先重建同名档案' : '请先输入内容或贴图'}
+                    onClick={() => void send()}
+                  >
                     保存
                   </Button>
                   <Button

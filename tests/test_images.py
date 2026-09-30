@@ -13,6 +13,7 @@ from app.core.security import hash_password
 from app.domain.enums import UserRole
 from app.repositories.auth_repo import UserRepository
 from app.repositories.models import User
+from tests.profile_seed import seed_profile, user_id_by_name
 from tests.provider_setup import mark_provider_tested
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"0" * 64
@@ -59,11 +60,15 @@ def _configure(client: TestClient, headers: dict, *, vision: bool) -> None:
         mark_provider_tested(created.json()["id"])
 
 
-def _conversation(client: TestClient, headers: dict) -> int:
+def _conversation(client: TestClient, db: Session, username: str, headers: dict) -> int:
+    # 人设前置：先给对象播种档案，再引用档案建单聊
     return client.post(
         "/api/conversations",
         headers=headers,
-        json={"title": "聊天", "counterpart_name": "小林"},
+        json={
+            "title": "聊天",
+            "profile_id": seed_profile(db, user_id_by_name(db, username), "小林"),
+        },
     ).json()["id"]
 
 
@@ -138,7 +143,7 @@ def _upload(client: TestClient, headers: dict, conv_id: int, *, mime: str = "ima
 def test_image_upload_requires_vision(client: TestClient, db: Session) -> None:
     headers = _user(client, db, "imgnovision")
     _configure(client, headers, vision=False)
-    conv_id = _conversation(client, headers)
+    conv_id = _conversation(client, db, "imgnovision", headers)
     refused = _upload(client, headers, conv_id)
     assert refused.status_code == 422
     assert "看图" in refused.json()["error"]["message"]
@@ -147,7 +152,7 @@ def test_image_upload_requires_vision(client: TestClient, db: Session) -> None:
 def test_image_upload_validates_mime_and_size(client: TestClient, db: Session) -> None:
     headers = _user(client, db, "imgbad")
     _configure(client, headers, vision=True)
-    conv_id = _conversation(client, headers)
+    conv_id = _conversation(client, db, "imgbad", headers)
     bad_mime = client.post(
         f"/api/conversations/{conv_id}/images",
         headers=headers,
@@ -167,7 +172,7 @@ def test_message_with_images_and_multimodal_analysis(
 ) -> None:
     headers = _user(client, db, "imgflow")
     _configure(client, headers, vision=True)
-    conv_id = _conversation(client, headers)
+    conv_id = _conversation(client, db, "imgflow", headers)
 
     uploaded = _upload(client, headers, conv_id)
     assert uploaded.status_code == 201, uploaded.text
@@ -206,11 +211,14 @@ def test_message_with_images_and_multimodal_analysis(
 def test_attachment_must_belong_to_conversation(client: TestClient, db: Session) -> None:
     headers = _user(client, db, "imgcross")
     _configure(client, headers, vision=True)
-    conv_a = _conversation(client, headers)
+    conv_a = _conversation(client, db, "imgcross", headers)
     conv_b = client.post(
         "/api/conversations",
         headers=headers,
-        json={"title": "另一个", "counterpart_name": "阿明"},
+        json={
+            "title": "另一个",
+            "profile_id": seed_profile(db, user_id_by_name(db, "imgcross"), "阿明"),
+        },
     ).json()["id"]
     uploaded = _upload(client, headers, conv_a)
     material_id = uploaded.json()["id"]

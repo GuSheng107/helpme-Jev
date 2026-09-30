@@ -14,6 +14,7 @@ from app.core.security import hash_password
 from app.domain.enums import UserRole
 from app.repositories.auth_repo import UserRepository
 from app.repositories.models import User
+from tests.profile_seed import seed_profile, user_id_by_name
 from tests.provider_setup import mark_provider_tested
 from app.scenarios.persona_questions import romance_persona_questions
 
@@ -36,7 +37,7 @@ def _user(client: TestClient, db: Session, username: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
 
-def _ready(client: TestClient, headers: dict, *, vision: bool = False) -> int:
+def _ready(client: TestClient, db: Session, username: str, headers: dict, *, vision: bool = False) -> int:
     for kind, url in (("llm", "https://llm.example/v1"), ("jev", "https://jev.example/v1/systemone")):
         created = client.post(
             "/api/providers",
@@ -56,7 +57,11 @@ def _ready(client: TestClient, headers: dict, *, vision: bool = False) -> int:
     conv = client.post(
         "/api/conversations",
         headers=headers,
-        json={"title": "她", "counterpart_name": "她", "relationship": "恋人"},
+        json={
+            "title": "她",
+            "profile_id": seed_profile(db, user_id_by_name(db, username), "她"),
+            "relationship": "恋人",
+        },
     )
     return conv.json()["id"]
 
@@ -112,47 +117,11 @@ def test_romance_persona_questions_cover_the_frameworks() -> None:
     assert "mbti" not in questions
 
 
-def test_low_confidence_does_not_overwrite(
-    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    headers = _user(client, db, "personaone")
-    conv_id = _ready(client, headers)
-    client.post(
-        f"/api/conversations/{conv_id}/messages",
-        headers=headers,
-        json={"role": "other", "content": "你是不是又忘了。"},
-    )
-    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: _Router())
-    first = client.post(
-        "/api/personas/build",
-        headers=headers,
-        json={"conversation_id": conv_id, "subject": "other"},
-    )
-    assert first.status_code == 200, first.text
-    assert first.json()["kept"] is False
-    assert first.json()["traits"][0]["title"]
-    first_logs = client.get(
-        "/api/logs", headers=headers,
-        params={"trace_id": first.headers["x-trace-id"]},
-    ).json()["items"]
-    assert {item["source"] for item in first_logs} >= {"用户", "JEV"}
-    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: _Router(sufficient=0.1, confidence=0.2))
-    # 共享客户端是进程级单例，换假上游前要先丢弃，否则第二次仍走上一个替身
-    reset_client()
-    second = client.post(
-        "/api/personas/build",
-        headers=headers,
-        json={"conversation_id": conv_id, "subject": "other"},
-    )
-    assert second.json()["kept"] is True
-    assert second.json()["version"] == 1
-
-
 def test_chat_import_previews_before_saving(
     client: TestClient, db: Session
 ) -> None:
     headers = _user(client, db, "importone")
-    conv_id = _ready(client, headers)
+    conv_id = _ready(client, db, "importone", headers)
     text = "我: 在吗\n她: 没怎么\n路人: 不算\n坏行"
     preview = client.post(
         "/api/import/chat/preview",
@@ -179,7 +148,7 @@ def test_solo_import_labels_append_to_defaults(
 ) -> None:
     """自定义对方标签是补充：默认的 她 / 他 / TA 始终认，不能被替换掉。"""
     headers = _user(client, db, "labelappend")
-    conv_id = _ready(client, headers)
+    conv_id = _ready(client, db, "labelappend", headers)
     preview = client.post(
         "/api/import/chat/preview",
         headers=headers,
@@ -204,7 +173,7 @@ def test_solo_import_labels_append_to_defaults(
 
 def test_qa_rejects_invalid_json(client: TestClient, db: Session) -> None:
     headers = _user(client, db, "qaone")
-    _ready(client, headers)
+    _ready(client, db, "qaone", headers)
     bad = client.post("/api/import/qa", headers=headers, json={"raw": "{不是数组"})
     assert bad.status_code == 422
     missing = client.post(
@@ -222,7 +191,7 @@ def test_qa_rejects_invalid_json(client: TestClient, db: Session) -> None:
 
 def test_screenshot_requires_vision(client: TestClient, db: Session) -> None:
     headers = _user(client, db, "shotone")
-    conv_id = _ready(client, headers, vision=False)
+    conv_id = _ready(client, db, "shotone", headers, vision=False)
     refused = client.post(
         "/api/materials/screenshot",
         headers=headers,
@@ -248,11 +217,18 @@ class _EchoRouter(_Router):
         return super().post(url, json=json, headers=headers, timeout=timeout)
 
 
-def _group(client: TestClient, headers: dict, *, with_messages: bool = True) -> int:
+def _group(client: TestClient, db: Session, username: str, headers: dict, *, with_messages: bool = True) -> int:
     created = client.post(
         "/api/conversations",
         headers=headers,
-        json={"title": "项目小队", "relationship": "同事", "members": ["小林", "阿花"]},
+        json={
+            "title": "项目小队",
+            "relationship": "同事",
+            "member_profile_ids": [
+                seed_profile(db, user_id_by_name(db, username), "小林"),
+                seed_profile(db, user_id_by_name(db, username), "阿花"),
+            ],
+        },
     )
     assert created.status_code == 201, created.text
     conv_id = created.json()["id"]
@@ -274,19 +250,20 @@ def _group(client: TestClient, headers: dict, *, with_messages: bool = True) -> 
 def test_group_persona_batch_and_member_build(
     client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """群聊：批量取全员人设与上下文；按成员建档；成员校验。"""
+    """群聊：批量取全员人设与上下文；成员校验；已建档成员的推断被挡（409）。"""
     headers = _user(client, db, "grouppersona")
-    _ready(client, headers)
-    conv_id = _group(client, headers)
+    _ready(client, db, "grouppersona", headers)
+    conv_id = _group(client, db, "grouppersona", headers)
 
     monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: _EchoRouter())
+    # 小林已是档案成员（占位档案）：推断被挡，指引走向导补全
     built = client.post(
         "/api/personas/build",
         headers=headers,
         json={"conversation_id": conv_id, "subject": "other", "member_key": "小林"},
     )
-    assert built.status_code == 200, built.text
-    assert built.json()["counterpart_key"] == "小林"
+    assert built.status_code == 409, built.text
+    assert built.json()["error"]["code"] == "CONFLICT"
 
     # 成员不存在 → 422
     missing = client.post(
@@ -306,17 +283,17 @@ def test_group_persona_batch_and_member_build(
     assert body["context"] == "romance"
     keys = {item["key"]: item for item in body["participants"]}
     assert set(keys) == {"小林", "阿花", "me"}
-    # 建过档的小林有特质，其他参与者是空档案占位
+    # 两位成员都是占位档案：version 1 但 traits 为空
     assert keys["小林"]["persona"]["version"] == 1
-    assert keys["小林"]["persona"]["traits"]
-    assert keys["阿花"]["persona"]["version"] == 0
+    assert keys["小林"]["persona"]["traits"] == []
+    assert keys["阿花"]["persona"]["version"] == 1
     assert keys["me"]["subject"] == "me"
 
 
 def test_group_import_maps_member_labels(client: TestClient, db: Session) -> None:
     """群聊导入：成员名当标签，行归属到对应发言人。"""
     headers = _user(client, db, "groupimport")
-    conv_id = _group(client, headers, with_messages=False)
+    conv_id = _group(client, db, "groupimport", headers, with_messages=False)
 
     preview = client.post(
         "/api/import/chat/preview",
@@ -546,7 +523,7 @@ def test_group_summary_keeps_speaker_names(
 def test_batch_hidden_from_other_users(client: TestClient, db: Session) -> None:
     """批量接口的越权隔离：别人的会话一律 404。"""
     headers = _user(client, db, "batchowner")
-    conv_id = _group(client, headers, with_messages=False)
+    conv_id = _group(client, db, "batchowner", headers, with_messages=False)
 
     stranger = _user(client, db, "batchstranger")
     peeked = client.get(
@@ -593,7 +570,7 @@ def test_profile_create_maps_answers_and_summarizes(
 ) -> None:
     """答题 → traits 落库 + LLM 生成速写；同名人设 409；非法作答 422。"""
     headers = _user(client, db, "profilelib")
-    _ready(client, headers)
+    _ready(client, db, "profilelib", headers)
     router = _SummaryRouter()
     monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: router)
 
@@ -621,7 +598,10 @@ def test_profile_create_maps_answers_and_summarizes(
 
     session = SessionLocal()
     stored = session.scalars(
-        select(PersonaProfile).where(PersonaProfile.key == "小美")
+        select(PersonaProfile).where(
+            PersonaProfile.owner_user_id == user_id_by_name(db, "profilelib"),
+            PersonaProfile.key == "小美",
+        )
     ).first()
     stored_answers = _json.loads(stored.answers)
     session.close()
@@ -688,11 +668,12 @@ def test_profile_create_maps_answers_and_summarizes(
     )
     assert failed.status_code == 502
     listed = client.get("/api/personas/profiles", headers=headers).json()
-    assert [item["nickname"] for item in listed] == ["小美"]
+    nicknames = [item["nickname"] for item in listed]
+    assert "小美" in nicknames and "小华" not in nicknames  # 502 的不落库；_ready 播种的「她」不在断言内
 
 
 def test_conversation_selects_profiles(client: TestClient, db: Session) -> None:
-    """聊天创建选人设：单聊整档带入，群聊成员与人设合并去重，跨用户 404。"""
+    """聊天创建选人设：单聊整档带入，群聊成员全部来自档案（重复 key 去重），跨用户 404。"""
     import json as _json
 
     from sqlalchemy import select
@@ -747,25 +728,147 @@ def test_conversation_selects_profiles(client: TestClient, db: Session) -> None:
     assert solo.json()["counterpart_name"] == "小美"
     assert solo.json()["is_group"] is False
 
+    # 群聊成员全部来自档案：重复选同一档案按 key 去重
     group = client.post(
         "/api/conversations",
         headers=headers,
         json={
             "title": "项目组",
-            "member_profile_ids": [profiles["小美"], profiles["阿花"]],
-            "members": ["小美", "小林"],  # 小美与档案重复，按 key 去重
+            "member_profile_ids": [profiles["小美"], profiles["阿花"], profiles["小美"]],
         },
     )
     assert group.status_code == 201, group.text
     keys = [m["key"] for m in group.json()["members"]]
-    assert keys == ["小美", "阿花", "小林"]
+    assert keys == ["小美", "阿花"]
     assert group.json()["is_group"] is True
     assert group.json()["counterpart_key"] == "项目组"
+
+    # 手填成员一律拒绝，即使和档案同名也不行
+    hand = client.post(
+        "/api/conversations",
+        headers=headers,
+        json={
+            "title": "手填群",
+            "member_profile_ids": [profiles["小美"]],
+            "members": ["小美", "小林"],
+        },
+    )
+    assert hand.status_code == 422
+    assert "全部从人设库选择" in hand.json()["error"]["message"]
 
     missing = client.post(
         "/api/conversations", headers=headers, json={"title": "x", "profile_id": 99999}
     )
     assert missing.status_code == 404
+
+
+def test_placeholder_profile_upgraded_by_wizard(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """迁移占位档案：向导用同名昵称提交时原地补全（保留 id/key）；完整档案仍 409。"""
+    headers = _user(client, db, "upgradeuser")
+    owner = user_id_by_name(db, "upgradeuser")
+    placeholder_id = seed_profile(db, owner, "小马")
+    _ready(client, db, "upgradeuser", headers)  # 配好语言模型，向导才能生成速写
+
+    router = _SummaryRouter()
+    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: router)
+    upgraded = client.post(
+        "/api/personas/profiles",
+        headers=headers,
+        json={"nickname": "小马", "context": "workplace", "answers": {"disc": "dominance"}},
+    )
+    assert upgraded.status_code == 201, upgraded.text
+    body = upgraded.json()
+    assert body["id"] == placeholder_id  # id 与 key 冻结
+    assert body["summary"]
+    assert body["traits"]
+
+    again = client.post(
+        "/api/personas/profiles",
+        headers=headers,
+        json={"nickname": "小马", "context": "workplace", "answers": {"disc": "steadiness"}},
+    )
+    assert again.status_code == 409
+    assert again.json()["error"]["code"] == "CONFLICT"
+
+
+def test_bootstrap_migration_seeds_legacy_profiles(client: TestClient, db: Session) -> None:
+    """启动迁移给历史会话补占位档案：solo 与群成员都补，且幂等。"""
+    import json as _json
+
+    from sqlalchemy import select
+
+    from app.core.db import SessionLocal
+    from app.repositories.models import Conversation, PersonaProfile
+    from app.services.bootstrap import ensure_profiles_for_legacy_conversations
+
+    headers = _user(client, db, "legacyowner")
+    owner = user_id_by_name(db, "legacyowner")
+
+    session = SessionLocal()
+    session.add(
+        Conversation(
+            owner_user_id=owner,
+            title="和旧人的聊天",
+            counterpart_name="旧人",
+            counterpart_key="旧人",
+        )
+    )
+    session.add(
+        Conversation(
+            owner_user_id=owner,
+            title="旧群",
+            counterpart_key="旧群",
+            is_group=True,
+            members=_json.dumps([{"key": "旧成员", "name": "旧成员"}], ensure_ascii=False),
+        )
+    )
+    session.commit()
+    session.close()
+
+    ensure_profiles_for_legacy_conversations(db)
+    keys = {
+        row.key
+        for row in db.scalars(
+            select(PersonaProfile).where(PersonaProfile.owner_user_id == owner)
+        )
+    }
+    assert {"旧人", "旧成员"} <= keys
+
+    before = len(list(db.scalars(select(PersonaProfile))))
+    ensure_profiles_for_legacy_conversations(db)
+    after = len(list(db.scalars(select(PersonaProfile))))
+    assert before == after
+
+
+def test_import_blocked_without_profile(client: TestClient, db: Session) -> None:
+    """无档案会话不能导入聊天记录——先定人设，再导上下文。"""
+    from app.core.db import SessionLocal
+    from app.repositories.models import Conversation
+
+    headers = _user(client, db, "noimport")
+    owner = user_id_by_name(db, "noimport")
+    session = SessionLocal()
+    session.add(
+        Conversation(
+            owner_user_id=owner,
+            title="和黑户的聊天",
+            counterpart_name="黑户",
+            counterpart_key="黑户",
+        )
+    )
+    session.commit()
+    session.close()
+
+    conv_id = client.get("/api/conversations", headers=headers).json()[0]["id"]
+    resp = client.post(
+        "/api/import/chat",
+        headers=headers,
+        json={"conversation_id": conv_id, "text": "我: 在吗\n她: 嗯"},
+    )
+    assert resp.status_code == 422
+    assert "建档" in resp.json()["error"]["message"]
 
 
 def test_member_persona_lines_prefers_profiles(client: TestClient, db: Session) -> None:
@@ -976,30 +1079,9 @@ def test_profile_patch_and_delete(client: TestClient, db: Session) -> None:
 
 
 def test_profile_blocks_inference(client: TestClient, db: Session) -> None:
-    """已有人设库档案的成员：从对话推断 409，避免推断档案被判断链路无视。"""
-    import json as _json
-
-    from sqlalchemy import select
-
-    from app.core.db import SessionLocal
-    from app.repositories.models import PersonaProfile
-
+    """已有人设库档案（含迁移占位档案）的成员：从对话推断 409，避免推断档案被判断链路无视。"""
     headers = _user(client, db, "blockinfer")
-    conv_id = _group(client, headers, with_messages=False)
-
-    resp = client.post("/api/auth/login", json={
-        "username": "blockinfer", "password": "blockinfer!Passw0rd",
-    })
-    owner = int(resp.json()["id"])
-    session = SessionLocal()
-    session.add(
-        PersonaProfile(
-            owner_user_id=owner, key="小林", nickname="小林", context="workplace",
-            traits=_json.dumps({"disc": "steadiness"}, ensure_ascii=False),
-        )
-    )
-    session.commit()
-    session.close()
+    conv_id = _group(client, db, "blockinfer", headers, with_messages=False)
 
     blocked = client.post(
         "/api/personas/build",
@@ -1008,6 +1090,8 @@ def test_profile_blocks_inference(client: TestClient, db: Session) -> None:
     )
     assert blocked.status_code == 409
     assert blocked.json()["error"]["code"] == "CONFLICT"
+    # 占位档案挡推断时给出的是「向导补全」指引，而不是「先删除」
+    assert "补全" in blocked.json()["error"]["message"]
 
 
 def test_batch_prefers_profiles(client: TestClient, db: Session) -> None:
@@ -1020,23 +1104,23 @@ def test_batch_prefers_profiles(client: TestClient, db: Session) -> None:
     from app.repositories.models import PersonaProfile
 
     headers = _user(client, db, "batchprofile")
-    conv_id = _group(client, headers, with_messages=False)
+    conv_id = _group(client, db, "batchprofile", headers, with_messages=False)
 
     resp = client.post("/api/auth/login", json={
         "username": "batchprofile", "password": "batchprofile!Passw0rd",
     })
     owner = int(resp.json()["id"])
     session = SessionLocal()
-    session.add(
-        PersonaProfile(
-            owner_user_id=owner, key="小林", nickname="小林", context="workplace",
-            traits=_json.dumps(
-                {"_schema": "custom_v1",
-                 "values": {"disc": "steadiness"},
-                 "meta": {"disc": {"title": "DISC 倾向", "labels": {"steadiness": "稳健型（S）"}}}},
-                ensure_ascii=False,
-            ),
+    profile = session.scalars(
+        select(PersonaProfile).where(
+            PersonaProfile.owner_user_id == owner, PersonaProfile.key == "小林"
         )
+    ).one()
+    profile.traits = _json.dumps(
+        {"_schema": "custom_v1",
+         "values": {"disc": "steadiness"},
+         "meta": {"disc": {"title": "DISC 倾向", "labels": {"steadiness": "稳健型（S）"}}}},
+        ensure_ascii=False,
     )
     session.commit()
     session.close()
