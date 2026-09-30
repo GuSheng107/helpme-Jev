@@ -14,7 +14,7 @@ from app.core.security import hash_password
 from app.domain.enums import UserRole
 from app.repositories.auth_repo import UserRepository
 from app.repositories.models import User
-from app.scenarios.persona_questions import workplace_persona_questions
+from app.scenarios.persona_questions import mbti_persona_questions
 from app.scenarios.questions_workplace import workplace_questions
 from tests.profile_seed import seed_profile, user_id_by_name
 from tests.provider_setup import mark_provider_tested
@@ -155,22 +155,13 @@ class _PersonaRouter:
         if "systemone" not in url:
             body = {"lines": [{"id": "1", "text": "Nothing much."}]}
             return _Response({"choices": [{"message": {"content": json_dumps(body)}}]})
-        questions = (json or {}).get("questions") or {}
-        if "disc" in questions:
-            answers = {
-                "disc": {"choice": "conscientiousness", "confidence": 0.7},
-                "conflict_style": {"choice": "collaborating", "confidence": 0.7},
-                "conscientiousness": {"score": 7},
-                "evidence_sufficient": {"noul": 0.8},
-            }
-        else:
-            answers = {
-                "attachment": {"choice": "anxious", "confidence": 0.7},
-                "love_language": {"choice": "time", "confidence": 0.7},
-                "conflict_style": {"choice": "avoiding", "confidence": 0.7},
-                "openness": {"score": 5},
-                "evidence_sufficient": {"noul": 0.8},
-            }
+        answers = {
+            "mbti_ei": {"choice": "E", "confidence": 0.7},
+            "mbti_sn": {"choice": "S", "confidence": 0.7},
+            "mbti_tf": {"choice": "F", "confidence": 0.7},
+            "mbti_jp": {"choice": "P", "confidence": 0.7},
+            "evidence_sufficient": {"noul": 0.8},
+        }
         return _Response({"model": "jev", "answers": answers})
 
 
@@ -190,18 +181,15 @@ def test_workplace_questions_shape() -> None:
     assert "danger_level" not in questions
 
 
-def test_workplace_persona_questions_frameworks() -> None:
-    questions = workplace_persona_questions("other")
-    assert set(questions["disc"]["criteria"]) == {
-        "dominance",
-        "influence",
-        "steadiness",
-        "conscientiousness",
-    }
-    # 依恋与爱的语言是亲密关系维度，不进职场档案；MBTI 不进任何档案
+def test_mbti_persona_questions_shared_across_contexts() -> None:
+    """人设问卷已换成 MBTI 四题：恋爱与职场共用，旧的大五/依恋/DISC 问卷退场。"""
+    questions = mbti_persona_questions("other")
+    assert set(questions) == {"mbti_ei", "mbti_sn", "mbti_tf", "mbti_jp", "evidence_sufficient"}
+    # 旧的按情境分档问卷全部退场（MBTI 不分情境）
     assert "attachment" not in questions
     assert "love_language" not in questions
-    assert "mbti" not in questions
+    assert "disc" not in questions
+    assert "openness" not in questions
 
 
 def test_builtin_scenarios_seeded(client: TestClient, db: Session) -> None:
@@ -403,7 +391,7 @@ def test_same_counterpart_profile_covers_both_contexts(
     )
     assert built_love.status_code == 200, built_love.text
     love_keys = {item["key"] for item in built_love.json()["traits"]}
-    assert "attachment" in love_keys
+    assert "mbti_ei" in love_keys
 
     # 完整档案挡纯推断：职场会话不带自评的建模被拒
     blocked = client.post(
@@ -420,12 +408,12 @@ def test_same_counterpart_profile_covers_both_contexts(
         json={
             "conversation_id": work_id,
             "subject": "other",
-            "self_report": {"disc": "conscientiousness", "conflict_style": "collaborating"},
+            "self_report": {"mbti_ei": "I", "mbti_jp": "P"},
         },
     )
     assert built_work.status_code == 200, built_work.text
     work_keys = {item["key"] for item in built_work.json()["traits"]}
-    assert "disc" in work_keys
+    assert "mbti_ei" in work_keys
 
     # 仍然只有一份档案：两次建模吸收进同一行，版本从占位的 1 递增到 3
     from sqlalchemy import select

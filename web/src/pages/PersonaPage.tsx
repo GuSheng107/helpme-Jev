@@ -23,66 +23,39 @@ import Button from '../components/Button'
 import { confirmAction } from '../components/confirm'
 import { DataCard, EmptyState, Notice, PageBody, PageHeader, PageShell } from '../components/layout'
 
-type SelfItem =
-  | { key: string; kind: 'score'; statement: string }
-  | { key: string; kind: 'choice'; statement: string; options: [string, string][] }
+type SelfItem = { key: string; kind: 'choice'; statement: string; options: [string, string][] }
 
-const SCORE_OPTIONS: [string, number][] = [
-  ['符合', 7],
-  ['一般', 4],
-  ['不太符合', 1],
-]
-
-const ATTACHMENT_OPTIONS: [string, string][] = [
-  ['既能亲近也能独立', 'secure'],
-  ['常要确认对方还在意', 'anxious'],
-  ['太近了会想退开', 'avoidant'],
-  ['时近时远，说不清', 'disorganized'],
-]
-
-const LOVE_LANGUAGE_OPTIONS: [string, string][] = [
-  ['听到肯定的话', 'words'],
-  ['专属的陪伴时间', 'time'],
-  ['收到用心的礼物', 'gifts'],
-  ['对方为我做事', 'service'],
-  ['肢体上的亲近', 'touch'],
-]
-
-const CONFLICT_OPTIONS: [string, string][] = [
-  ['坚持我的立场', 'competing'],
-  ['一起找两边都接受的办法', 'collaborating'],
-  ['各退一步', 'compromising'],
-  ['先放着，缓一缓', 'avoiding'],
-  ['我让步，息事宁人', 'accommodating'],
-]
-
-const DISC_OPTIONS: [string, string][] = [
-  ['直接，先冲结果', 'dominance'],
-  ['热情，靠说服和关系', 'influence'],
-  ['耐心，求稳求节奏', 'steadiness'],
-  ['严谨，细节要核对', 'conscientiousness'],
+// MBTI 四题（每维度一道二选一）：把建档门槛降到最低；恋爱与职场共用一套
+const MBTI_FORM: SelfItem[] = [
+  {
+    key: 'mbti_ei',
+    kind: 'choice',
+    statement: '聚会散场后，你更想约人继续热闹，还是回家独处充电？',
+    options: [['外向（E）', 'E'], ['内向（I）', 'I']],
+  },
+  {
+    key: 'mbti_sn',
+    kind: 'choice',
+    statement: '聊天时你更爱聊具体的人和事，还是想法和可能性？',
+    options: [['实感（S）', 'S'], ['直觉（N）', 'N']],
+  },
+  {
+    key: 'mbti_tf',
+    kind: 'choice',
+    statement: '拿主意时，你更看重事情本身的利弊，还是大家的感受？',
+    options: [['思考（T）', 'T'], ['情感（F）', 'F']],
+  },
+  {
+    key: 'mbti_jp',
+    kind: 'choice',
+    statement: '出门旅行，你更爱提前把行程排好，还是走到哪算哪？',
+    options: [['判断（J）', 'J'], ['知觉（P）', 'P']],
+  },
 ]
 
 const SELF_FORMS: Record<PersonaContext, SelfItem[]> = {
-  romance: [
-    { key: 'openness', kind: 'score', statement: '我喜欢尝试新的想法和做法' },
-    { key: 'conscientiousness', kind: 'score', statement: '我做事有计划，答应的事会做完' },
-    { key: 'extraversion', kind: 'score', statement: '和人相处让我更有精神' },
-    { key: 'agreeableness', kind: 'score', statement: '我通常先考虑对方的感受' },
-    { key: 'emotional_stability', kind: 'score', statement: '有压力时我大体稳得住' },
-    { key: 'attachment', kind: 'choice', statement: '和亲近的人相处时，我最像哪种？', options: ATTACHMENT_OPTIONS },
-    { key: 'love_language', kind: 'choice', statement: '被在乎的时候，我最在意哪种？', options: LOVE_LANGUAGE_OPTIONS },
-    { key: 'conflict_style', kind: 'choice', statement: '有分歧时我通常怎么做？', options: CONFLICT_OPTIONS },
-  ],
-  workplace: [
-    { key: 'openness', kind: 'score', statement: '我乐于接受新工具和新流程' },
-    { key: 'conscientiousness', kind: 'score', statement: '我按计划交付，截止时间记得牢' },
-    { key: 'extraversion', kind: 'score', statement: '群体场合让我更来劲' },
-    { key: 'agreeableness', kind: 'score', statement: '我会先照顾协作方的感受' },
-    { key: 'emotional_stability', kind: 'score', statement: '工作有压力时我大体稳得住' },
-    { key: 'disc', kind: 'choice', statement: '我的工作风格最像哪种？', options: DISC_OPTIONS },
-    { key: 'conflict_style', kind: 'choice', statement: '工作有分歧时我通常怎么做？', options: CONFLICT_OPTIONS },
-  ],
+  romance: MBTI_FORM,
+  workplace: MBTI_FORM,
 }
 
 const CONTEXT_LABELS: Record<PersonaContext, string> = { romance: '恋爱', workplace: '职场' }
@@ -429,6 +402,7 @@ export default function PersonaPage() {
                         {profile.traits.length > 0 && (
                           <p className="mt-0.5 truncate text-[12px] text-ink-muted">
                             {profile.traits.map((trait) => `${trait.title} ${trait.text}`).join('　')}
+                            {profile.traits.every((trait) => trait.weak_science) && '（弱科学框架，仅供参考）'}
                           </p>
                         )}
                       </div>
@@ -530,18 +504,14 @@ export default function PersonaPage() {
                             }
                             setPAnswers((prev) => ({
                               ...prev,
-                              [item.key]: item.kind === 'score' ? Number(raw) : raw,
+                              [item.key]: raw,
                             }))
                           }}
                         >
                           <option value="">未作答</option>
-                          {item.kind === 'score'
-                            ? SCORE_OPTIONS.map(([label, value]) => (
-                                <option key={value} value={value}>{label}</option>
-                              ))
-                            : item.options.map(([label, value]) => (
-                                <option key={value} value={value}>{label}</option>
-                              ))}
+                          {item.options.map(([label, value]) => (
+                            <option key={value} value={value}>{label}</option>
+                          ))}
                         </select>
                       </li>
                     ))}
@@ -637,18 +607,14 @@ export default function PersonaPage() {
                           const raw = event.target.value
                           setSelfAnswers((prev) => ({
                             ...prev,
-                            [item.key]: item.kind === 'score' ? Number(raw) : raw,
+                            [item.key]: raw,
                           }))
                         }}
                       >
                         <option value="">未作答</option>
-                        {item.kind === 'score'
-                          ? SCORE_OPTIONS.map(([label, value]) => (
-                              <option key={value} value={value}>{label}</option>
-                            ))
-                          : item.options.map(([label, value]) => (
-                              <option key={value} value={value}>{label}</option>
-                            ))}
+                        {item.options.map(([label, value]) => (
+                          <option key={value} value={value}>{label}</option>
+                        ))}
                       </select>
                     </li>
                   ))}

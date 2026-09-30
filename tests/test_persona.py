@@ -16,7 +16,7 @@ from app.repositories.auth_repo import UserRepository
 from app.repositories.models import User
 from tests.profile_seed import seed_profile, user_id_by_name
 from tests.provider_setup import mark_provider_tested
-from app.scenarios.persona_questions import romance_persona_questions
+from app.scenarios.persona_questions import mbti_persona_questions
 
 
 def _user(client: TestClient, db: Session, username: str) -> dict[str, str]:
@@ -82,10 +82,10 @@ class _Router:
             body = {"lines": [{"id": "1", "text": "Nothing much."}]}
             return _Response({"choices": [{"message": {"content": json_dumps(body)}}]})
         answers = {
-            "attachment": {"choice": "anxious", "confidence": self.confidence},
-            "love_language": {"choice": "time", "confidence": self.confidence},
-            "conflict_style": {"choice": "avoiding", "confidence": self.confidence},
-            "openness": {"score": 5},
+            "mbti_ei": {"choice": "E", "confidence": self.confidence},
+            "mbti_sn": {"choice": "N", "confidence": self.confidence},
+            "mbti_tf": {"choice": "F", "confidence": self.confidence},
+            "mbti_jp": {"choice": "P", "confidence": self.confidence},
             "evidence_sufficient": {"noul": self.sufficient},
         }
         return _Response({"model": "jev", "answers": answers})
@@ -105,16 +105,21 @@ def json_dumps(value) -> str:
     return _json.dumps(value, ensure_ascii=False)
 
 
-def test_romance_persona_questions_cover_the_frameworks() -> None:
-    questions = romance_persona_questions("other")
-    assert questions["openness"]["type"] == "score"
-    assert set(questions["attachment"]["criteria"]) == {
-        "secure",
-        "anxious",
-        "avoidant",
-        "disorganized",
+def test_mbti_persona_questions_shape() -> None:
+    """人设问卷已换成 MBTI 四维度：每维度一道二选一 + 证据充分性。"""
+    questions = mbti_persona_questions("other")
+    assert set(questions) == {
+        "mbti_ei",
+        "mbti_sn",
+        "mbti_tf",
+        "mbti_jp",
+        "evidence_sufficient",
     }
-    assert "mbti" not in questions
+    for key in ("mbti_ei", "mbti_sn", "mbti_tf", "mbti_jp"):
+        assert questions[key]["type"] == "choice"
+        assert set(questions[key]["criteria"]) <= {"E", "I", "S", "N", "T", "F", "J", "P"}
+    # 恋爱与职场共用同一套题（key 相同，措辞按主语微调）
+    assert set(mbti_persona_questions("me")) == set(questions)
 
 
 def test_chat_import_previews_before_saving(
@@ -556,14 +561,10 @@ class _SummaryRouter:
 
 
 _PROFILE_ANSWERS = {
-    "openness": 7,
-    "conscientiousness": 7,
-    "extraversion": 4,
-    "agreeableness": 7,
-    "emotional_stability": 1,
-    "attachment": "anxious",
-    "love_language": "words",
-    "conflict_style": "avoiding",
+    "mbti_ei": "E",
+    "mbti_sn": "N",
+    "mbti_tf": "F",
+    "mbti_jp": "P",
 }
 
 
@@ -586,9 +587,9 @@ def test_profile_create_maps_answers_and_summarizes(
     assert body["key"] == "小美"
     assert body["summary"] == "做事有计划，容易焦虑，需要被肯定。"
     traits = {item["key"]: item for item in body["traits"]}
-    assert traits["openness"]["value"] == 7
-    assert traits["attachment"]["text"] == "焦虑型"
-    assert traits["love_language"]["weak_science"] is True
+    assert traits["mbti_ei"]["value"] == "E"
+    assert traits["mbti_ei"]["text"] == "外向（E）"
+    assert traits["mbti_tf"]["weak_science"] is True  # MBTI 属弱科学框架，必须明示
 
     # answers 列存的是清洗后的作答（档位整数 / 枚举值），不是原始 payload
     import json as _json
@@ -608,19 +609,19 @@ def test_profile_create_maps_answers_and_summarizes(
     stored_answers = _json.loads(stored.answers)
     session.close()
     assert stored_answers == _PROFILE_ANSWERS
-    assert stored_answers["openness"] == 7
+    assert stored_answers["mbti_ei"] == "E"
 
     duplicate = client.post(
         "/api/personas/profiles",
         headers=headers,
-        json={"nickname": " 小美 ", "context": "workplace", "answers": {"disc": "dominance"}},
+        json={"nickname": " 小美 ", "context": "workplace", "answers": {"mbti_ei": "I"}},
     )
     assert duplicate.status_code == 409
 
     blank = client.post(
         "/api/personas/profiles",
         headers=headers,
-        json={"nickname": "   ", "context": "romance", "answers": {"openness": 7}},
+        json={"nickname": "   ", "context": "romance", "answers": {"mbti_ei": "E"}},
     )
     assert blank.status_code == 422
     bad_avatar = client.post(
@@ -629,7 +630,7 @@ def test_profile_create_maps_answers_and_summarizes(
         json={
             "nickname": "小华", "context": "romance",
             "avatar_base64": "<script>alert(1)</script>",
-            "answers": {"openness": 7},
+            "answers": {"mbti_ei": "E"},
         },
     )
     assert bad_avatar.status_code == 422
@@ -637,7 +638,7 @@ def test_profile_create_maps_answers_and_summarizes(
     bad = client.post(
         "/api/personas/profiles",
         headers=headers,
-        json={"nickname": "小华", "context": "romance", "answers": {"openness": 99}},
+        json={"nickname": "小华", "context": "romance", "answers": {"mbti_ei": "X"}},
     )
     assert bad.status_code == 422
     unknown = client.post(
@@ -778,7 +779,7 @@ def test_placeholder_profile_upgraded_by_wizard(
     upgraded = client.post(
         "/api/personas/profiles",
         headers=headers,
-        json={"nickname": "小马", "context": "workplace", "answers": {"disc": "dominance"}},
+        json={"nickname": "小马", "context": "workplace", "answers": {"mbti_ei": "E", "mbti_jp": "J"}},
     )
     assert upgraded.status_code == 201, upgraded.text
     body = upgraded.json()
@@ -789,7 +790,7 @@ def test_placeholder_profile_upgraded_by_wizard(
     again = client.post(
         "/api/personas/profiles",
         headers=headers,
-        json={"nickname": "小马", "context": "workplace", "answers": {"disc": "steadiness"}},
+        json={"nickname": "小马", "context": "workplace", "answers": {"mbti_ei": "I", "mbti_jp": "P"}},
     )
     assert again.status_code == 409
     assert again.json()["error"]["code"] == "CONFLICT"
@@ -1135,7 +1136,7 @@ def test_placeholder_profile_absorbs_build(
         json={
             "conversation_id": conv_id,
             "subject": "other",
-            "self_report": {"openness": 7, "attachment": "anxious"},
+            "self_report": {"mbti_ei": "E", "mbti_tf": "F"},
         },
     )
     assert built.status_code == 200, built.text
@@ -1158,7 +1159,7 @@ def test_placeholder_profile_absorbs_build(
     ).one()
     session.close()
     assert profile.traits != "{}"
-    assert _json.loads(profile.answers) == {"openness": 7, "attachment": "anxious"}
+    assert _json.loads(profile.answers) == {"mbti_ei": "E", "mbti_tf": "F"}
     assert profile.confidence > 0
 
     # 补全后的档案是完整档案：同名向导 409
@@ -1167,7 +1168,7 @@ def test_placeholder_profile_absorbs_build(
     again = client.post(
         "/api/personas/profiles",
         headers=headers,
-        json={"nickname": "她", "context": "romance", "answers": {"openness": 7}},
+        json={"nickname": "她", "context": "romance", "answers": {"mbti_jp": "J"}},
     )
     assert again.status_code == 409
 
