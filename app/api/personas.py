@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
 from sqlalchemy.orm import Session
 
 from ..core.db import get_db
@@ -11,17 +11,21 @@ from ..domain.schemas.conversation import parse_members
 from ..domain.schemas.persona import (
     ChatImportRequest,
     PersonaBuildRequest,
+    PersonaProfileCreate,
+    PersonaProfileUpdate,
     QaImportRequest,
 )
 from ..repositories.conversations_repo import ConversationRepository
 from ..repositories.models import User
 from ..services.import_service import ImportService
+from ..services.persona_profile_service import PersonaProfileService
 from ..services.persona_service import PersonaService
 from .deps import require_active_user
 
 router = APIRouter(tags=["personas"])
 
 _personas = PersonaService()
+_profiles = PersonaProfileService()
 _imports = ImportService()
 _conversations = ConversationRepository()
 
@@ -55,6 +59,51 @@ def get_persona(
         subject=subject,
         context=context,
     )
+
+
+@router.get("/api/personas/profiles")
+def list_profiles(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_active_user),
+) -> list[dict]:
+    """人设库列表（聊天创建时选用）。"""
+    return _profiles.list_for(db, owner_user_id=user.id)
+
+
+@router.post("/api/personas/profiles", status_code=201)
+def create_profile(
+    payload: PersonaProfileCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_active_user),
+) -> dict:
+    """建人设：昵称头像 + 场景题目作答 → LLM 生成速写。"""
+    return _profiles.create(
+        db, owner_user_id=user.id, payload=payload,
+        trace_id=getattr(request.state, "trace_id", ""),
+    )
+
+
+@router.patch("/api/personas/profiles/{profile_id}")
+def update_profile(
+    profile_id: int,
+    payload: PersonaProfileUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_active_user),
+) -> dict:
+    return _profiles.update(
+        db, owner_user_id=user.id, profile_id=profile_id, payload=payload
+    )
+
+
+@router.delete("/api/personas/profiles/{profile_id}", status_code=204)
+def delete_profile(
+    profile_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_active_user),
+) -> Response:
+    _profiles.delete(db, owner_user_id=user.id, profile_id=profile_id)
+    return Response(status_code=204)
 
 
 @router.get("/api/personas/batch")

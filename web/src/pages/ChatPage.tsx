@@ -29,6 +29,8 @@ import DecisionPanel from '../components/DecisionPanel'
 import Field from '../components/Field'
 import { EmptyState, Notice } from '../components/layout'
 import Modal from '../components/Modal'
+import QuickDecide from '../components/QuickDecide'
+import { listProfiles, type PersonaProfileView } from '../api/personas'
 
 interface Props {
   currentId: number | null
@@ -52,6 +54,8 @@ interface PendingImage {
 /** 一条消息最多带的图片数 */
 const MAX_IMAGES = 9
 
+const CONTEXT_LABELS: Record<string, string> = { romance: '恋爱', workplace: '职场' }
+
 export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Props) {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -63,6 +67,9 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
   const [groupMode, setGroupMode] = useState(false)
   const [membersInput, setMembersInput] = useState('')
   const [speakerKey, setSpeakerKey] = useState('')
+  const [profiles, setProfiles] = useState<PersonaProfileView[]>([])
+  const [soloProfileId, setSoloProfileId] = useState<number | null>(null)
+  const [memberProfileIds, setMemberProfileIds] = useState<number[]>([])
   const [scenarios, setScenarios] = useState<Scenario[]>([])
   const [scenarioId, setScenarioId] = useState<number | null>(null)
   const [result, setResult] = useState<AnalyzeResult | null>(null)
@@ -80,6 +87,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
   const [uploading, setUploading] = useState(false)
   const [visionReady, setVisionReady] = useState<boolean | null>(null)
   const [lightbox, setLightbox] = useState<string | null>(null)
+  const [decideOpen, setDecideOpen] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
 
   const current = conversations.find((item) => item.id === currentId) ?? null
@@ -98,6 +106,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
         setScenarioId(rows[0]?.id ?? null)
       })
       .catch(() => undefined)
+    listProfiles().then(setProfiles).catch(() => undefined)
     void defaultLlmSupportsVision().then(setVisionReady)
   }, [reloadList])
 
@@ -131,12 +140,13 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
       .split(/[,，、\s]+/)
       .map((item) => item.trim())
       .filter(Boolean)
+    const chosenProfile = profiles.find((item) => item.id === soloProfileId) ?? null
     if (groupMode) {
-      if (memberNames.length === 0) {
-        setError('群聊至少要一位成员')
+      if (memberNames.length === 0 && memberProfileIds.length === 0) {
+        setError('群聊至少要一位成员（手填或从人设库选）')
         return
       }
-    } else if (!name.trim()) {
+    } else if (!name.trim() && !chosenProfile) {
       return
     }
     setBusy(true)
@@ -144,23 +154,37 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
     try {
       const created = groupMode
         ? await createConversation({
-            title: name.trim() || `和${memberNames[0]}的群聊`,
+            title:
+              name.trim() ||
+              memberNames[0] ||
+              profiles.find((item) => item.id === memberProfileIds[0])?.nickname ||
+              '群聊',
             relationship: relationship.trim(),
             scenario_id: scenarioId,
             members: memberNames,
+            member_profile_ids: memberProfileIds,
           })
-        : await createConversation({
-            title: `和${name.trim()}的聊天`,
-            counterpart_name: name.trim(),
-            relationship: relationship.trim(),
-            scenario_id: scenarioId,
-          })
+        : chosenProfile
+          ? await createConversation({
+              title: `和${chosenProfile.nickname}的聊天`,
+              relationship: relationship.trim(),
+              scenario_id: scenarioId,
+              profile_id: chosenProfile.id,
+            })
+          : await createConversation({
+              title: `和${name.trim()}的聊天`,
+              counterpart_name: name.trim(),
+              relationship: relationship.trim(),
+              scenario_id: scenarioId,
+            })
       await reloadList()
       setCurrentId(created.id)
       setCreating(false)
       setName('')
       setMembersInput('')
       setGroupMode(false)
+      setSoloProfileId(null)
+      setMemberProfileIds([])
       setListOpen(false)
       setResult(null)
       setReflection(null)
@@ -401,6 +425,32 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
               {groupMode ? (
                 <>
                   <Field label="群名（选填）" value={name} onChange={(event) => setName(event.target.value)} />
+                  {profiles.length > 0 && (
+                    <div>
+                      <span className="mb-1 block text-[12px] text-ink-muted">从人设库选成员（可多选）</span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {profiles.map((profile) => {
+                          const picked = memberProfileIds.includes(profile.id)
+                          return (
+                            <button
+                              key={profile.id}
+                              type="button"
+                              className={`rounded-[6px] px-2 py-1 text-[13px] ${
+                                picked ? 'bg-primary text-white' : 'border border-border text-ink'
+                              }`}
+                              onClick={() =>
+                                setMemberProfileIds((prev) =>
+                                  picked ? prev.filter((id) => id !== profile.id) : [...prev, profile.id],
+                                )
+                              }
+                            >
+                              {profile.nickname}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
                   <Field
                     label="成员（逗号分隔，不含自己）"
                     value={membersInput}
@@ -408,7 +458,30 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                   />
                 </>
               ) : (
-                <Field label="对方" value={name} onChange={(event) => setName(event.target.value)} />
+                <>
+                  {profiles.length > 0 && (
+                    <div>
+                      <span className="mb-1 block text-[12px] text-ink-muted">从人设库选用（选填）</span>
+                      <select
+                        className="w-full rounded-[6px] border border-border px-2 py-1.5 text-[14px] text-ink"
+                        value={soloProfileId ?? ''}
+                        onChange={(event) =>
+                          setSoloProfileId(event.target.value === '' ? null : Number(event.target.value))
+                        }
+                      >
+                        <option value="">不选，手填对方</option>
+                        {profiles.map((profile) => (
+                          <option key={profile.id} value={profile.id}>
+                            {profile.nickname}（{CONTEXT_LABELS[profile.context]}）
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  {!soloProfileId && (
+                    <Field label="对方" value={name} onChange={(event) => setName(event.target.value)} />
+                  )}
+                </>
               )}
               <div>
                 <span className="mb-1 block text-[12px] text-ink-muted">场景</span>
@@ -492,6 +565,16 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
               >
                 聊天
               </button>
+              {!current?.is_group && current && (() => {
+                const profile = profiles.find((item) => item.key === current.counterpart_key)
+                return profile?.avatar_base64 ? (
+                  <img
+                    src={profile.avatar_base64}
+                    alt=""
+                    className="h-7 w-7 shrink-0 rounded-full object-cover"
+                  />
+                ) : null
+              })()}
               <span className="truncate text-[16px] font-semibold text-ink">
                 {current ? current.counterpart_name || current.title : 'HelpMe'}
               </span>
@@ -752,6 +835,9 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                   </button>
                 )}
                 <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
+                  <Button size="sm" onClick={() => setDecideOpen(true)}>
+                    决策
+                  </Button>
                   <Button
                     size="sm"
                     loading={uploading}
@@ -799,6 +885,13 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
         </section>
       </div>
       {lightbox !== null && <Lightbox url={lightbox} onClose={() => setLightbox(null)} />}
+      {decideOpen && current !== null && (
+        <QuickDecide
+          conversation={current}
+          messages={messages}
+          onClose={() => setDecideOpen(false)}
+        />
+      )}
     </div>
   )
 }

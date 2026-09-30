@@ -149,13 +149,15 @@ def ensure_builtin_scenarios(db: Session) -> None:
 
     代码里的题集只作为第一次写入的内容。落库之后以数据库为准，
     管理员的修改和删除都会保留，重启不会把它们覆盖回来。
+    唯一例外：提示词仍与历史英文文案逐字一致的行（说明从未被改过）
+    会被一次性刷新为中文文案。
     """
     import json
 
     from ..repositories.models import Scenario
     from ..scenarios.packs import all_packs
     from ..scenarios.persona_questions import persona_questions_for
-    from ..scenarios.reply_prompts import builtin_draft_prompt
+    from ..scenarios.reply_prompts import PROMPT_REFRESH, builtin_draft_prompt
 
     names = {
         "romance": ("恋爱助手", "亲密关系沟通：意图、需求、情绪与危险度。"),
@@ -185,6 +187,11 @@ def ensure_builtin_scenarios(db: Session) -> None:
                 is_builtin=True,
             )
         )
+    stale = db.scalars(
+        select(Scenario).where(Scenario.system_prompt.in_(list(PROMPT_REFRESH)))
+    ).all()
+    for row in stale:
+        row.system_prompt = PROMPT_REFRESH[row.system_prompt]
     db.commit()
 
 

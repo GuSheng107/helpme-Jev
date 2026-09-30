@@ -109,7 +109,7 @@ def generate_question_set(
 _PROMPT_INSTRUCTIONS = """Generate the reply system prompt (tone and rules) for the user's custom scenario.
 Return ONE JSON object: {"prompt":"..."}.
 The prompt tells the reply model how to sound in this scenario: register, tone, and hard rules.
-Write the prompt in English, imperative voice, at most 120 words.
+Write the prompt in Chinese (simplified), imperative voice, at most 200 Chinese characters.
 Do NOT include any output-format instruction, examples, or markdown: the runtime appends the reply JSON contract itself.
 """
 

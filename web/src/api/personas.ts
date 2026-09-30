@@ -75,6 +75,43 @@ export function fetchPersonaBatch(conversationId: number, context?: PersonaConte
   return api.get<PersonaBatch>(`/api/personas/batch?conversation_id=${conversationId}${suffix}`)
 }
 
+// ------------------------------------------------------------------ 人设库
+export interface PersonaProfileView {
+  id: number
+  key: string
+  nickname: string
+  avatar_base64: string
+  context: PersonaContext
+  traits: Trait[]
+  summary: string
+  confidence: number
+  version: number
+}
+
+export function listProfiles() {
+  return api.get<PersonaProfileView[]>('/api/personas/profiles')
+}
+
+export function createProfile(body: {
+  nickname: string
+  avatar_base64?: string
+  context: PersonaContext
+  answers: Record<string, string | number>
+}) {
+  return api.post<PersonaProfileView>('/api/personas/profiles', body)
+}
+
+export function updateProfile(
+  id: number,
+  body: { nickname?: string; avatar_base64?: string },
+) {
+  return api.patch<PersonaProfileView>(`/api/personas/profiles/${id}`, body)
+}
+
+export function deleteProfile(id: number) {
+  return api.delete<void>(`/api/personas/profiles/${id}`)
+}
+
 export function personaUsage() {
   return api.get<{ adopted: number; rewritten: number }>('/api/personas/usage')
 }

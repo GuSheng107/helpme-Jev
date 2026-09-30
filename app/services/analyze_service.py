@@ -46,7 +46,7 @@ def _danger_tone(level: int | None) -> str:
 
 
 def _member_persona_lines(db, *, owner_user_id: int, conversation) -> list[str]:
-    """群聊背景用：每位有人设的成员一行摘要。
+    """判断背景用：群聊每位有人设的成员、单聊对方，各一行摘要。
 
     函数内导入，避免与 persona_service 的模块级相互引用。
     """
@@ -261,13 +261,12 @@ class AnalyzeService:
             trace_id=trace_id,
         )
         background = render_background(memories, summary=summary)
-        if conversation.is_group:
-            # 群聊：把每位成员的人设摘要并进背景，JEV 才分得清谁是谁
-            persona_lines = _member_persona_lines(
-                db, owner_user_id=owner_user_id, conversation=conversation
-            )
-            if persona_lines:
-                background = "\n".join([*persona_lines, background]) if background else "\n".join(persona_lines)
+        # 人设摘要：群聊按成员、单聊按对方 —— 人设库档案（key 命中）优先
+        persona_lines = _member_persona_lines(
+            db, owner_user_id=owner_user_id, conversation=conversation
+        )
+        if persona_lines:
+            background = "\n".join([*persona_lines, background]) if background else "\n".join(persona_lines)
         state = build_state(
             jev_messages, relationship=conversation.relationship, background=background
         )

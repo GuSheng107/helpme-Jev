@@ -131,6 +131,10 @@ export function createConversation(body: {
   scenario_id?: number | null
   /** 群聊成员名列表；非空即按群聊建立 */
   members?: string[]
+  /** 单聊从人设库选用：昵称 / key / 头像随档案带入 */
+  profile_id?: number | null
+  /** 群聊从人设库选成员：与手输名字合并去重 */
+  member_profile_ids?: number[]
 }) {
   return api.post<Conversation>('/api/conversations', body)
 }

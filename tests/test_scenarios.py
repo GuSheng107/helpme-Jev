@@ -211,6 +211,54 @@ def test_builtin_scenarios_seeded(client: TestClient, db: Session) -> None:
     workplace = next(row for row in rows if row["kind"] == "workplace")
     assert workplace["name"] == "职场助手"
     assert workplace["is_builtin"] is True
+    # 内置提示词是中文文案，编辑器里不应回显内部英文机器文案
+    assert "回复候选" in workplace["system_prompt"]
+
+
+def test_legacy_english_prompt_refreshed_on_bootstrap(client: TestClient, db: Session) -> None:
+    """历史英文提示词启动时一次性刷新为中文；改过的行原样保留。"""
+    from sqlalchemy import select
+
+    from app.repositories.models import Scenario
+    from app.scenarios.reply_prompts import (
+        BUILTIN_DRAFT_PROMPTS,
+        DEFAULT_CUSTOM_DRAFT_PROMPT,
+        PROMPT_REFRESH,
+    )
+    from app.services.bootstrap import ensure_builtin_scenarios
+
+    legacy_workplace = next(
+        old for old, new in PROMPT_REFRESH.items() if new == BUILTIN_DRAFT_PROMPTS["workplace"]
+    )
+    legacy_default = next(
+        old for old, new in PROMPT_REFRESH.items() if new == DEFAULT_CUSTOM_DRAFT_PROMPT
+    )
+    db.add_all([
+        Scenario(
+            owner_user_id=None, slug="custom-legacy", name="旧复制场景", kind="custom",
+            judge_questions="{}", persona_questions="{}",
+            system_prompt=legacy_default, is_builtin=False,
+        ),
+        Scenario(
+            owner_user_id=None, slug="custom-edited", name="改过提示词", kind="custom",
+            judge_questions="{}", persona_questions="{}",
+            system_prompt="我自己写的提示词", is_builtin=False,
+        ),
+    ])
+    # 职场助手在引导时已播种；这里把它的提示词回退成旧英文文案，模拟存量库
+    workplace = db.scalars(select(Scenario).where(Scenario.slug == "workplace")).one()
+    workplace.system_prompt = legacy_workplace
+    db.commit()
+
+    ensure_builtin_scenarios(db)
+
+    prompts = {
+        row.slug: row.system_prompt
+        for row in db.scalars(select(Scenario)).all()
+    }
+    assert prompts["workplace"] == BUILTIN_DRAFT_PROMPTS["workplace"]
+    assert prompts["custom-legacy"] == DEFAULT_CUSTOM_DRAFT_PROMPT
+    assert prompts["custom-edited"] == "我自己写的提示词"
 
 
 # ------------------------------------------------------------------ 职场判断链路

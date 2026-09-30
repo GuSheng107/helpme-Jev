@@ -6,6 +6,7 @@ from .business import (
     Clarification,
     Conversation,
     Message,
+    PersonaProfile,
     ProviderConfig,
     Scenario,
     SessionSummary,
