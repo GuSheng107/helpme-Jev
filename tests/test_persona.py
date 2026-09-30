@@ -835,6 +835,74 @@ def test_member_persona_lines_prefers_profiles(client: TestClient, db: Session) 
     assert "1/8" not in lines[0]  # 推断档案的裸分没有出现
 
 
+def test_member_persona_lines_skips_empty_profile_traits(
+    client: TestClient, db: Session
+) -> None:
+    """档案 traits 为空（历史脏数据）：跳过该成员，不能报错也不能复用上一行。"""
+    import json as _json
+
+    from app.repositories.models import Conversation, Persona, PersonaProfile
+    from app.services.persona_service import PersonaService
+
+    password = "emptytraits!Passw0rd"
+    UserRepository().add(
+        db,
+        User(
+            username="emptytraits",
+            display_name="emptytraits",
+            password_hash=hash_password(password),
+            role=UserRole.USER.value,
+            must_change_password=False,
+            is_active=True,
+        ),
+    )
+    db.commit()
+    resp = client.post("/api/auth/login", json={"username": "emptytraits", "password": password})
+    owner = int(resp.json()["id"])
+
+    conv = Conversation(
+        owner_user_id=owner,
+        title="空档案群",
+        counterpart_key="空档案群",
+        is_group=True,
+        members=_json.dumps(
+            [
+                {"key": "空档案", "name": "空档案"},
+                {"key": "有档案", "name": "有档案"},
+            ],
+            ensure_ascii=False,
+        ),
+    )
+    db.add(conv)
+    db.flush()
+    db.add(
+        PersonaProfile(
+            owner_user_id=owner,
+            key="空档案",
+            nickname="空档案",
+            context="romance",
+            traits=_json.dumps({}),
+        )
+    )
+    db.add(
+        Persona(
+            owner_user_id=owner,
+            counterpart_key="有档案",
+            subject="other",
+            context="romance",
+            traits=_json.dumps({"openness": 5}, ensure_ascii=False),
+            evidence="[]",
+            confidence=0.6,
+            version=1,
+        )
+    )
+    db.commit()
+
+    lines = PersonaService().member_persona_lines(db, owner_user_id=owner, conversation=conv)
+    assert len(lines) == 1
+    assert lines[0].startswith("有档案的人设：")
+
+
 def test_profile_patch_and_delete(client: TestClient, db: Session) -> None:
     """档案改名 / 删除：key 冻结、跨用户 404、删除后列表消失。"""
     import json as _json

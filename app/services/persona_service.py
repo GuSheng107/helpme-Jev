@@ -365,8 +365,7 @@ class PersonaService:
             profile = profiles.get(key)
             if profile is not None:
                 traits = trait_items(profile.traits)[:6]
-                if traits:
-                    line = _line(profile.nickname or name, traits)
+                display = profile.nickname or name
             else:
                 row = self._find(
                     db, owner_user_id=owner_user_id,
@@ -375,9 +374,10 @@ class PersonaService:
                 if row is None:
                     continue
                 traits = self._view(row)["traits"][:6]
-                if not traits:
-                    continue
-                line = _line(name, traits)
+                display = name
+            if not traits:
+                continue
+            line = _line(display, traits)
             if used + len(line) > PERSONA_LINES_BUDGET_CHARS:
                 break
             used += len(line) + 1
