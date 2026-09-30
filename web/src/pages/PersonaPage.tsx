@@ -128,6 +128,8 @@ export default function PersonaPage() {
     current && effectiveSubject === 'other'
       ? profiles.find((item) => item.key === groupSel.key)
       : undefined
+  // 迁移占位档案（空 traits）：判断链路还没东西可认，「从对话推断」可直接吸收补全
+  const linkedIsPlaceholder = Boolean(linkedProfile) && (linkedProfile?.traits.length ?? 0) === 0
 
   useEffect(() => {
     listConversations()
@@ -206,6 +208,8 @@ export default function PersonaPage() {
       )
       setPersona(built)
       setNotice(built.kept ? built.reason || '已保留原档案' : '档案已更新')
+      // 对方建模会吸收人设库占位档案：人设库卡片同步刷新
+      listProfiles().then(setProfiles).catch(() => undefined)
       if (current?.is_group) {
         fetchPersonaBatch(current.id, context).then(setBatch).catch(() => undefined)
       }
@@ -614,11 +618,11 @@ export default function PersonaPage() {
                   size="sm"
                   variant="primary"
                   loading={busy}
-                  disabled={Boolean(linkedProfile)}
-                  disabledReason="已有人设库档案，判断以档案为准；如需重建请先删除档案"
+                  disabled={Boolean(linkedProfile) && !linkedIsPlaceholder}
+                  disabledReason="已有人设库档案，判断以档案为准；自评请切到「我」，或到人设库向导用同名昵称补全"
                   onClick={() => void build()}
                 >
-                  {effectiveSubject === 'me' ? '提交自评' : '从对话推断'}
+                  {effectiveSubject === 'me' ? '提交自评' : linkedIsPlaceholder ? '从对话推断（补全占位档案）' : '从对话推断'}
                 </Button>
               </div>
               {effectiveSubject === 'me' && (
@@ -657,6 +661,11 @@ export default function PersonaPage() {
                 {CONTEXT_LABELS[linkedProfile?.context ?? persona?.context ?? context]}情境　置信度 {linkedProfile?.confidence ?? persona?.confidence ?? 0}%　版本 {linkedProfile?.version ?? persona?.version ?? 0}
                 {linkedProfile && <span className="ml-2 text-primary">（人设库档案）</span>}
               </p>
+              {linkedIsPlaceholder && (
+                <p className="text-[13px] text-ink-secondary">
+                  这是待补全的占位档案：点上方「从对话推断」用对话证据补全，或到下方人设库向导用同名昵称补全。
+                </p>
+              )}
               <ul className="mt-2 space-y-1">
                 {(linkedProfile?.traits ?? persona?.traits ?? []).map((trait) => (
                   <li key={trait.key} className="flex justify-between gap-2 text-[14px]">

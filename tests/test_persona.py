@@ -250,20 +250,21 @@ def _group(client: TestClient, db: Session, username: str, headers: dict, *, wit
 def test_group_persona_batch_and_member_build(
     client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """群聊：批量取全员人设与上下文；成员校验；已建档成员的推断被挡（409）。"""
+    """群聊：批量取全员人设与上下文；成员校验；占位档案被建模吸收补全。"""
     headers = _user(client, db, "grouppersona")
     _ready(client, db, "grouppersona", headers)
     conv_id = _group(client, db, "grouppersona", headers)
 
     monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: _EchoRouter())
-    # 小林已是档案成员（占位档案）：推断被挡，指引走向导补全
+    # 小林是占位档案：建模直接吸收补全（不再 409）
     built = client.post(
         "/api/personas/build",
         headers=headers,
         json={"conversation_id": conv_id, "subject": "other", "member_key": "小林"},
     )
-    assert built.status_code == 409, built.text
-    assert built.json()["error"]["code"] == "CONFLICT"
+    assert built.status_code == 200, built.text
+    assert built.json()["counterpart_key"] == "小林"
+    assert built.json()["kept"] is False
 
     # 成员不存在 → 422
     missing = client.post(
@@ -283,10 +284,11 @@ def test_group_persona_batch_and_member_build(
     assert body["context"] == "romance"
     keys = {item["key"]: item for item in body["participants"]}
     assert set(keys) == {"小林", "阿花", "me"}
-    # 两位成员都是占位档案：version 1 但 traits 为空
-    assert keys["小林"]["persona"]["version"] == 1
-    assert keys["小林"]["persona"]["traits"] == []
+    # 小林的档案被吸收补全（占位 v1 → v2）；阿花仍是空占位
+    assert keys["小林"]["persona"]["version"] == 2
+    assert keys["小林"]["persona"]["traits"]
     assert keys["阿花"]["persona"]["version"] == 1
+    assert keys["阿花"]["persona"]["traits"] == []
     assert keys["me"]["subject"] == "me"
 
 
@@ -1079,9 +1081,28 @@ def test_profile_patch_and_delete(client: TestClient, db: Session) -> None:
 
 
 def test_profile_blocks_inference(client: TestClient, db: Session) -> None:
-    """已有人设库档案（含迁移占位档案）的成员：从对话推断 409，避免推断档案被判断链路无视。"""
+    """已有**完整**人设库档案的成员：从对话推断 409，避免推断档案被判断链路无视。"""
+    import json as _json
+
+    from sqlalchemy import select
+
+    from app.core.db import SessionLocal
+    from app.repositories.models import PersonaProfile
+
     headers = _user(client, db, "blockinfer")
     conv_id = _group(client, db, "blockinfer", headers, with_messages=False)
+
+    # 把迁移占位档案补成完整档案
+    session = SessionLocal()
+    profile = session.scalars(
+        select(PersonaProfile).where(
+            PersonaProfile.owner_user_id == user_id_by_name(db, "blockinfer"),
+            PersonaProfile.key == "小林",
+        )
+    ).one()
+    profile.traits = _json.dumps({"disc": "steadiness"}, ensure_ascii=False)
+    session.commit()
+    session.close()
 
     blocked = client.post(
         "/api/personas/build",
@@ -1090,8 +1111,65 @@ def test_profile_blocks_inference(client: TestClient, db: Session) -> None:
     )
     assert blocked.status_code == 409
     assert blocked.json()["error"]["code"] == "CONFLICT"
-    # 占位档案挡推断时给出的是「向导补全」指引，而不是「先删除」
-    assert "补全" in blocked.json()["error"]["message"]
+    # 完整档案挡推断保持「先删除」口径
+    assert "已有人设库档案" in blocked.json()["error"]["message"]
+
+
+def test_placeholder_profile_absorbs_build(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """迁移占位档案：自评/推断直接吸收补全（id/key 冻结），补全后同名向导 409。"""
+    headers = _user(client, db, "absorbuser")
+    conv_id = _ready(client, db, "absorbuser", headers)
+    owner = user_id_by_name(db, "absorbuser")
+    client.post(
+        f"/api/conversations/{conv_id}/messages",
+        headers=headers,
+        json={"role": "other", "content": "你是不是又忘了。"},
+    )
+    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: _Router())
+
+    built = client.post(
+        "/api/personas/build",
+        headers=headers,
+        json={
+            "conversation_id": conv_id,
+            "subject": "other",
+            "self_report": {"openness": 7, "attachment": "anxious"},
+        },
+    )
+    assert built.status_code == 200, built.text
+    body = built.json()
+    assert body["kept"] is False
+    assert body["counterpart_key"] == "她"
+    assert body["traits"]
+
+    # 档案行被原地补全：traits 落库、自评作答存档、id 不变
+    from sqlalchemy import select
+
+    from app.core.db import SessionLocal
+    from app.repositories.models import PersonaProfile
+
+    session = SessionLocal()
+    profile = session.scalars(
+        select(PersonaProfile).where(
+            PersonaProfile.owner_user_id == owner, PersonaProfile.key == "她"
+        )
+    ).one()
+    session.close()
+    assert profile.traits != "{}"
+    assert _json.loads(profile.answers) == {"openness": 7, "attachment": "anxious"}
+    assert profile.confidence > 0
+
+    # 补全后的档案是完整档案：同名向导 409
+    router = _SummaryRouter()
+    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: router)
+    again = client.post(
+        "/api/personas/profiles",
+        headers=headers,
+        json={"nickname": "她", "context": "romance", "answers": {"openness": 7}},
+    )
+    assert again.status_code == 409
 
 
 def test_batch_prefers_profiles(client: TestClient, db: Session) -> None:

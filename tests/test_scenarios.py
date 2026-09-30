@@ -366,8 +366,8 @@ def test_romance_high_danger_keeps_romance_copy(
 def test_same_counterpart_profile_covers_both_contexts(
     client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """同一个人（同 key）横跨恋爱与职场会话：共用同一份档案；
-    人设前置下推断在两个情境里都被档案挡住（409），不再产生按情境分档的推断档案。"""
+    """同一个人（同 key）横跨恋爱与职场会话：共用同一份占位档案；
+    恋爱情境的推断吸收补全它；职场情境靠**自评**（主动动作）跨情境重写同一份档案。"""
     headers = _user(client, db, "dualcontext")
     _configure(client, headers)
     lin = seed_profile(db, user_id_by_name(db, "dualcontext"), "小林")
@@ -396,17 +396,38 @@ def test_same_counterpart_profile_covers_both_contexts(
 
     router = _PersonaRouter()
     monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: router)
-    for conv_id in (love_id, work_id):
-        built = client.post(
-            "/api/personas/build",
-            headers=headers,
-            json={"conversation_id": conv_id, "subject": "other"},
-        )
-        assert built.status_code == 409, built.text
-        assert built.json()["error"]["code"] == "CONFLICT"
-        assert "待补全" in built.json()["error"]["message"]
+    built_love = client.post(
+        "/api/personas/build",
+        headers=headers,
+        json={"conversation_id": love_id, "subject": "other"},
+    )
+    assert built_love.status_code == 200, built_love.text
+    love_keys = {item["key"] for item in built_love.json()["traits"]}
+    assert "attachment" in love_keys
 
-    # 两个会话共用的还是同一份档案
+    # 完整档案挡纯推断：职场会话不带自评的建模被拒
+    blocked = client.post(
+        "/api/personas/build",
+        headers=headers,
+        json={"conversation_id": work_id, "subject": "other"},
+    )
+    assert blocked.status_code == 409, blocked.text
+
+    # 自评是主动动作：把档案重写为职场画像（同一行，版本 +1）
+    built_work = client.post(
+        "/api/personas/build",
+        headers=headers,
+        json={
+            "conversation_id": work_id,
+            "subject": "other",
+            "self_report": {"disc": "conscientiousness", "conflict_style": "collaborating"},
+        },
+    )
+    assert built_work.status_code == 200, built_work.text
+    work_keys = {item["key"] for item in built_work.json()["traits"]}
+    assert "disc" in work_keys
+
+    # 仍然只有一份档案：两次建模吸收进同一行，版本从占位的 1 递增到 3
     from sqlalchemy import select
 
     from app.repositories.models import PersonaProfile
@@ -418,6 +439,7 @@ def test_same_counterpart_profile_covers_both_contexts(
         )
     ).all()
     assert len(rows) == 1
+    assert rows[0].version == 3
 
 
 # ------------------------------------------------------------------ 去性别默认
