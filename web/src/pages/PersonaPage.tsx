@@ -94,23 +94,23 @@ const DISC_OPTIONS: [string, string][] = [
 
 const SELF_FORMS: Record<PersonaContext, SelfItem[]> = {
   romance: [
-    { key: 'openness', kind: 'score', statement: '我喜欢尝试新的想法和做法' },
-    { key: 'conscientiousness', kind: 'score', statement: '我做事有计划，答应的事会做完' },
-    { key: 'extraversion', kind: 'score', statement: '和人相处让我更有精神' },
-    { key: 'agreeableness', kind: 'score', statement: '我通常先考虑对方的感受' },
-    { key: 'emotional_stability', kind: 'score', statement: '有压力时我大体稳得住' },
-    { key: 'attachment', kind: 'choice', statement: '和亲近的人相处时，我最像哪种？', options: ATTACHMENT_OPTIONS },
-    { key: 'love_language', kind: 'choice', statement: '被在乎的时候，我最在意哪种？', options: LOVE_LANGUAGE_OPTIONS },
-    { key: 'conflict_style', kind: 'choice', statement: '有分歧时我通常怎么做？', options: CONFLICT_OPTIONS },
+    { key: 'openness', kind: 'score', statement: '开放性（爱尝新 vs 保守）' },
+    { key: 'conscientiousness', kind: 'score', statement: '尽责性（有计划 vs 随性）' },
+    { key: 'extraversion', kind: 'score', statement: '外向性（人来疯 vs 独处充电）' },
+    { key: 'agreeableness', kind: 'score', statement: '宜人性（随和 vs 直接）' },
+    { key: 'emotional_stability', kind: 'score', statement: '情绪稳定（稳得住 vs 易起伏）' },
+    { key: 'attachment', kind: 'choice', statement: '依恋倾向', options: ATTACHMENT_OPTIONS },
+    { key: 'love_language', kind: 'choice', statement: '爱的语言（最在意哪种被在乎）', options: LOVE_LANGUAGE_OPTIONS },
+    { key: 'conflict_style', kind: 'choice', statement: '冲突风格', options: CONFLICT_OPTIONS },
   ],
   workplace: [
-    { key: 'openness', kind: 'score', statement: '我乐于接受新工具和新流程' },
-    { key: 'conscientiousness', kind: 'score', statement: '我按计划交付，截止时间记得牢' },
-    { key: 'extraversion', kind: 'score', statement: '群体场合让我更来劲' },
-    { key: 'agreeableness', kind: 'score', statement: '我会先照顾协作方的感受' },
-    { key: 'emotional_stability', kind: 'score', statement: '工作有压力时我大体稳得住' },
-    { key: 'disc', kind: 'choice', statement: '我的工作风格最像哪种？', options: DISC_OPTIONS },
-    { key: 'conflict_style', kind: 'choice', statement: '工作有分歧时我通常怎么做？', options: CONFLICT_OPTIONS },
+    { key: 'openness', kind: 'score', statement: '开放性（新工具新流程）' },
+    { key: 'conscientiousness', kind: 'score', statement: '尽责性（计划与截止）' },
+    { key: 'extraversion', kind: 'score', statement: '外向性（群体场合）' },
+    { key: 'agreeableness', kind: 'score', statement: '宜人性（协作姿态）' },
+    { key: 'emotional_stability', kind: 'score', statement: '情绪稳定（压力之下）' },
+    { key: 'disc', kind: 'choice', statement: 'DISC 工作风格', options: DISC_OPTIONS },
+    { key: 'conflict_style', kind: 'choice', statement: '冲突风格', options: CONFLICT_OPTIONS },
   ],
 }
 
