@@ -27,40 +27,69 @@ type SelfItem =
   | { key: string; kind: 'score'; statement: string }
   | { key: string; kind: 'choice'; statement: string; options: [string, string][] }
 
+/** 上游瞬断自动重试：最多 2 次、间隔 10 秒，进度经 onHint 提示；非 retryable 直接抛。 */
+const RETRY_MAX = 2
+const RETRY_DELAY_MS = 10_000
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function withAutoRetry<T>(run: () => Promise<T>, onHint: (text: string) => void): Promise<T> {
+  let attempt = 0
+  for (;;) {
+    try {
+      return await run()
+    } catch (err) {
+      if (!(err instanceof ApiError) || !err.retryable || attempt >= RETRY_MAX) throw err
+      attempt += 1
+      onHint(`上游模型抖动，自动重试中（${attempt}/${RETRY_MAX}），约 10 秒后再次尝试…`)
+      await sleep(RETRY_DELAY_MS)
+    }
+  }
+}
+
+// 直接选结果：题目沿用陈述句，但选项直接给特质档位/画像，选好即最终结果。
+// score 档位 1–8 对应后端 criteria 索引；choice 为特质枚举。
 const SCORE_OPTIONS: [string, number][] = [
-  ['符合', 7],
+  ['很低', 1],
+  ['偏低', 2],
+  ['中下', 3],
   ['一般', 4],
-  ['不太符合', 1],
+  ['中上', 5],
+  ['偏高', 6],
+  ['较高', 7],
+  ['很高', 8],
 ]
 
 const ATTACHMENT_OPTIONS: [string, string][] = [
-  ['既能亲近也能独立', 'secure'],
-  ['常要确认对方还在意', 'anxious'],
-  ['太近了会想退开', 'avoidant'],
-  ['时近时远，说不清', 'disorganized'],
+  ['安全型：既能亲近也能独立', 'secure'],
+  ['焦虑型：常要确认对方还在意', 'anxious'],
+  ['回避型：太近了会想退开', 'avoidant'],
+  ['混乱型：时近时远，说不清', 'disorganized'],
 ]
 
 const LOVE_LANGUAGE_OPTIONS: [string, string][] = [
-  ['听到肯定的话', 'words'],
-  ['专属的陪伴时间', 'time'],
-  ['收到用心的礼物', 'gifts'],
-  ['对方为我做事', 'service'],
-  ['肢体上的亲近', 'touch'],
+  ['肯定的言辞', 'words'],
+  ['精心的时刻', 'time'],
+  ['接受礼物', 'gifts'],
+  ['服务的行动', 'service'],
+  ['身体的接触', 'touch'],
 ]
 
 const CONFLICT_OPTIONS: [string, string][] = [
-  ['坚持我的立场', 'competing'],
-  ['一起找两边都接受的办法', 'collaborating'],
-  ['各退一步', 'compromising'],
-  ['先放着，缓一缓', 'avoiding'],
-  ['我让步，息事宁人', 'accommodating'],
+  ['竞争：坚持我的立场', 'competing'],
+  ['协作：一起找两边都接受的办法', 'collaborating'],
+  ['妥协：各退一步', 'compromising'],
+  ['回避：先放着，缓一缓', 'avoiding'],
+  ['迁就：我让步，息事宁人', 'accommodating'],
 ]
 
 const DISC_OPTIONS: [string, string][] = [
-  ['直接，先冲结果', 'dominance'],
-  ['热情，靠说服和关系', 'influence'],
-  ['耐心，求稳求节奏', 'steadiness'],
-  ['严谨，细节要核对', 'conscientiousness'],
+  ['支配型（D）：直接，先冲结果', 'dominance'],
+  ['影响型（I）：热情，靠说服和关系', 'influence'],
+  ['稳健型（S）：耐心，求稳求节奏', 'steadiness'],
+  ['严谨型（C）：严谨，细节要核对', 'conscientiousness'],
 ]
 
 const SELF_FORMS: Record<PersonaContext, SelfItem[]> = {
@@ -102,6 +131,7 @@ export default function PersonaPage() {
   const [memberKey, setMemberKey] = useState('me')
   const [batch, setBatch] = useState<PersonaBatch | null>(null)
   const [notice, setNotice] = useState('')
+  const [retryHint, setRetryHint] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   // 人设库
@@ -198,13 +228,18 @@ export default function PersonaPage() {
     }
     setBusy(true)
     setError(null)
+    setRetryHint('')
     try {
-      const built = await buildPersona(
-        currentId,
-        effectiveSubject,
-        effectiveSubject === 'me' ? selfAnswers : {},
-        context,
-        current?.is_group && effectiveSubject === 'other' ? groupSel.key : '',
+      const built = await withAutoRetry(
+        () =>
+          buildPersona(
+            currentId,
+            effectiveSubject,
+            effectiveSubject === 'me' ? selfAnswers : {},
+            context,
+            current?.is_group && effectiveSubject === 'other' ? groupSel.key : '',
+          ),
+        setRetryHint,
       )
       setPersona(built)
       setNotice(built.kept ? built.reason || '已保留原档案' : '档案已更新')
@@ -216,6 +251,7 @@ export default function PersonaPage() {
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '建模未完成')
     } finally {
+      setRetryHint('')
       setBusy(false)
     }
   }
@@ -378,6 +414,7 @@ export default function PersonaPage() {
           <div className="mb-3"><Notice>此会话使用我的场景中的人设题；恋爱 / 职场用于区分档案和自评表。</Notice></div>
         )}
         {error && <Notice tone="danger">{error}</Notice>}
+        {retryHint && <div className="mb-3"><Notice tone="warning">{retryHint}</Notice></div>}
         {notice && <div className="mb-3"><Notice tone="info">{notice}</Notice></div>}
         <div className="space-y-4">
             <DataCard title={`人设库${profiles.length > 0 ? `（${profiles.length}）` : ''}`}>
@@ -506,7 +543,7 @@ export default function PersonaPage() {
                     </div>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-[12px] text-ink-muted">题目作答（至少一题）</span>
+                    <span className="text-[12px] text-ink-muted">按你了解的 TA 作答（至少一题）</span>
                     <span className={`text-[12px] ${Object.keys(pAnswers).length > 0 ? 'text-ink-muted' : 'text-ink-secondary'}`}>
                       已答 {Object.keys(pAnswers).length}/{wizardItems.length}
                     </span>
@@ -547,7 +584,7 @@ export default function PersonaPage() {
                     ))}
                   </ul>
                   <p className="text-[12px] text-ink-muted">
-                    以「TA」的口吻作答即可，保存后由语言模型生成人设速写。
+                    选好就是最终画像，保存后由语言模型生成人设速写；不确定的项留空即可。
                   </p>
                   <div className="flex gap-2">
                     <Button variant="primary" size="sm" loading={busy} onClick={() => void saveProfile()}>
