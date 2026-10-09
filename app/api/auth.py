@@ -25,6 +25,7 @@ def to_summary(user: User) -> UserSummary:
         role=user.role,
         must_change_password=user.must_change_password,
         capabilities=capabilities_for(user),
+        auto_translate=user.auto_translate,
         email=user.email,
         created_at=iso_utc(user.created_at) or "",
         avatar_base64=user.avatar_base64 or None,

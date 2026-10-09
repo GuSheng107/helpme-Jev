@@ -9,6 +9,7 @@ export interface UserSummary {
   role: 'admin' | 'user'
   must_change_password: boolean
   capabilities: string[]
+  auto_translate: boolean
   email?: string | null
   created_at?: string
   avatar_base64?: string | null
@@ -53,6 +54,11 @@ export function updateProfile(displayName: string): Promise<UserSummary> {
 
 export function updateAvatar(avatar: string | null): Promise<UserSummary> {
   return api.patch<UserSummary>('/api/account/avatar', { avatar })
+}
+
+/** 自动翻译开关：原生 JEV 对中文不友好默认开；自训练中文 JEV 可关。 */
+export function updateAutoTranslate(enabled: boolean): Promise<UserSummary> {
+  return api.patch<UserSummary>('/api/account/translation', { auto_translate: enabled })
 }
 
 /** 首次登录（强制改密）传 null 免验原密码；其余场景必须带原密码。 */

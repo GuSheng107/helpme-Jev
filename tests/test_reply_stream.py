@@ -243,6 +243,49 @@ def test_reply_stream_runs_full_pipeline(
     assert "人设" in draft_bodies[0]
 
 
+def test_reply_stream_skips_translate_when_auto_translate_off(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    headers = _user(client, db, "replynotrans")
+    _configure(client, headers)
+    # 关掉自动翻译（自训练中文 JEV）
+    toggled = client.patch(
+        "/api/account/translation", headers=headers, json={"auto_translate": False}
+    )
+    assert toggled.status_code == 200, toggled.text
+    conversation_id = _conversation(client, db, "replynotrans", headers)
+    _save_other(client, headers, conversation_id, "也没什么。")
+    router = _Router()
+    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: router)
+
+    streamed = client.post(
+        "/api/chat/reply/stream",
+        headers=headers,
+        json={"conversation_id": conversation_id},
+    )
+    assert streamed.status_code == 200, streamed.text
+    events = _events(streamed)
+    # plan 里没有解读一步，也没有 translate_done 事件
+    assert [event["stage"] for event in events] == [
+        "plan", "score_done", "draft_done", "done",
+    ]
+    assert events[0]["steps"] == ["score", "draft", "rank"]
+    payload = events[-1]["payload"]
+    assert payload["ranked"] is True
+    assert [item["text"] for item in payload["candidates"]] == ["怎么了？", "想说就说。", "我在。"]
+    # 全程没有注释翻译调用：LLM 只剩起草，中文原文直通 JEV
+    llm_calls = [call for call in router.calls if "systemone" not in call["url"]]
+    assert llm_calls, "起草仍要走语言模型"
+    for call in llm_calls:
+        incoming = json_loads(call["json"]["messages"][1]["content"])
+        assert "lines" not in incoming
+    analyze_call = next(
+        call for call in router.calls
+        if "systemone" in call["url"] and "best_reply" not in ((call["json"] or {}).get("questions") or {})
+    )
+    assert analyze_call["json"]["state"]["chat"]["messages"][0]["text"] == "也没什么。"
+
+
 def test_reply_stream_blocks_high_danger(
     client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:

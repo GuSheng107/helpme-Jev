@@ -24,6 +24,7 @@ from .analyze_service import RECENT_MESSAGE_LIMIT, AnalyzeService
 from .image_service import image_context_contents
 from .memory_service import MemoryService
 from .model_log import record_model_call
+from .preference_service import auto_translate_enabled
 from .provider_service import ProviderService
 from .scenario_service import kind_of, persona_context_of, strip_meta
 
@@ -459,7 +460,9 @@ class PersonaService:
         focus_name: str = "",
     ) -> dict:
         llm = _analyze._require_provider(db, owner_user_id=owner_user_id, kind="llm")
-        # 附件图片读成英文描述（多模态），与正文一起走注释翻译
+        # 附件图片读成描述（多模态），与正文一起走注释翻译；
+        # 自动翻译关闭（自训练中文 JEV）时中文原文与中文描述直通
+        translate_on = auto_translate_enabled(db, owner_user_id)
         contents = image_context_contents(
             db,
             llm=llm,
@@ -467,6 +470,7 @@ class PersonaService:
             rows=rows,
             owner_user_id=owner_user_id,
             trace_id=trace_id,
+            describe_english=translate_on,
         )
         annotated, translated = annotate(
             endpoint_url=llm.endpoint_url,
@@ -474,6 +478,7 @@ class PersonaService:
             model=llm.model,
             protocol=llm.protocol,
             lines=[(str(row.seq), text) for row, text in zip(rows, contents)],
+            enabled=translate_on,
         )
         if translated is not None:
             record_model_call(

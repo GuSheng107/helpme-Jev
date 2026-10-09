@@ -1,4 +1,4 @@
-"""聊天判断：最近消息 → 注释翻译 → JEV 场景题集 → 中文面板。
+"""聊天判断：最近消息 → 注释翻译（可关） → JEV 场景题集 → 中文面板。
 
 题目集按会话挂的场景取（恋爱 / 职场），面板渲染逻辑共用（packs.JudgePack）。
 """
@@ -19,6 +19,7 @@ from ..scenarios.packs import ROMANCE_PACK, JudgePack
 from .context_service import dropped_count, ensure_summary, render_background
 from .image_service import image_context_contents
 from .memory_service import MemoryService
+from .preference_service import auto_translate_enabled
 from .provider_service import ProviderService
 from .scenario_service import pack_of
 
@@ -205,9 +206,10 @@ class AnalyzeService:
         conversation: Conversation,
         trace_id: str,
     ) -> Iterator[dict]:
-        """按阶段产出事件：translate_done → score_done → done(view)。
+        """按阶段产出事件：[translate_done] → score_done → done(view)。
 
-        事件与真实进度一一对应，流式调用方据此推分阶段进度；
+        自动翻译开启时才有 translate_done；关掉（自训练中文 JEV）后
+        原文直通。事件与真实进度一一对应，流式调用方据此推分阶段进度；
         非流式 analyze() 取最后的 done 事件，行为不变。
         """
         rows = _messages.list_by_conversation(
@@ -223,8 +225,10 @@ class AnalyzeService:
         jev = self._require_provider(db, owner_user_id=owner_user_id, kind="jev")
         llm = self._require_provider(db, owner_user_id=owner_user_id, kind="llm")
 
-        # 附件图片先读成英文描述（多模态，仅 vision 模型；系统不做 OCR），
-        # 再与正文一起走注释翻译 —— 日志里原文与译文仍成对呈现
+        # 附件图片先读成描述（多模态，仅 vision 模型；系统不做 OCR），
+        # 再与正文一起走注释翻译 —— 日志里原文与译文仍成对呈现；
+        # 用户关掉自动翻译（自训练中文 JEV）时，原文与中文描述直通
+        translate_on = auto_translate_enabled(db, owner_user_id)
         contents = image_context_contents(
             db,
             llm=llm,
@@ -232,6 +236,7 @@ class AnalyzeService:
             rows=rows,
             owner_user_id=owner_user_id,
             trace_id=trace_id,
+            describe_english=translate_on,
         )
         originals = [(str(row.seq), row.content) for row in rows]
         annotated, translated = annotate(
@@ -240,6 +245,7 @@ class AnalyzeService:
             model=llm.model,
             protocol=llm.protocol,
             lines=[(str(row.seq), text) for row, text in zip(rows, contents)],
+            enabled=translate_on,
         )
         if translated is not None and not translated.ok:
             self._write_logs(
@@ -260,7 +266,8 @@ class AnalyzeService:
                 "内容转换失败，请重试。",
                 status_code=502,
             )
-        yield {"stage": "translate_done"}
+        if translate_on:
+            yield {"stage": "translate_done"}
 
         jev_messages = [
             {

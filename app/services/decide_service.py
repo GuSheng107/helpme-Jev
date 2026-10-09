@@ -19,6 +19,7 @@ from ..domain.errors import DomainError, DomainErrorCode
 from ..repositories.models import CallLog
 from ..scenarios.builders import choice, noul, score
 from .analyze_service import AnalyzeService
+from .preference_service import auto_translate_enabled
 from .provider_service import ProviderService
 
 _providers = ProviderService()
@@ -251,8 +252,9 @@ class DecideService:
     ) -> Iterator[dict]:
         """按阶段产出事件：plan → [translate_done] → done。
 
-        先发 plan 交代这次要走几步（纯英文输入没有翻译桥，只剩决策一步），
-        事件与真实进度一一对应，前端据此画分阶段 loading。
+        先发 plan 交代这次要走几步（纯英文输入或用户关掉自动翻译时，
+        没有翻译桥，只剩决策一步），事件与真实进度一一对应，
+        前端据此画分阶段 loading。
         """
         cleaned = self.validate(question_type, options)
         jev = _analyze._require_provider(db, owner_user_id=owner_user_id, kind="jev")
@@ -265,9 +267,12 @@ class DecideService:
         }
         bridge_input = {key: payload[key] for key in ("question", "context", "options")}
         # 英文输入直接交给 JEV；无意义的翻译请求曾产生多次 200 + 非 JSON 错误。
-        needs_bridge = any(not text.isascii() for text in (
-            payload["question"], payload["context"], *cleaned
-        ))
+        # 用户关掉自动翻译（自训练中文 JEV）时同样跳过翻译桥。
+        needs_bridge = auto_translate_enabled(db, owner_user_id) and any(
+            not text.isascii() for text in (
+                payload["question"], payload["context"], *cleaned
+            )
+        )
         yield {"stage": "plan", "steps": ["translate", "decide"] if needs_bridge else ["decide"]}
 
         translated: UpstreamResult | None = None

@@ -38,13 +38,18 @@ function holdDone(): Promise<void> {
   return new Promise((resolve) => { window.setTimeout(resolve, DONE_HOLD_MS) })
 }
 
+interface Props {
+  /** 自动翻译开关：关闭时中文直接交给 JEV，loading 里不出现翻译一步 */
+  autoTranslate: boolean
+}
+
 interface DecisionDraft {
   question: string
   options: string[]
   context: string
 }
 
-export default function DecisionPage() {
+export default function DecisionPage({ autoTranslate }: Props) {
   const [kind, setKind] = useState<QuestionType>('choice')
   const [question, setQuestion] = useState('')
   const [options, setOptions] = useState(['', ''])
@@ -137,8 +142,9 @@ export default function DecisionPage() {
     setDeciding(true)
     setError(null)
     // 点击后立刻显示当前这一步；服务端确认计划后再对齐，避免空等。
+    // 非中文输入或自动翻译已关闭时没有翻译步，不闪「翻译中」。
     const ascii = /^[\x00-\x7F]*$/.test(`${question}${context}${filledOptions.join('')}`)
-    setPlan(ascii ? ['decide'] : ['translate', 'decide'])
+    setPlan(ascii || !autoTranslate ? ['decide'] : ['translate', 'decide'])
     setProgress(0)
     try {
       const answered = await decide(

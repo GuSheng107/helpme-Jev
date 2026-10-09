@@ -40,6 +40,7 @@ class UserSummary(BaseModel):
     role: str
     must_change_password: bool
     capabilities: list[str]
+    auto_translate: bool = True
     email: str | None = None
     created_at: str = ""
     avatar_base64: str | None = None

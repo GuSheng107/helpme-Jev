@@ -45,13 +45,18 @@ def annotate(
     model: str,
     lines: list[tuple[str, str]],
     protocol: str = "openai",
+    enabled: bool = True,
 ) -> tuple[dict[str, str], UpstreamResult | None]:
     """把 ``(id, 原文)`` 译成注释英文。
 
-    纯英文行原样返回，不调用上游。
+    用户关掉自动翻译（自训练中文 JEV）时 ``enabled=False``，原文直通，
+    不调上游。纯英文行同样原样返回，不调用上游。
     返回 ``(id → 送进 JEV 的文本, 调用结果或 None)``。
     失败时第二个值 ``ok`` 为假，调用方决定是否中断。
     """
+    mapped = {line_id: text for line_id, text in lines}
+    if not enabled:
+        return mapped, None
     pending = [(line_id, text) for line_id, text in lines if needs_translation(text)]
     mapped = {line_id: text for line_id, text in lines if not needs_translation(text)}
     if not pending:

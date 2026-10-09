@@ -22,6 +22,7 @@ from ..scenarios.packs import JudgePack
 from ..scenarios.reply_prompts import CUSTOM_REPLY_FORMAT, builtin_draft_prompt
 from .analyze_service import RECENT_MESSAGE_LIMIT, AnalyzeService
 from .model_log import record_model_call
+from .preference_service import auto_translate_enabled
 from .provider_service import ProviderService
 from .scenario_service import effective_prompt, pack_of
 
@@ -131,6 +132,7 @@ class ReplyService:
             model=llm.model,
             protocol=llm.protocol,
             lines=[(str(index), text) for index, text in enumerate(replies)],
+            enabled=auto_translate_enabled(db, owner_user_id),
         )
         if translated is not None:
             record_model_call(
@@ -185,7 +187,9 @@ class ReplyService:
         llm = _analyze._require_provider(db, owner_user_id=owner_user_id, kind="llm")
         jev = _analyze._require_provider(db, owner_user_id=owner_user_id, kind="jev")
 
-        yield {"stage": "plan", "steps": list(_PIPELINE_STEPS)}
+        # 自动翻译关闭（自训练中文 JEV）时，plan 里不出现解读一步
+        translate_on = auto_translate_enabled(db, owner_user_id)
+        yield {"stage": "plan", "steps": list(_PIPELINE_STEPS if translate_on else _PIPELINE_STEPS[1:])}
 
         view: dict = {}
         for event in _analyze.analyze_events(
@@ -254,6 +258,7 @@ class ReplyService:
             model=llm.model,
             protocol=llm.protocol,
             lines=[(str(index), text) for index, text in enumerate(replies)],
+            enabled=auto_translate_enabled(db, owner_user_id),
         )
         if translated is not None:
             record_model_call(
@@ -305,6 +310,7 @@ class ReplyService:
             model=llm.model,
             protocol=llm.protocol,
             lines=[("0", text)],
+            enabled=auto_translate_enabled(db, owner_user_id),
         )
         if translated is not None:
             record_model_call(

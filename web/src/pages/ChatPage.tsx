@@ -50,6 +50,8 @@ interface Props {
   currentId: number | null
   setCurrentId: (id: number | null) => void
   onOpenSettings: () => void
+  /** 自动翻译开关：关闭时回复管线 loading 里不出现「解读来话」一步 */
+  autoTranslate: boolean
 }
 
 /** 我方消息的来源徽标：manual 不标（默认就是自己写的），标出来的是特殊的 */
@@ -73,7 +75,7 @@ const LINK_CHIP =
   'inline-flex items-center gap-1 rounded-[6px] px-1.5 py-0.5 text-[13px] font-medium ' +
   'text-primary transition-colors duration-150 hover:bg-primary-soft'
 
-export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Props) {
+export default function ChatPage({ currentId, setCurrentId, onOpenSettings, autoTranslate }: Props) {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [draft, setDraft] = useState('')
@@ -375,7 +377,8 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
       messageId,
       hint: hint.slice(0, 24),
       running: true,
-      plan: ['translate', 'score', 'draft', 'rank'],
+      // 点击后先按设置显示计划；服务端 plan 事件再对齐。翻译关着时不闪「解读来话」。
+      plan: autoTranslate ? ['translate', 'score', 'draft', 'rank'] : ['score', 'draft', 'rank'],
       progress: 0,
       scores: null,
       candidates: [],

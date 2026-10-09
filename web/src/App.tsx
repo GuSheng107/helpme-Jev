@@ -122,9 +122,10 @@ export default function App() {
           currentId={currentConversationId}
           setCurrentId={setCurrentConversationId}
           onOpenSettings={() => setPage('settings')}
+          autoTranslate={user.auto_translate}
         />
       )}
-      {page === 'decide' && <DecisionPage />}
+      {page === 'decide' && <DecisionPage autoTranslate={user.auto_translate} />}
       {page === 'personas' && <PersonaPage />}
       {page === 'scenarios' && <ScenarioPage user={user} />}
       {page === 'logs' && <LogsPage />}
