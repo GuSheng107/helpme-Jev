@@ -77,8 +77,11 @@ class Persona(Base, TimestampMixin):
     counterpart_key: Mapped[str] = mapped_column(String(128), index=True, nullable=False, default="")
     subject: Mapped[str] = mapped_column(String(8), nullable=False, default="other")  # me | other
     context: Mapped[str] = mapped_column(
-        String(16), nullable=False, default="romance", index=True
-    )  # romance | workplace
+        String(32), nullable=False, default="romance", index=True
+    )  # 档位 slug：内置 romance / workplace / family / friends / general，或自定义档位
+    context_label: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=""
+    )  # 自定义档位的显示名；内置档位留空，由前端按 slug 取名
     traits: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     evidence: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)

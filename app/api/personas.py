@@ -9,6 +9,7 @@ from ..core.db import get_db
 from ..domain.errors import DomainError, DomainErrorCode
 from ..domain.schemas.conversation import parse_members
 from ..domain.schemas.persona import (
+    CONTEXT_PATTERN,
     ChatImportRequest,
     PersonaBuildRequest,
     PersonaProfileCreate,
@@ -49,7 +50,7 @@ def _member_label_map(conversation) -> dict[str, str] | None:
 def get_persona(
     counterpart_key: str = Query(min_length=1),
     subject: str = Query(pattern="^(me|other)$"),
-    context: str = Query(default="romance", pattern="^(romance|workplace)$"),
+    context: str = Query(default="romance", pattern=CONTEXT_PATTERN),
     db: Session = Depends(get_db),
     user: User = Depends(require_active_user),
 ) -> dict:
@@ -110,7 +111,7 @@ def delete_profile(
 @router.get("/api/personas/batch")
 def batch_personas(
     conversation_id: int = Query(ge=1),
-    context: str = Query(default="", pattern="^(|romance|workplace)$"),
+    context: str = Query(default="", pattern=f"^$|{CONTEXT_PATTERN}"),
     db: Session = Depends(get_db),
     user: User = Depends(require_active_user),
 ) -> dict:
@@ -144,6 +145,8 @@ def build_persona(
         subject=payload.subject,
         self_report=payload.self_report,
         context=payload.context,
+        context_label=payload.context_label,
+        dimension_keys=payload.dimension_keys,
         trace_id=getattr(request.state, "trace_id", ""),
         member_key=payload.member_key,
     )

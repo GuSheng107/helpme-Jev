@@ -17,7 +17,7 @@ from ..core.time import iso_utc
 from ..domain.errors import DomainError, DomainErrorCode
 from ..domain.schemas.persona import PersonaProfileCreate, PersonaProfileUpdate
 from ..repositories.models import PersonaProfile
-from ..scenarios.persona_questions import persona_questions_for
+from ..scenarios.persona_questions import questions_for
 from .analyze_service import AnalyzeService
 from .model_log import record_model_call
 from .persona_service import _stored_traits, trait_items
@@ -106,6 +106,7 @@ class PersonaProfileService:
             "nickname": row.nickname,
             "avatar_base64": row.avatar_base64 or "",
             "context": row.context,
+            "context_label": row.context_label or "",
             "traits": trait_items(row.traits),
             "summary": row.summary or "",
             "confidence": round(row.confidence * 100),
@@ -138,7 +139,7 @@ class PersonaProfileService:
                 DomainErrorCode.CONFLICT, "已有同名人设，请换一个昵称", status_code=409
             )
 
-        questions = persona_questions_for(payload.context, "other")
+        questions = questions_for(payload.context, payload.dimension_keys, "other")
         values = _normalize_answers(payload.answers, questions)
         # 与推断档案同格式存储（带展示 meta），判断链路可直接复用
         traits = _stored_traits(values, questions)
@@ -155,6 +156,7 @@ class PersonaProfileService:
             row.nickname = nickname
             row.avatar_base64 = payload.avatar_base64 or row.avatar_base64
             row.context = payload.context
+            row.context_label = payload.context_label
             row.answers = json.dumps(values, ensure_ascii=False)
             row.traits = json.dumps(traits, ensure_ascii=False)
             row.summary = summary
@@ -167,6 +169,7 @@ class PersonaProfileService:
                 nickname=nickname,
                 avatar_base64=payload.avatar_base64 or "",
                 context=payload.context,
+                context_label=payload.context_label,
                 # 存清洗后的作答（score 为档位整数、choice 为枚举值），
                 # 不存原始 payload —— 将来校验放宽也不会把未消毒值写进库
                 answers=json.dumps(values, ensure_ascii=False),
