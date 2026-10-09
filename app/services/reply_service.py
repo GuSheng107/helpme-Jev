@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 
 from sqlalchemy.orm import Session
 
@@ -50,6 +51,9 @@ _POLISH_PROMPTS = {
 _POLISH_FORMAT = 'Return exactly one valid JSON object: {"text":"polished text"}. No markdown or other text.'
 
 _RANK_KEYS = ("reply_a", "reply_b", "reply_c")
+
+# 自动回复管线的固定步骤：解读（注释翻译）→ 评分 → 起草 → 排序
+_PIPELINE_STEPS = ("translate", "score", "draft", "rank")
 
 
 def _rank_question(annotated: list[str]) -> dict:
@@ -98,21 +102,10 @@ class ReplyService:
             )
         llm = _analyze._require_provider(db, owner_user_id=owner_user_id, kind="llm")
         jev = _analyze._require_provider(db, owner_user_id=owner_user_id, kind="jev")
-        payload = {
-            "relationship": conversation.relationship,
-            "scenario": pack.kind,
-            "scenario_name": scenario.name if scenario else "",
-            "scenario_description": scenario.description if scenario else "",
-            "is_group": conversation.is_group,
-            "judgments": decision,
-            "decision": {
-                "intent": _text(decision, "true_intent"),
-                "action": _text(decision, "best_action"),
-                "needs": _text(decision, pack.needs_key),
-                "risk": _text(decision, pack.risk_key),
-            },
-            "messages": [{"from": _from_of(row, conversation), "text": row.content} for row in rows],
-        }
+        payload = _draft_payload(
+            conversation=conversation, scenario=scenario, pack=pack,
+            decision=decision, rows=rows,
+        )
         drafted = chat_json(
             endpoint_url=llm.endpoint_url,
             api_key=_providers.decrypt_key(llm),
@@ -163,6 +156,134 @@ class ReplyService:
             reverse=True,
         )
         return {"candidates": ordered}
+
+    def reply_events(
+        self,
+        db: Session,
+        *,
+        owner_user_id: int,
+        conversation: Conversation,
+        target_member: str = "",
+        trace_id: str,
+    ) -> Iterator[dict]:
+        """自动回复管线：解读 → 评分 → 起草 → 排序，按阶段产出事件。
+
+        消息与 Provider 检查在第一个事件前完成：开流前的 422/409 仍是
+        普通 JSON；开流后的失败由调用方转成 error 事件。高危判断不改判
+        也不起草，直接以 blocked 收尾。
+        """
+        rows = _messages.list_by_conversation(
+            db, conversation_id=conversation.id, limit=RECENT_MESSAGE_LIMIT
+        )
+        if not rows:
+            raise DomainError(
+                DomainErrorCode.VALIDATION_FAILED,
+                "暂无内容，请先保存对方发来的话。",
+                status_code=422,
+            )
+        pack = pack_of(db, conversation)
+        llm = _analyze._require_provider(db, owner_user_id=owner_user_id, kind="llm")
+        jev = _analyze._require_provider(db, owner_user_id=owner_user_id, kind="jev")
+
+        yield {"stage": "plan", "steps": list(_PIPELINE_STEPS)}
+
+        view: dict = {}
+        for event in _analyze.analyze_events(
+            db, owner_user_id=owner_user_id, conversation=conversation, trace_id=trace_id,
+        ):
+            if event["stage"] == "done":
+                view = event["view"]
+            else:
+                yield event
+
+        scores = view.get("panel") or []
+        if view.get("high_danger"):
+            yield {"stage": "done", "payload": {
+                "scores": scores,
+                "candidates": [],
+                "blocked": _HIGH_RISK_MESSAGES.get(pack.kind, _HIGH_RISK_MESSAGES["romance"]),
+                "ranked": False,
+            }}
+            return
+
+        # 起草：决策取自评分面板；人设摘要进 payload，群聊点名时再标回复对象
+        decision = {
+            item["key"]: {"text": str(item.get("text") or ""), "value": item.get("value")}
+            for item in (*view.get("panel", []), *view.get("more", []))
+        }
+        scenario = db.get(Scenario, conversation.scenario_id) if conversation.scenario_id else None
+        prompt = effective_prompt(scenario) if scenario else builtin_draft_prompt(pack.kind)
+        if scenario is None or scenario.kind == "custom":
+            prompt += CUSTOM_REPLY_FORMAT
+        payload = _draft_payload(
+            conversation=conversation, scenario=scenario, pack=pack,
+            decision=decision, rows=rows,
+        )
+        persona_lines = _persona_lines(db, owner_user_id=owner_user_id, conversation=conversation)
+        if persona_lines:
+            payload["personas"] = persona_lines
+        reply_to = _member_name(conversation, target_member)
+        if reply_to:
+            payload["reply_to"] = reply_to
+        drafted = chat_json(
+            endpoint_url=llm.endpoint_url,
+            api_key=_providers.decrypt_key(llm),
+            model=llm.model,
+            protocol=llm.protocol,
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+            ],
+        )
+        replies = _three(drafted.payload.get("replies") if drafted.ok else None)
+        record_model_call(
+            db, owner_user_id=owner_user_id, trace_id=trace_id, kind="llm",
+            phase="draft", provider=llm, result=drafted, request=payload,
+            response=drafted.payload, ok=bool(drafted.ok and replies),
+        )
+        if not drafted.ok or replies is None:
+            raise DomainError(DomainErrorCode.LLM_UPSTREAM_ERROR, "候选未生成，请重试。", status_code=502)
+        yield {"stage": "draft_done"}
+
+        # 排序：注释翻译 + JEV。任一步不成就降级为起草顺序，不让整张卡报错。
+        ranked = True
+        percents = [0, 0, 0]
+        annotated, translated = annotate(
+            endpoint_url=llm.endpoint_url,
+            api_key=_providers.decrypt_key(llm),
+            model=llm.model,
+            protocol=llm.protocol,
+            lines=[(str(index), text) for index, text in enumerate(replies)],
+        )
+        if translated is not None:
+            record_model_call(
+                db, owner_user_id=owner_user_id, trace_id=trace_id, kind="llm",
+                phase="translate", provider=llm, result=translated,
+                request={"lines": replies}, response=translated.payload, ok=translated.ok,
+            )
+        if translated is None or translated.ok:
+            try:
+                percents = self._rank(
+                    db=db, owner_user_id=owner_user_id, trace_id=trace_id,
+                    jev=jev,
+                    state=_state(rows, conversation.relationship, conversation),
+                    annotated=[annotated[str(index)] for index in range(3)],
+                )
+            except DomainError:
+                ranked = False
+        else:
+            ranked = False
+        ordered = sorted(
+            ({"text": replies[index], "percent": percents[index]} for index in range(3)),
+            key=lambda item: item["percent"],
+            reverse=True,
+        )
+        yield {"stage": "done", "payload": {
+            "scores": scores,
+            "candidates": ordered,
+            "blocked": None,
+            "ranked": ranked,
+        }}
 
     def evaluate(
         self,
@@ -385,6 +506,53 @@ class ReplyService:
         if not isinstance(probabilities, dict):
             probabilities = {}
         return [_percent(probabilities.get(key)) for key in _RANK_KEYS]
+
+
+def _draft_payload(
+    *,
+    conversation: Conversation,
+    scenario: Scenario | None,
+    pack: JudgePack,
+    decision: dict,
+    rows: list,
+) -> dict:
+    """起草请求体：关系 / 场景 / 决策摘要 / 最近消息，手选与自动管线共用。"""
+    return {
+        "relationship": conversation.relationship,
+        "scenario": pack.kind,
+        "scenario_name": scenario.name if scenario else "",
+        "scenario_description": scenario.description if scenario else "",
+        "is_group": conversation.is_group,
+        "judgments": decision,
+        "decision": {
+            "intent": _text(decision, "true_intent"),
+            "action": _text(decision, "best_action"),
+            "needs": _text(decision, pack.needs_key),
+            "risk": _text(decision, pack.risk_key),
+        },
+        "messages": [{"from": _from_of(row, conversation), "text": row.content} for row in rows],
+    }
+
+
+def _persona_lines(db: Session, *, owner_user_id: int, conversation: Conversation) -> list[str]:
+    """起草用的人设摘要：函数内导入，避免与 persona_service 循环引用。"""
+    from .persona_service import PersonaService
+
+    return PersonaService().member_persona_lines(
+        db, owner_user_id=owner_user_id, conversation=conversation
+    )
+
+
+def _member_name(conversation: Conversation, key: str) -> str:
+    """群聊点名回复时的对象显示名；单聊或未点名返回空。"""
+    if not key or not conversation.is_group:
+        return ""
+    from ..domain.schemas.conversation import parse_members
+
+    for member in parse_members(conversation.members):
+        if member.key == key:
+            return member.name
+    return key
 
 
 def _three(raw: object) -> list[str] | None:

@@ -350,6 +350,12 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
       id,
       conversationId,
       targetMember,
+      targetName: targetMember
+        ? displayName(
+            targetMember,
+            current?.members.find((member) => member.key === targetMember)?.name ?? targetMember,
+          )
+        : '',
       messageId,
       hint: hint.slice(0, 24),
       running: true,

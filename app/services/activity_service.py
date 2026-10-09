@@ -41,6 +41,7 @@ ACTION_LABELS: dict[tuple[str, str], str] = {
     ("POST", "/api/conversations/{conversation_id}/messages"): "发送消息",
     ("POST", "/api/chat/analyze"): "发起聊天判断",
     ("POST", "/api/chat/reply"): "生成候选回复",
+    ("POST", "/api/chat/reply/stream"): "生成候选回复",
     ("POST", "/api/chat/evaluate"): "评价候选回复",
     ("POST", "/api/chat/clarify"): "生成澄清问题",
     ("POST", "/api/chat/explain"): "解释判断",
@@ -238,7 +239,10 @@ def record_request(request: Request, *, status_code: int, started_at: float) -> 
         db.commit()
 
 
-def mark_stream_result(trace_id: str, owner_user_id: int, *, level: str, error_code: str = "") -> None:
+def mark_stream_result(
+    trace_id: str, owner_user_id: int, *, level: str, error_code: str = "",
+    label: str = "发起决策判断",
+) -> None:
     """流式响应发出 200 后发生的降级或失败，回写请求摘要。"""
     if level == "info":
         return
@@ -251,7 +255,7 @@ def mark_stream_result(trace_id: str, owner_user_id: int, *, level: str, error_c
             ).order_by(ActivityLog.id.desc()))
             if row is not None:
                 row.level = level
-                row.summary = "发起决策判断失败" if level == "error" else "发起决策判断降级"
+                row.summary = f"{label}失败" if level == "error" else f"{label}降级"
                 row.error_code = error_code[:64]
                 db.commit()
     except Exception as exc:
