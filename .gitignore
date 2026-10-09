@@ -31,3 +31,6 @@ web/tsconfig.tsbuildinfo
 .idea/
 .vscode/
 *.swp
+
+# AI 工作状态（会话记忆、任务清单等，属本机状态而非交付物）
+.workbuddy/
