@@ -15,6 +15,7 @@ import {
   listMessages,
   listScenarios,
   reflect,
+  replyStream,
   revertReflection,
   uploadImage,
   type AnalyzeResult,
@@ -29,7 +30,7 @@ import DecisionPanel from '../components/DecisionPanel'
 import Field from '../components/Field'
 import { EmptyState, Notice } from '../components/layout'
 import Modal from '../components/Modal'
-import QuickDecide from '../components/QuickDecide'
+import ReplyCards, { type ReplyCard } from '../components/ReplyCards'
 import { listProfiles, type PersonaProfileView } from '../api/personas'
 
 interface Props {
@@ -65,7 +66,6 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
   const [name, setName] = useState('')
   const [relationship, setRelationship] = useState('')
   const [groupMode, setGroupMode] = useState(false)
-  const [membersInput, setMembersInput] = useState('')
   const [speakerKey, setSpeakerKey] = useState('')
   const [profiles, setProfiles] = useState<PersonaProfileView[]>([])
   const [soloProfileId, setSoloProfileId] = useState<number | null>(null)
@@ -87,10 +87,55 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
   const [uploading, setUploading] = useState(false)
   const [visionReady, setVisionReady] = useState<boolean | null>(null)
   const [lightbox, setLightbox] = useState<string | null>(null)
-  const [decideOpen, setDecideOpen] = useState(false)
+  /** 群聊时手动「帮我回复」选的对象成员 key（自动触发走消息里的发言成员） */
+  const [replyTarget, setReplyTarget] = useState('')
+  /** 回复建议卡片，按会话 id 存：切走再切回还在（内存级，刷新页面即清） */
+  const [replyCardsByConv, setReplyCardsByConv] = useState<Record<number, ReplyCard[]>>({})
+  const replyCardSeq = useRef(0)
+  const streamRef = useRef<HTMLDivElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
+  // 聊天页内嵌人设速览：默认折叠，点头部「人设」切换
+  const [personaOpen, setPersonaOpen] = useState(false)
 
   const current = conversations.find((item) => item.id === currentId) ?? null
+  const chosenSoloProfile = profiles.find((item) => item.id === soloProfileId) ?? null
+
+  // 当前会话的人设速览条目：单聊取对方档案，群聊取每位成员档案
+  const personaPeek = current
+    ? current.is_group
+      ? current.members
+          .map((member) => ({ member, profile: profiles.find((p) => p.key === member.key) }))
+          .filter((entry) => entry.profile)
+      : [{ member: null, profile: profiles.find((p) => p.key === current.counterpart_key) }]
+    : []
+  const hasPersonaPeek = personaPeek.some((entry) => entry.profile)
+
+  // 显示名动态走人设库：档案改名后，列表 / 头部 / 发言人标签即时跟随新昵称，
+  // 无需回改会话快照（key 冻结，改名只影响显示）
+  function displayName(key: string, fallback: string): string {
+    return profiles.find((item) => item.key === key)?.nickname || fallback
+  }
+
+  // 档案必选：新建弹窗里默认选中第一个档案；选中项被删时回落
+  useEffect(() => {
+    if (soloProfileId !== null && !profiles.some((item) => item.id === soloProfileId)) {
+      setSoloProfileId(profiles[0]?.id ?? null)
+    } else if (soloProfileId === null && profiles.length > 0) {
+      setSoloProfileId(profiles[0].id)
+    }
+  }, [profiles, soloProfileId])
+
+  // 人设前置兜底：会话涉及的对象/成员在档案库缺席（如档案被删）时禁止新增记录
+  const missingProfileNames = current
+    ? current.is_group
+      ? current.members
+          .filter((member) => !profiles.some((p) => p.key === member.key))
+          .map((member) => member.name)
+      : profiles.some((p) => p.key === current.counterpart_key)
+        ? []
+        : [current.counterpart_name || current.title]
+    : []
+  const chatLocked = current !== null && missingProfileNames.length > 0
 
   const reloadList = useCallback(async () => {
     setConversations(await listConversations())
@@ -120,6 +165,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
       return []
     })
     setSpeakerKey('')
+    setReplyTarget('')
     setRole('other')
     let cancelled = false
     void listMessages(currentId)
@@ -135,53 +181,55 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
     }
   }, [currentId])
 
+  /** 当前会话的卡片列表（渲染与切换用）：必须声明在下方 useEffect 之前，避免暂时性死区 */
+  const replyCards = currentId !== null ? (replyCardsByConv[currentId] ?? []) : []
+
+  // 消息/回复卡片更新时贴底：新内容出来不用手动翻
+  useEffect(() => {
+    const el = streamRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [messages, replyCards])
+
   async function create() {
-    const memberNames = membersInput
-      .split(/[,，、\s]+/)
-      .map((item) => item.trim())
-      .filter(Boolean)
-    const chosenProfile = profiles.find((item) => item.id === soloProfileId) ?? null
+    // 人设前置：单聊必选档案；群聊成员全部来自档案（后端同规则兜底）
     if (groupMode) {
-      if (memberNames.length === 0 && memberProfileIds.length === 0) {
-        setError('群聊至少要一位成员（手填或从人设库选）')
+      if (memberProfileIds.length === 0) {
+        setError('群聊至少要一位成员（从人设库选择）')
         return
       }
-    } else if (!name.trim() && !chosenProfile) {
+      await submitCreate({
+        title:
+          name.trim() ||
+          profiles.find((item) => item.id === memberProfileIds[0])?.nickname ||
+          '群聊',
+        relationship: relationship.trim(),
+        scenario_id: scenarioId,
+        member_profile_ids: memberProfileIds,
+      })
       return
     }
+    const soloProfile = chosenSoloProfile
+    if (!soloProfile) {
+      setError('请先从人设库选用一个档案')
+      return
+    }
+    await submitCreate({
+      title: `和${soloProfile.nickname}的聊天`,
+      relationship: relationship.trim(),
+      scenario_id: scenarioId,
+      profile_id: soloProfile.id,
+    })
+  }
+
+  async function submitCreate(payload: Parameters<typeof createConversation>[0]) {
     setBusy(true)
     setError(null)
     try {
-      const created = groupMode
-        ? await createConversation({
-            title:
-              name.trim() ||
-              memberNames[0] ||
-              profiles.find((item) => item.id === memberProfileIds[0])?.nickname ||
-              '群聊',
-            relationship: relationship.trim(),
-            scenario_id: scenarioId,
-            members: memberNames,
-            member_profile_ids: memberProfileIds,
-          })
-        : chosenProfile
-          ? await createConversation({
-              title: `和${chosenProfile.nickname}的聊天`,
-              relationship: relationship.trim(),
-              scenario_id: scenarioId,
-              profile_id: chosenProfile.id,
-            })
-          : await createConversation({
-              title: `和${name.trim()}的聊天`,
-              counterpart_name: name.trim(),
-              relationship: relationship.trim(),
-              scenario_id: scenarioId,
-            })
+      const created = await createConversation(payload)
       await reloadList()
       setCurrentId(created.id)
       setCreating(false)
       setName('')
-      setMembersInput('')
       setGroupMode(false)
       setSoloProfileId(null)
       setMemberProfileIds([])
@@ -244,6 +292,10 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
 
   async function send() {
     if (currentId === null || (!draft.trim() && images.length === 0)) return
+    if (chatLocked) {
+      setError('人设档案缺失，无法新增记录；请先在人设库重建同名档案')
+      return
+    }
     const wantsSpeaker = current?.is_group && role === 'other'
     if (wantsSpeaker && !speakerKey) {
       setError('请先选择发言成员')
@@ -258,10 +310,11 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
             ? 'candidate'
             : 'rewrite'
           : 'manual'
+      const text = draft.trim()
       const message = await appendMessage(
         currentId,
         role,
-        draft.trim(),
+        text,
         source,
         images.map((item) => item.materialId),
         wantsSpeaker ? speakerKey : '',
@@ -273,11 +326,118 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
         prev.forEach((item) => URL.revokeObjectURL(item.url))
         return []
       })
+      // 对方来话后自动出回复建议：五维评分 + 三条候选（按人设起草）
+      if (role === 'other') {
+        const target = wantsSpeaker ? speakerKey : ''
+        void runAutoReply(currentId, text, target, message.id)
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '保存失败')
     } finally {
       setBusy(false)
     }
+  }
+
+  /** 新开一张回复卡片并跑管线：每张卡片独立更新，快速连发也不会串台。 */
+  async function runAutoReply(
+    conversationId: number,
+    hint: string,
+    targetMember: string,
+    messageId: number | null,
+  ) {
+    const id = ++replyCardSeq.current
+    const fresh: ReplyCard = {
+      id,
+      conversationId,
+      targetMember,
+      targetName: targetMember
+        ? displayName(
+            targetMember,
+            current?.members.find((member) => member.key === targetMember)?.name ?? targetMember,
+          )
+        : '',
+      messageId,
+      hint: hint.slice(0, 24),
+      running: true,
+      plan: ['translate', 'score', 'draft', 'rank'],
+      progress: 0,
+      scores: null,
+      candidates: [],
+      blocked: null,
+      ranked: true,
+      error: null,
+      expanded: true,
+    }
+    setReplyCardsByConv((prev) => ({
+      ...prev,
+      [conversationId]: [...(prev[conversationId] ?? []).map((card) => ({ ...card, expanded: false })), fresh],
+    }))
+    try {
+      const result = await replyStream(
+        { conversation_id: conversationId, target_member: targetMember },
+        (event) => {
+          if (event.stage === 'plan') {
+            updateCard(conversationId, id, { plan: event.steps ?? [], progress: 0 })
+          } else if (event.stage === 'score_done') {
+            updateCard(conversationId, id, { scores: event.scores ?? null })
+            bumpProgress(conversationId, id)
+          } else if (event.stage === 'translate_done' || event.stage === 'draft_done' || event.stage === 'done') {
+            bumpProgress(conversationId, id)
+          }
+        },
+      )
+      updateCard(conversationId, id, {
+        scores: result.scores,
+        candidates: result.candidates,
+        blocked: result.blocked,
+        ranked: result.ranked !== false,
+        running: false,
+      })
+    } catch (err) {
+      updateCard(conversationId, id, { running: false, error: err instanceof ApiError ? err.message : '回复未生成' })
+    }
+  }
+
+  function updateCard(conversationId: number, id: number, patch: Partial<ReplyCard>) {
+    setReplyCardsByConv((prev) => ({
+      ...prev,
+      [conversationId]: (prev[conversationId] ?? []).map((card) =>
+        card.id === id ? { ...card, ...patch } : card,
+      ),
+    }))
+  }
+
+  function bumpProgress(conversationId: number, id: number) {
+    setReplyCardsByConv((prev) => ({
+      ...prev,
+      [conversationId]: (prev[conversationId] ?? []).map((card) =>
+        card.id === id ? { ...card, progress: card.progress + 1 } : card,
+      ),
+    }))
+  }
+
+  function toggleCard(id: number, expanded: boolean) {
+    if (currentId === null) return
+    updateCard(currentId, id, { expanded })
+  }
+
+  /** 点选候选：切到「我」、填入草稿，按采用推荐记录 */
+  function pickCandidate(text: string) {
+    setRole('me')
+    setDraft(text)
+    setPickedText(text)
+  }
+
+  /** 失败重试：移除失败卡，按其记录的会话与目标成员重跑管线。 */
+  function retryCard(id: number) {
+    if (currentId === null) return
+    const card = replyCards.find((item) => item.id === id)
+    if (!card || card.running) return
+    setReplyCardsByConv((prev) => ({
+      ...prev,
+      [currentId]: (prev[currentId] ?? []).filter((item) => item.id !== id),
+    }))
+    void runAutoReply(card.conversationId, card.hint, card.targetMember, card.messageId)
   }
 
   async function review(conversationId: number) {
@@ -425,9 +585,9 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
               {groupMode ? (
                 <>
                   <Field label="群名（选填）" value={name} onChange={(event) => setName(event.target.value)} />
-                  {profiles.length > 0 && (
+                  {profiles.length > 0 ? (
                     <div>
-                      <span className="mb-1 block text-[12px] text-ink-muted">从人设库选成员（可多选）</span>
+                      <span className="mb-1 block text-[12px] text-ink-muted">从人设库选成员（可多选，至少一位）</span>
                       <div className="flex flex-wrap gap-1.5">
                         {profiles.map((profile) => {
                           const picked = memberProfileIds.includes(profile.id)
@@ -444,44 +604,55 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                                 )
                               }
                             >
-                              {profile.nickname}
+                              {profile.nickname}（{CONTEXT_LABELS[profile.context]}）
                             </button>
                           )
                         })}
                       </div>
                     </div>
+                  ) : (
+                    <p className="text-[13px] leading-5 text-ink-secondary">
+                      人设库还是空的——先到「人设」页给每位成员建好人设，再回来建群聊。
+                    </p>
                   )}
-                  <Field
-                    label="成员（逗号分隔，不含自己）"
-                    value={membersInput}
-                    onChange={(event) => setMembersInput(event.target.value)}
-                  />
                 </>
-              ) : (
+              ) : profiles.length > 0 ? (
                 <>
-                  {profiles.length > 0 && (
-                    <div>
-                      <span className="mb-1 block text-[12px] text-ink-muted">从人设库选用（选填）</span>
-                      <select
-                        className="w-full rounded-[6px] border border-border px-2 py-1.5 text-[14px] text-ink"
-                        value={soloProfileId ?? ''}
-                        onChange={(event) =>
-                          setSoloProfileId(event.target.value === '' ? null : Number(event.target.value))
-                        }
-                      >
-                        <option value="">不选，手填对方</option>
-                        {profiles.map((profile) => (
-                          <option key={profile.id} value={profile.id}>
-                            {profile.nickname}（{CONTEXT_LABELS[profile.context]}）
-                          </option>
-                        ))}
-                      </select>
+                  <div>
+                    <span className="mb-1 block text-[12px] text-ink-muted">从人设库选用</span>
+                    <select
+                      className="w-full rounded-[6px] border border-border px-2 py-1.5 text-[14px] text-ink"
+                      value={soloProfileId ?? ''}
+                      onChange={(event) =>
+                        setSoloProfileId(event.target.value === '' ? null : Number(event.target.value))
+                      }
+                    >
+                      {profiles.map((profile) => (
+                        <option key={profile.id} value={profile.id}>
+                          {profile.nickname}（{CONTEXT_LABELS[profile.context]}）
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  {chosenSoloProfile && (
+                    <div className="flex items-center gap-2 rounded-[6px] bg-surface-muted px-2 py-1.5">
+                      {chosenSoloProfile.avatar_base64 ? (
+                        <img src={chosenSoloProfile.avatar_base64} alt="" className="h-8 w-8 shrink-0 rounded-full object-cover" />
+                      ) : (
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary-soft text-[14px] text-primary">
+                          {chosenSoloProfile.nickname.slice(0, 1)}
+                        </span>
+                      )}
+                      <span className="min-w-0 flex-1 truncate text-[13px] text-ink">
+                        {chosenSoloProfile.summary || '这个人设还没有速写'}
+                      </span>
                     </div>
                   )}
-                  {!soloProfileId && (
-                    <Field label="对方" value={name} onChange={(event) => setName(event.target.value)} />
-                  )}
                 </>
+              ) : (
+                <p className="text-[13px] leading-5 text-ink-secondary">
+                  人设库还是空的——先到「人设」页建一个人设，再回来开始聊天。
+                </p>
               )}
               <div>
                 <span className="mb-1 block text-[12px] text-ink-muted">场景</span>
@@ -511,7 +682,14 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                 value={relationship}
                 onChange={(event) => setRelationship(event.target.value)}
               />
-              <Button variant="primary" size="sm" loading={busy} onClick={() => void create()}>
+              <Button
+                variant="primary"
+                size="sm"
+                loading={busy}
+                disabled={groupMode ? memberProfileIds.length === 0 : !chosenSoloProfile}
+                disabledReason={groupMode ? '请先从人设库选择成员' : '请先从人设库选用档案'}
+                onClick={() => void create()}
+              >
                 创建
               </Button>
             </div>
@@ -536,7 +714,11 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                     }}
                   >
                     <span className="flex items-center gap-1.5">
-                      <span className="truncate">{item.counterpart_name || item.title}</span>
+                      <span className="truncate">
+                        {item.is_group
+                          ? item.title
+                          : displayName(item.counterpart_key, item.counterpart_name || item.title)}
+                      </span>
                       {item.is_group && (
                         <span className="shrink-0 rounded-[4px] bg-surface-muted px-1 text-[11px] text-ink-muted">群聊</span>
                       )}
@@ -576,12 +758,26 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                 ) : null
               })()}
               <span className="truncate text-[16px] font-semibold text-ink">
-                {current ? current.counterpart_name || current.title : 'HelpMe'}
+                {current
+                  ? current.is_group
+                    ? current.title
+                    : displayName(current.counterpart_key, current.counterpart_name || current.title)
+                  : 'HelpMe'}
               </span>
               {current?.is_group && (
                 <span className="shrink-0 text-[12px] text-ink-muted">
                   {current.members.length + 1} 人
                 </span>
+              )}
+              {hasPersonaPeek && (
+                <button
+                  type="button"
+                  aria-expanded={personaOpen}
+                  onClick={() => setPersonaOpen((value) => !value)}
+                  className="ml-1 shrink-0 rounded-[4px] bg-surface-muted px-1.5 py-0.5 text-[12px] text-ink-secondary hover:text-ink"
+                >
+                  人设 {personaOpen ? '▾' : '▴'}
+                </button>
               )}
             </div>
             <button
@@ -598,6 +794,48 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
               </svg>
             </button>
           </header>
+
+          {personaOpen && hasPersonaPeek && (
+            <div className="border-b border-border-subtle bg-surface-muted px-4 py-2.5">
+              <div className="flex flex-wrap gap-2">
+                {personaPeek.map(({ member, profile }) => {
+                  if (!profile) return null
+                  return (
+                    <div
+                      key={profile.key}
+                      className="flex max-w-full min-w-[240px] flex-1 items-start gap-2 rounded-[6px] border border-border bg-surface px-2.5 py-2"
+                    >
+                      {profile.avatar_base64 ? (
+                        <img src={profile.avatar_base64} alt="" className="h-9 w-9 shrink-0 rounded-full object-cover" />
+                      ) : (
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary-soft text-[14px] text-primary">
+                          {profile.nickname.slice(0, 1)}
+                        </span>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[13px] font-medium text-ink">
+                          {profile.nickname}
+                          <span className="ml-1.5 text-[11px] font-normal text-ink-muted">
+                            {CONTEXT_LABELS[profile.context]} · 置信度 {profile.confidence}%
+                          </span>
+                        </p>
+                        {profile.summary ? (
+                          <p className="mt-0.5 line-clamp-2 text-[12px] leading-5 text-ink-secondary">{profile.summary}</p>
+                        ) : (
+                          <p className="mt-0.5 text-[12px] text-ink-muted">还没有速写：到「人设」页补全画像</p>
+                        )}
+                        {profile.traits.length > 0 && (
+                          <p className="mt-0.5 truncate text-[12px] text-ink-muted" title={profile.traits.map((t) => `${t.title} ${t.text}`).join('　')}>
+                            {profile.traits.map((t) => `${t.title} ${t.text}`).join('　')}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
 
           {error && (
             <div className="px-4 pt-3">
@@ -664,7 +902,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                   ))}
                 </ul>
               )}
-              <div className="flex-1 space-y-2 overflow-y-auto px-4 py-3">
+              <div ref={streamRef} className="flex-1 space-y-2 overflow-y-auto px-4 py-3">
                 {messages.length === 0 && (
                   <EmptyState title="暂无内容" description="在下方粘贴对方的话，发送者选「对方」，然后保存。" />
                 )}
@@ -675,45 +913,75 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                   )
                   const speakerName =
                     current?.is_group && message.role === 'other' && message.speaker
-                      ? current.members.find((member) => member.key === message.speaker)?.name ??
-                        message.speaker
+                      ? displayName(
+                          message.speaker,
+                          current.members.find((member) => member.key === message.speaker)?.name ??
+                            message.speaker,
+                        )
                       : null
+                  // 锚定在这条消息上的回复建议卡片：跟在消息后面，而不是堆在流底部
+                  const anchored = replyCards.filter((card) => card.messageId === message.id)
                   return (
-                    <div
-                      key={message.id}
-                      className={`flex flex-col ${message.role === 'me' ? 'items-end' : 'items-start'}`}
-                    >
-                      {speakerName && (
-                        <span className="mb-0.5 text-[11px] text-ink-muted">{speakerName}</span>
-                      )}
-                      {message.content && (
-                        <p
-                          className={`max-w-[80%] whitespace-pre-wrap break-words rounded-[12px] px-3 py-2 text-[14px] leading-[22px] ${
-                            message.role === 'me'
-                              ? 'bg-primary-soft text-ink'
-                              : 'border border-border bg-surface text-ink'
-                          }`}
-                        >
-                          {message.content}
-                        </p>
-                      )}
-                      {imageAttachments.length > 0 && (
-                        <div className="mt-1 flex flex-wrap gap-1.5">
-                          {imageAttachments.map((attachment) => (
-                            <AttachmentThumb
-                              key={attachment.id}
-                              materialId={attachment.id}
-                              onOpen={(url) => setLightbox(url)}
-                            />
-                          ))}
-                        </div>
-                      )}
-                      {badge && (
-                        <span className="mt-0.5 text-[11px] text-ink-muted">{badge}</span>
-                      )}
+                    <div key={message.id} className="space-y-2">
+                      <div
+                        className={`flex flex-col ${message.role === 'me' ? 'items-end' : 'items-start'}`}
+                      >
+                        {speakerName && (
+                          <span className="mb-0.5 text-[11px] text-ink-muted">{speakerName}</span>
+                        )}
+                        {message.content && (
+                          <p
+                            className={`max-w-[80%] whitespace-pre-wrap break-words rounded-[12px] px-3 py-2 text-[14px] leading-[22px] ${
+                              message.role === 'me'
+                                ? 'bg-primary-soft text-ink'
+                                : 'border border-border bg-surface text-ink'
+                            }`}
+                          >
+                            {message.content}
+                          </p>
+                        )}
+                        {imageAttachments.length > 0 && (
+                          <div className="mt-1 flex flex-wrap gap-1.5">
+                            {imageAttachments.map((attachment) => (
+                              <AttachmentThumb
+                                key={attachment.id}
+                                materialId={attachment.id}
+                                onOpen={(url) => setLightbox(url)}
+                              />
+                            ))}
+                          </div>
+                        )}
+                        {badge && (
+                          <span className="mt-0.5 text-[11px] text-ink-muted">{badge}</span>
+                        )}
+                      </div>
+                      {anchored.map((card) => (
+                        <ReplyCards
+                          key={card.id}
+                          card={card}
+                          onToggle={toggleCard}
+                          onPick={pickCandidate}
+                          onRetry={retryCard}
+                        />
+                      ))}
                     </div>
                   )
                 })}
+                {replyCards.some((card) => card.messageId === null) && (
+                  <div className="space-y-2">
+                    {replyCards
+                      .filter((card) => card.messageId === null)
+                      .map((card) => (
+                        <ReplyCards
+                          key={card.id}
+                          card={card}
+                          onToggle={toggleCard}
+                          onPick={pickCandidate}
+                          onRetry={retryCard}
+                        />
+                      ))}
+                  </div>
+                )}
               </div>
               <div className="sticky bottom-0 border-t border-border bg-surface px-4 py-3 pb-[max(12px,env(safe-area-inset-bottom))]">
                 <div className="mb-2 flex gap-2">
@@ -744,7 +1012,9 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                   >
                     <option value="">请选择发言成员</option>
                     {current.members.map((member) => (
-                      <option key={member.key} value={member.key}>{member.name}</option>
+                      <option key={member.key} value={member.key}>
+                        {displayName(member.key, member.name)}
+                      </option>
                     ))}
                   </select>
                 )}
@@ -791,11 +1061,17 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                     </span>
                   </div>
                 )}
+                {chatLocked && (
+                  <Notice tone="danger">
+                    人设档案缺失（{missingProfileNames.join('、')}）：已锁定输入，先到「人设」页重建同名档案即可继续。
+                  </Notice>
+                )}
                 <textarea
                   value={draft}
                   onChange={(event) => setDraft(event.target.value)}
                   onPaste={onPaste}
                   rows={2}
+                  disabled={chatLocked}
                   placeholder={
                     visionReady === false
                       ? role === 'other'
@@ -835,8 +1111,37 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                   </button>
                 )}
                 <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
-                  <Button size="sm" onClick={() => setDecideOpen(true)}>
-                    决策
+                  {current?.is_group && (
+                    <select
+                      className="h-8 rounded-[6px] border border-border px-2 text-[13px] text-ink"
+                      value={replyTarget}
+                      aria-label="要回复哪位成员"
+                      onChange={(event) => setReplyTarget(event.target.value)}
+                    >
+                      <option value="">回复对象：自动</option>
+                      {current.members.map((member) => (
+                        <option key={member.key} value={member.key}>
+                          {displayName(member.key, member.name)}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  <Button
+                    size="sm"
+                    disabled={messages.length === 0}
+                    disabledReason="请先保存至少一条内容"
+                    onClick={() => {
+                      if (currentId === null) return
+                      const last = [...messages].reverse().find((item) => item.role === 'other')
+                      void runAutoReply(
+                        currentId,
+                        last?.content ?? '',
+                        replyTarget || last?.speaker || '',
+                        last?.id ?? null,
+                      )
+                    }}
+                  >
+                    帮我回复
                   </Button>
                   <Button
                     size="sm"
@@ -865,7 +1170,13 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                       评估这句
                     </Button>
                   )}
-                  <Button size="sm" loading={busy} disabled={!draft.trim() && images.length === 0} disabledReason="请先输入内容或贴图" onClick={() => void send()}>
+                  <Button
+                    size="sm"
+                    loading={busy}
+                    disabled={chatLocked || (!draft.trim() && images.length === 0)}
+                    disabledReason={chatLocked ? '人设档案缺失，先重建同名档案' : '请先输入内容或贴图'}
+                    onClick={() => void send()}
+                  >
                     保存
                   </Button>
                   <Button
@@ -885,13 +1196,6 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
         </section>
       </div>
       {lightbox !== null && <Lightbox url={lightbox} onClose={() => setLightbox(null)} />}
-      {decideOpen && current !== null && (
-        <QuickDecide
-          conversation={current}
-          messages={messages}
-          onClose={() => setDecideOpen(false)}
-        />
-      )}
     </div>
   )
 }

@@ -74,6 +74,11 @@ def _normalize_answers(answers: dict, questions: dict) -> dict:
     return values
 
 
+def _is_placeholder(row: PersonaProfile) -> bool:
+    """启动迁移补的占位档案：没作答、没 traits，等待用户走向导补全。"""
+    return row.answers in ("{}", "") and row.traits in ("{}", "")
+
+
 class PersonaProfileService:
     # ------------------------------------------------------------ 读
     def list_for(self, db: Session, *, owner_user_id: int) -> list[dict]:
@@ -128,7 +133,7 @@ class PersonaProfileService:
                 PersonaProfile.owner_user_id == owner_user_id, PersonaProfile.key == key
             )
         ).first()
-        if existing is not None:
+        if existing is not None and not _is_placeholder(existing):
             raise DomainError(
                 DomainErrorCode.CONFLICT, "已有同名人设，请换一个昵称", status_code=409
             )
@@ -144,21 +149,33 @@ class PersonaProfileService:
             questions=questions, values=values, nickname=nickname,
         )
 
-        row = PersonaProfile(
-            owner_user_id=owner_user_id,
-            key=key,
-            nickname=nickname,
-            avatar_base64=payload.avatar_base64 or "",
-            context=payload.context,
-            # 存清洗后的作答（score 为档位整数、choice 为枚举值），
-            # 不存原始 payload —— 将来校验放宽也不会把未消毒值写进库
-            answers=json.dumps(values, ensure_ascii=False),
-            traits=json.dumps(traits, ensure_ascii=False),
-            summary=summary,
-            confidence=0.9,  # 作答来源，置信度按自评口径
-            version=1,
-        )
-        db.add(row)
+        if existing is not None:
+            # 占位档案原地升级：key 与 id 冻结（会话靠 key 关联），回填向导内容
+            row = existing
+            row.nickname = nickname
+            row.avatar_base64 = payload.avatar_base64 or row.avatar_base64
+            row.context = payload.context
+            row.answers = json.dumps(values, ensure_ascii=False)
+            row.traits = json.dumps(traits, ensure_ascii=False)
+            row.summary = summary
+            row.confidence = 0.9  # 作答来源，置信度按自评口径
+            row.version += 1
+        else:
+            row = PersonaProfile(
+                owner_user_id=owner_user_id,
+                key=key,
+                nickname=nickname,
+                avatar_base64=payload.avatar_base64 or "",
+                context=payload.context,
+                # 存清洗后的作答（score 为档位整数、choice 为枚举值），
+                # 不存原始 payload —— 将来校验放宽也不会把未消毒值写进库
+                answers=json.dumps(values, ensure_ascii=False),
+                traits=json.dumps(traits, ensure_ascii=False),
+                summary=summary,
+                confidence=0.9,  # 作答来源，置信度按自评口径
+                version=1,
+            )
+            db.add(row)
         try:
             db.commit()
         except IntegrityError as exc:

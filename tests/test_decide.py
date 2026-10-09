@@ -13,6 +13,7 @@ from app.core.security import hash_password
 from app.domain.enums import UserRole
 from app.repositories.auth_repo import UserRepository
 from app.repositories.models import User
+from tests.profile_seed import seed_profile, user_id_by_name
 from tests.provider_setup import mark_provider_tested
 
 
@@ -365,7 +366,7 @@ def test_copy_edit_and_use_custom_scenario(
         headers=headers,
         json={
             "title": "聊天",
-            "counterpart_name": "小林",
+            "profile_id": seed_profile(db, user_id_by_name(db, "customone"), "小林"),
             "scenario_id": scenario["id"],
         },
     ).json()["id"]
@@ -442,7 +443,11 @@ def test_delete_custom_scenario_frees_conversations(
     conv_id = client.post(
         "/api/conversations",
         headers=headers,
-        json={"title": "聊天", "counterpart_name": "小林", "scenario_id": scenario["id"]},
+        json={
+            "title": "聊天",
+            "profile_id": seed_profile(db, user_id_by_name(db, "customthree"), "小林"),
+            "scenario_id": scenario["id"],
+        },
     ).json()["id"]
     removed = client.delete(f"/api/scenarios/{scenario['id']}", headers=headers)
     assert removed.status_code == 204

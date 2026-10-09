@@ -108,6 +108,35 @@ def _require_conversation(
     return row
 
 
+def _require_bound_profiles(
+    db: Session, *, owner_user_id: int, keys: list[str]
+) -> None:
+    """人设前置：会话涉及的对象/成员必须都在人设库有档案，否则拒绝写入新记录。
+
+    历史会话由启动迁移补齐占位档案；这里兜住档案被删除等漏网情况。
+    只挡写入（发消息 / 导入 / 换成员表），读取与判断不受限。
+    """
+    wanted = [key for key in keys if key]
+    if not wanted:
+        return
+    from ..repositories.models import PersonaProfile
+
+    bound = set(
+        db.scalars(
+            select(PersonaProfile.key).where(
+                PersonaProfile.owner_user_id == owner_user_id,
+                PersonaProfile.key.in_(wanted),
+            )
+        )
+    )
+    if any(key not in bound for key in wanted):
+        raise DomainError(
+            DomainErrorCode.VALIDATION_FAILED,
+            "还有成员没有建档：请先在人设库为TA建档，再继续记录",
+            status_code=422,
+        )
+
+
 # ------------------------------------------------------------------ 会话
 @router.get("", response_model=list[ConversationView])
 def list_conversations(
@@ -133,40 +162,40 @@ def create_conversation(
         ):
             raise DomainError(DomainErrorCode.NOT_FOUND, "场景不存在", status_code=404)
 
-    members = normalize_member_names(payload.members)
-    if payload.members and not members:
-        # 传了成员但全是空白 —— 用户想要群聊，不能静默降级成单聊
+    if payload.members:
+        # 人设前置（产品规则）：不再接受手填成员，群聊成员全部来自人设库
         raise DomainError(
-            DomainErrorCode.VALIDATION_FAILED, "成员名不能全是空白", status_code=422
+            DomainErrorCode.VALIDATION_FAILED,
+            "群聊成员请全部从人设库选择", status_code=422
         )
 
-    # 人设库选用：单聊整档带入；群聊成员与手输名字合并（key 去重）
+    # 人设前置：没有人设档案不能开始聊天。单聊整档带入；群聊成员全部来自档案
     if payload.profile_id is not None and payload.member_profile_ids:
         raise DomainError(
             DomainErrorCode.VALIDATION_FAILED,
             "单聊人设和群聊成员不能同时选择", status_code=422
         )
-    profile_members: list[GroupMember] = []
     solo_profile = None
     if payload.profile_id is not None:
         solo_profile = _profile_or_404(db, owner_user_id=user.id, profile_id=payload.profile_id)
-        if members:
+        members = []
+    elif payload.member_profile_ids:
+        picked: dict[str, GroupMember] = {}
+        for profile_id in payload.member_profile_ids:
+            profile = _profile_or_404(db, owner_user_id=user.id, profile_id=profile_id)
+            picked.setdefault(profile.key, GroupMember(key=profile.key, name=profile.nickname))
+        if len(picked) > MAX_GROUP_MEMBERS:
+            # 超过上限：明确拒绝，不静默砍人
             raise DomainError(
-                DomainErrorCode.VALIDATION_FAILED, "选了人设就不要再手填成员", status_code=422
+                DomainErrorCode.VALIDATION_FAILED,
+                f"群成员最多 {MAX_GROUP_MEMBERS} 人（不含自己）", status_code=422
             )
-    for profile_id in payload.member_profile_ids:
-        profile = _profile_or_404(db, owner_user_id=user.id, profile_id=profile_id)
-        profile_members.append(GroupMember(key=profile.key, name=profile.nickname))
-    merged: dict[str, GroupMember] = {}
-    for member in [*profile_members, *members]:
-        merged.setdefault(member.key, member)
-    if len(merged) > MAX_GROUP_MEMBERS:
-        # 人设成员 + 手填成员去重后仍超上限：明确拒绝，不静默砍人
+        members = list(picked.values())
+    else:
         raise DomainError(
             DomainErrorCode.VALIDATION_FAILED,
-            f"群成员最多 {MAX_GROUP_MEMBERS} 人（不含自己）", status_code=422
+            "请先从人设库选用档案再开始聊天", status_code=422
         )
-    members = list(merged.values())
 
     is_group = bool(members)
     if is_group and not payload.title.strip():
@@ -176,11 +205,8 @@ def create_conversation(
     if is_group:
         # 群聊没有单一对象：key 取群名，群级记忆挂这里
         counterpart_name, counterpart_key = "", _counterpart_key("", payload.title)
-    elif solo_profile is not None:
-        counterpart_name, counterpart_key = solo_profile.nickname, solo_profile.key
     else:
-        counterpart_name = payload.counterpart_name.strip()
-        counterpart_key = _counterpart_key(counterpart_name, payload.title)
+        counterpart_name, counterpart_key = solo_profile.nickname, solo_profile.key
 
     row = Conversation(
         owner_user_id=user.id,
@@ -237,6 +263,10 @@ def update_conversation(
             raise DomainError(
                 DomainErrorCode.VALIDATION_FAILED, "群聊至少要一位成员", status_code=422
             )
+        # 成员同样只能来自人设库：换成员表时逐个校验档案
+        _require_bound_profiles(
+            db, owner_user_id=user.id, keys=[member.key for member in members]
+        )
         # 只换成员表，不动 counterpart_key：群级记忆不受影响，
         # 被移除成员的历史消息保留原 speaker，旧消息仍可读
         row.members = json.dumps(
@@ -315,6 +345,14 @@ def append_message(
 ) -> MessageView:
     conversation = _require_conversation(
         db, owner_user_id=user.id, conversation_id=conversation_id
+    )
+    # 人设前置：无档案的会话不能新增记录（历史会话由启动迁移补齐占位档案）
+    _require_bound_profiles(
+        db,
+        owner_user_id=user.id,
+        keys=[member.key for member in parse_members(conversation.members)]
+        if conversation.is_group
+        else [conversation.counterpart_key],
     )
     attachments = _resolve_attachments(db, payload=payload, conversation=conversation, user=user)
     if not payload.content.strip() and not attachments:

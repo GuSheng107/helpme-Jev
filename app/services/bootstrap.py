@@ -195,6 +195,61 @@ def ensure_builtin_scenarios(db: Session) -> None:
     db.commit()
 
 
+def ensure_profiles_for_legacy_conversations(db: Session) -> None:
+    """人设前置规则的一次性迁移：给历史会话的对象/成员补占位档案。
+
+    规则落地前的会话靠手填名字，人设库里可能没有对应档案——没有档案
+    的会话会被写入守卫挡住。这里按会话情境直接补占位档案（answers /
+    traits 为空，判断链路会跳过空 traits 成员），幂等：已有同 key 档案
+    一律跳过，不碰用户数据；用户后续可在人设库向导里把占位档案补全。
+    """
+    from ..domain.schemas.conversation import parse_members
+    from ..repositories.models import Conversation, PersonaProfile
+    from .scenario_service import persona_context_of
+
+    wanted: dict[tuple[int, str], tuple[str, str]] = {}
+    for row in db.scalars(select(Conversation)).all():
+        context = persona_context_of(db, row)
+        if row.is_group:
+            targets = [(member.key, member.name) for member in parse_members(row.members)]
+        else:
+            targets = (
+                [(row.counterpart_key, row.counterpart_name or row.title)]
+                if row.counterpart_key
+                else []
+            )
+        for key, name in targets:
+            if key:
+                wanted.setdefault((row.owner_user_id, key), (name or key, context))
+    if not wanted:
+        return
+
+    existing = {
+        (profile.owner_user_id, profile.key)
+        for profile in db.scalars(select(PersonaProfile)).all()
+    }
+    added = False
+    for (owner_id, key), (name, context) in wanted.items():
+        if (owner_id, key) in existing:
+            continue
+        db.add(
+            PersonaProfile(
+                owner_user_id=owner_id,
+                key=key,
+                nickname=name,
+                context=context,
+                answers="{}",
+                traits="{}",
+                summary="",
+                confidence=0.0,
+                version=1,
+            )
+        )
+        added = True
+    if added:
+        db.commit()
+
+
 def bootstrap() -> None:
     """应用启动时的引导流程。"""
     # APP_SECRET 必须在启动时就校验，避免运行到一半才炸
@@ -211,3 +266,4 @@ def bootstrap() -> None:
         purge_old_call_logs(db)
         ensure_default_admin(db)
         ensure_builtin_scenarios(db)
+        ensure_profiles_for_legacy_conversations(db)

@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 from sqlalchemy.orm import Session
 
 from ..clients import jev_client
@@ -186,6 +188,28 @@ class AnalyzeService:
         conversation: Conversation,
         trace_id: str,
     ) -> dict:
+        for event in self.analyze_events(
+            db, owner_user_id=owner_user_id, conversation=conversation, trace_id=trace_id,
+        ):
+            if event["stage"] == "done":
+                return event["view"]
+        raise DomainError(
+            DomainErrorCode.INTERNAL_ERROR, "分析未完成，请重试。", status_code=500
+        )
+
+    def analyze_events(
+        self,
+        db: Session,
+        *,
+        owner_user_id: int,
+        conversation: Conversation,
+        trace_id: str,
+    ) -> Iterator[dict]:
+        """按阶段产出事件：translate_done → score_done → done(view)。
+
+        事件与真实进度一一对应，流式调用方据此推分阶段进度；
+        非流式 analyze() 取最后的 done 事件，行为不变。
+        """
         rows = _messages.list_by_conversation(
             db, conversation_id=conversation.id, limit=RECENT_MESSAGE_LIMIT
         )
@@ -236,6 +260,7 @@ class AnalyzeService:
                 "内容转换失败，请重试。",
                 status_code=502,
             )
+        yield {"stage": "translate_done"}
 
         jev_messages = [
             {
@@ -311,13 +336,15 @@ class AnalyzeService:
             )
             raise DomainError(code, "分析未完成，请重试。", status_code=502)
 
+        yield {"stage": "score_done", "scores": view["panel"]}
+
         view["trace_id"] = trace_id
         view["model"] = result.model_reported
         view["latency_ms"] = result.latency_ms
         view["message_count"] = len(rows)
         view["memory_count"] = len(memories)
         view["context_truncated"] = dropped_count(memories, summary=summary) > 0
-        return view
+        yield {"stage": "done", "view": view}
 
     def _require_provider(self, db: Session, *, owner_user_id: int, kind: str):
         chosen = _providers.repo.default_of_kind(db, owner_user_id=owner_user_id, kind=kind)

@@ -14,6 +14,7 @@ from app.domain.enums import UserRole
 from app.repositories.auth_repo import UserRepository
 from app.repositories.models import Memory, ProviderConfig, User
 from app.services.context_service import dropped_count, render_background
+from tests.profile_seed import seed_profile
 from tests.provider_setup import mark_provider_tested
 
 
@@ -104,10 +105,14 @@ def _configure(client: TestClient, headers: dict) -> None:
     mark_provider_tested(resp.json()["id"])
 
 
-def _conversation(client: TestClient, headers: dict, name: str = "小美") -> int:
+def _conversation(
+    client: TestClient, db: Session, owner_user_id: int, headers: dict, name: str = "小美"
+) -> int:
+    # 人设前置：先给对象播种档案，再引用档案建单聊
+    profile_id = seed_profile(db, owner_user_id, name)
     created = client.post(
         "/api/conversations",
-        json={"title": name, "counterpart_name": name, "relationship": "女朋友"},
+        json={"title": name, "profile_id": profile_id, "relationship": "女朋友"},
         headers=headers,
     )
     assert created.status_code == 201, created.text
@@ -124,10 +129,10 @@ def _conversation(client: TestClient, headers: dict, name: str = "小美") -> in
 def test_revert_requires_latest_first(
     client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    token, _user_id = _make_user(client, db, "orderuser")
+    token, user_id = _make_user(client, db, "orderuser")
     headers = _auth(token)
     _configure(client, headers)
-    conv_id = _conversation(client, headers)
+    conv_id = _conversation(client, db, user_id, headers)
     first_body = None
     for content in ("她喜欢可颂", "她不吃香菜"):
         monkeypatch.setattr(
@@ -149,7 +154,7 @@ def test_reflect_rejects_disabled_llm(client: TestClient, db: Session) -> None:
     token, _user_id = _make_user(client, db, "disabledmemory")
     headers = _auth(token)
     _configure(client, headers)
-    conv_id = _conversation(client, headers)
+    conv_id = _conversation(client, db, _user_id, headers)
     provider = db.query(ProviderConfig).filter_by(owner_user_id=_user_id, kind="llm").one()
     provider.is_enabled = False
     db.commit()
@@ -219,7 +224,7 @@ def test_reflect_adds_and_revert_hides_it(
     token, _user_id = _make_user(client, db, "memuser")
     headers = _auth(token)
     _configure(client, headers)
-    conv_id = _conversation(client, headers)
+    conv_id = _conversation(client, db, _user_id, headers)
     monkeypatch.setattr(
         httpx,
         "Client",
@@ -263,7 +268,7 @@ def test_reflect_does_not_overwrite_qa(
     token, user_id = _make_user(client, db, "qauser")
     headers = _auth(token)
     _configure(client, headers)
-    conv_id = _conversation(client, headers)
+    conv_id = _conversation(client, db, user_id, headers)
     qa = Memory(
         owner_user_id=user_id,
         subject="other",
@@ -328,7 +333,7 @@ def test_other_memory_does_not_leak_across_counterparts(
         )
     )
     db.commit()
-    conv_id = _conversation(client, headers, name="小美")
+    conv_id = _conversation(client, db, user_id, headers, name="小美")
     seen: dict = {}
 
     class _Capture(_Llm):

@@ -1,4 +1,4 @@
-import { api, fetchBlob, postForm } from './client'
+import { ApiError, api, fetchBlob, postForm, postStream, type ApiErrorBody } from './client'
 
 export interface ImageAttachment {
   type: 'image'
@@ -206,6 +206,60 @@ export function draftReplies(conversationId: number, decision: AnalyzeResult) {
   return api.post<{ candidates: Candidate[] }>('/api/chat/reply', {
     conversation_id: conversationId,
     decision: picked,
+  })
+}
+
+/** 自动回复卡片的评分项：面板上的一维判定（标题 + 中文结论） */
+export interface ReplyScoreItem {
+  key: string
+  title: string
+  kind: 'choice' | 'noul' | 'score' | 'missing'
+  text: string
+  tone?: 'success' | 'warning' | 'danger' | 'info'
+}
+
+/** 自动回复管线的最终结果：评分、候选、高危拦截与排序是否成功 */
+export interface ReplyStreamResult {
+  scores: ReplyScoreItem[] | null
+  candidates: Candidate[]
+  blocked: string | null
+  ranked: boolean
+}
+
+export type ReplyStreamStep = 'translate' | 'score' | 'draft' | 'rank'
+
+/** 流式回复的阶段事件：plan 先交代这次走几步，之后每完成一步推一条。 */
+export interface ReplyStreamEvent {
+  stage: 'plan' | 'translate_done' | 'score_done' | 'draft_done' | 'done' | 'error'
+  steps?: ReplyStreamStep[]
+  scores?: ReplyScoreItem[] | null
+  payload?: ReplyStreamResult
+  error?: ApiErrorBody
+}
+
+/** 一键自动回复：对面来话后解读 → 评分 → 按人设起草 → JEV 排序。 */
+export function replyStream(
+  body: { conversation_id: number; target_member?: string },
+  onEvent?: (event: ReplyStreamEvent) => void,
+): Promise<ReplyStreamResult> {
+  let answer: ReplyStreamResult | null = null
+  let failure: ApiErrorBody | null = null
+  return postStream('/api/chat/reply/stream', body, (raw) => {
+    const event = raw as ReplyStreamEvent
+    if (event.stage === 'done') {
+      answer = event.payload ?? null
+      onEvent?.(event)
+      return
+    }
+    if (event.stage === 'error') {
+      failure = event.error ?? { code: 'UNKNOWN', message: '回复未生成，请重试' }
+      return
+    }
+    onEvent?.(event)
+  }).then(() => {
+    if (failure) throw new ApiError(502, failure)
+    if (!answer) throw new ApiError(0, { code: 'UNKNOWN', message: '回复未生成，请重试' })
+    return answer
   })
 }
 

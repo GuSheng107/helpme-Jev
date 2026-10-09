@@ -16,6 +16,7 @@ from app.repositories.auth_repo import UserRepository
 from app.repositories.models import User
 from app.scenarios.persona_questions import workplace_persona_questions
 from app.scenarios.questions_workplace import workplace_questions
+from tests.profile_seed import seed_profile, user_id_by_name
 from tests.provider_setup import mark_provider_tested
 
 
@@ -272,7 +273,9 @@ def test_workplace_conversation_uses_workplace_pack(
         headers=headers,
         json={
             "title": "和张主管的聊天",
-            "counterpart_name": "张主管",
+            "profile_id": seed_profile(
+                db, user_id_by_name(db, "workplaceone"), "张主管", context="workplace"
+            ),
             "relationship": "上级",
             "scenario_id": _scenario_id(client, headers, "workplace"),
         },
@@ -311,7 +314,9 @@ def test_workplace_high_stakes_blocks_draft(
         headers=headers,
         json={
             "title": "和张主管的聊天",
-            "counterpart_name": "张主管",
+            "profile_id": seed_profile(
+                db, user_id_by_name(db, "workplacehigh"), "张主管", context="workplace"
+            ),
             "relationship": "上级",
             "scenario_id": _scenario_id(client, headers, "workplace"),
         },
@@ -341,7 +346,7 @@ def test_romance_high_danger_keeps_romance_copy(
     conv_id = client.post(
         "/api/conversations",
         headers=headers,
-        json={"title": "聊天", "counterpart_name": "小林", "relationship": "恋人"},
+        json={"title": "聊天", "profile_id": seed_profile(db, user_id_by_name(db, "romancehigh"), "小林"), "relationship": "恋人"},
     ).json()["id"]
     client.post(
         f"/api/conversations/{conv_id}/messages",
@@ -358,23 +363,26 @@ def test_romance_high_danger_keeps_romance_copy(
 
 
 # ------------------------------------------------------------------ 人设按情境分档
-def test_same_counterpoint_keeps_two_context_personas(
+def test_same_counterpart_profile_covers_both_contexts(
     client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """同一个人（同 key）横跨恋爱与职场会话：共用同一份占位档案；
+    恋爱情境的推断吸收补全它；职场情境靠**自评**（主动动作）跨情境重写同一份档案。"""
     headers = _user(client, db, "dualcontext")
     _configure(client, headers)
+    lin = seed_profile(db, user_id_by_name(db, "dualcontext"), "小林")
     # 同一个人「小林」：一个恋爱会话、一个职场会话，counterpart_key 相同
     love_id = client.post(
         "/api/conversations",
         headers=headers,
-        json={"title": "和小林的聊天", "counterpart_name": "小林", "relationship": "恋人"},
+        json={"title": "和小林的聊天", "profile_id": lin, "relationship": "恋人"},
     ).json()["id"]
     work_id = client.post(
         "/api/conversations",
         headers=headers,
         json={
             "title": "和小林的工作沟通",
-            "counterpart_name": "小林",
+            "profile_id": lin,
             "relationship": "同事",
             "scenario_id": _scenario_id(client, headers, "workplace"),
         },
@@ -394,38 +402,44 @@ def test_same_counterpoint_keeps_two_context_personas(
         json={"conversation_id": love_id, "subject": "other"},
     )
     assert built_love.status_code == 200, built_love.text
-    built_work = client.post(
+    love_keys = {item["key"] for item in built_love.json()["traits"]}
+    assert "attachment" in love_keys
+
+    # 完整档案挡纯推断：职场会话不带自评的建模被拒
+    blocked = client.post(
         "/api/personas/build",
         headers=headers,
         json={"conversation_id": work_id, "subject": "other"},
     )
+    assert blocked.status_code == 409, blocked.text
+
+    # 自评是主动动作：把档案重写为职场画像（同一行，版本 +1）
+    built_work = client.post(
+        "/api/personas/build",
+        headers=headers,
+        json={
+            "conversation_id": work_id,
+            "subject": "other",
+            "self_report": {"disc": "conscientiousness", "conflict_style": "collaborating"},
+        },
+    )
     assert built_work.status_code == 200, built_work.text
+    work_keys = {item["key"] for item in built_work.json()["traits"]}
+    assert "disc" in work_keys
 
-    key = built_love.json()["counterpart_key"]
-    assert key == built_work.json()["counterpart_key"]
+    # 仍然只有一份档案：两次建模吸收进同一行，版本从占位的 1 递增到 3
+    from sqlalchemy import select
 
-    love_view = client.get(
-        "/api/personas",
-        headers=headers,
-        params={"counterpart_key": key, "subject": "other", "context": "romance"},
-    ).json()
-    work_view = client.get(
-        "/api/personas",
-        headers=headers,
-        params={"counterpart_key": key, "subject": "other", "context": "workplace"},
-    ).json()
-    love_traits = {item["key"] for item in love_view["traits"]}
-    work_traits = {item["key"] for item in work_view["traits"]}
-    assert "attachment" in love_traits
-    assert "disc" in work_traits
-    # 两份档案各自独立，版本互不影响
-    assert love_view["version"] == 1
-    assert work_view["version"] == 1
-    # 弱科学框架必须明示
-    love_weak = {item["key"] for item in love_view["traits"] if item["weak_science"]}
-    work_weak = {item["key"] for item in work_view["traits"] if item["weak_science"]}
-    assert love_weak == {"love_language"}
-    assert work_weak == {"disc"}
+    from app.repositories.models import PersonaProfile
+
+    rows = db.scalars(
+        select(PersonaProfile).where(
+            PersonaProfile.owner_user_id == user_id_by_name(db, "dualcontext"),
+            PersonaProfile.key == "小林",
+        )
+    ).all()
+    assert len(rows) == 1
+    assert rows[0].version == 3
 
 
 # ------------------------------------------------------------------ 去性别默认
@@ -437,7 +451,7 @@ def test_import_accepts_male_and_gender_free_labels(
     conv_id = client.post(
         "/api/conversations",
         headers=headers,
-        json={"title": "聊天", "counterpart_name": "阿明", "relationship": "朋友"},
+        json={"title": "聊天", "profile_id": seed_profile(db, user_id_by_name(db, "genderfree"), "阿明"), "relationship": "朋友"},
     ).json()["id"]
     preview = client.post(
         "/api/import/chat/preview",

@@ -129,7 +129,9 @@ class PersonaService:
                 )
             target_key = member_key
             focus_name = members[member_key]
-        # 人设库档案优先：同一 key 已有档案时，推断结果会被判断链路无视，明确拒绝
+        # 人设库档案优先：完整档案挡纯推断（结果会被判断链路无视）；
+        # 占位档案由推断/自评原地补全；自评是主动动作，也允许覆盖完整档案
+        absorb_profile = None
         if subject == "other":
             profile_hit = db.scalars(
                 select(PersonaProfile).where(
@@ -138,11 +140,15 @@ class PersonaService:
                 )
             ).first()
             if profile_hit is not None:
-                raise DomainError(
-                    DomainErrorCode.CONFLICT,
-                    f"「{profile_hit.nickname}」已有人设库档案，判断时以档案为准；如需重建请先在档案里删除",
-                    status_code=409,
-                )
+                is_placeholder = profile_hit.answers in ("{}", "") and profile_hit.traits in ("{}", "")
+                if is_placeholder or self_report:
+                    absorb_profile = profile_hit
+                else:
+                    raise DomainError(
+                        DomainErrorCode.CONFLICT,
+                        f"「{profile_hit.nickname}」已有人设库档案，判断时以档案为准；如需重建请先在档案里删除",
+                        status_code=409,
+                    )
         # 档案情境可以由用户选择；题集始终取会话挂载的自定义场景。
         # persona_context_of 已把自定义场景映射到 romance / workplace，这里不可能再是 custom
         scenario_kind = kind_of(db, conversation)
@@ -188,6 +194,32 @@ class PersonaService:
         if subject == "me":
             confidence = max(confidence, SELF_REPORT_CONFIDENCE)
             sufficient = True
+        if absorb_profile is not None:
+            # 档案吸收：推断/自评结果直接写进档案（判断链路只认档案），
+            # 不再落推断表 —— 落了也会被档案遮蔽，等于无效提交。
+            # 自评是主动证据，直接视为充分；纯推断证据不足时保持原档案。
+            if self_report:
+                sufficient = True
+            if not sufficient or confidence < MIN_CONFIDENCE:
+                return {
+                    **self._profile_build_view(absorb_profile),
+                    "kept": True,
+                    "reason": "证据不足，档案保持原样",
+                }
+            if self_report:
+                absorb_profile.answers = json.dumps(self_report, ensure_ascii=False)
+            absorb_profile.traits = json.dumps(
+                _stored_traits(traits, questions), ensure_ascii=False
+            )
+            absorb_profile.confidence = confidence
+            absorb_profile.version += 1
+            db.commit()
+            db.refresh(absorb_profile)
+            return {
+                **self._profile_build_view(absorb_profile),
+                "kept": False,
+                "reason": "",
+            }
         existing = self._find(
             db,
             owner_user_id=owner_user_id,
@@ -213,6 +245,18 @@ class PersonaService:
         db.commit()
         db.refresh(row)
         return {**self._view(row), "kept": False, "reason": ""}
+
+    def _profile_build_view(self, row: PersonaProfile) -> dict:
+        """档案行的视图：形状与推断档案视图对齐，档案面板可直接渲染。"""
+        return {
+            "counterpart_key": row.key,
+            "subject": "other",
+            "context": row.context,
+            "traits": trait_items(row.traits),
+            "confidence": round(row.confidence * 100),
+            "version": row.version,
+            "updated_at": iso_utc(row.updated_at),
+        }
 
     def usage(self, db: Session, *, owner_user_id: int) -> dict:
         """候选直接采用与手动改写，只计数，不评价。"""
