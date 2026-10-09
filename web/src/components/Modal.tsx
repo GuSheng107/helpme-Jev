@@ -30,7 +30,7 @@ export default function Modal({
   describedBy,
   ariaLabel,
   initialFocusSelector,
-  overlayClassName = 'bg-[#152844]/45 backdrop-blur-[2px]',
+  overlayClassName = 'bg-ink/35 backdrop-blur-[3px]',
   className = '',
   busy = false,
   closeOnBackdrop = true,
@@ -84,7 +84,7 @@ export default function Modal({
     full: 'max-w-full',
   }
   const surfaces = {
-    card: 'rounded-[20px] border border-[#dce8f5] bg-white shadow-[0_24px_70px_rgba(14,42,78,0.24)]',
+    card: 'rounded-[18px] border border-border bg-surface shadow-xl animate-pop',
     media: 'relative bg-transparent',
   }
   const scrolls = {
@@ -95,7 +95,7 @@ export default function Modal({
 
   return createPortal(
     <div
-      className={`fixed inset-0 z-[70] flex items-center justify-center px-2 py-2 sm:px-4 sm:py-6 ${overlayClassName}`}
+      className={`fixed inset-0 z-[70] flex animate-fade-in items-center justify-center px-2 py-2 sm:px-4 sm:py-6 ${overlayClassName}`}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && closeOnBackdrop && !busy) onClose()
       }}
@@ -109,7 +109,7 @@ export default function Modal({
         aria-label={ariaLabel}
         tabIndex={-1}
         onKeyDown={handleKeyDown}
-        className={`max-h-[calc(100dvh-1rem)] sm:max-h-[90vh] outline-none ${surface === 'media' ? 'w-auto' : 'w-full'} ${sizes[size]} ${surfaces[surface]} ${scrolls[scroll]} ${className}`}
+        className={`max-h-[calc(100dvh-1rem)] outline-none sm:max-h-[90vh] ${surface === 'media' ? 'w-auto' : 'w-full'} ${sizes[size]} ${surfaces[surface]} ${scrolls[scroll]} ${className}`}
       >
         {children}
       </div>

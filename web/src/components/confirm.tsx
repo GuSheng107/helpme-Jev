@@ -1,4 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import Button from './Button'
+import { IconInfo, IconWarning } from './icons'
 import Modal from './Modal'
 
 type ConfirmTone = 'primary' | 'danger'
@@ -98,6 +100,7 @@ export function ConfirmDialog({
 }: ConfirmDialogProps) {
   const titleId = useId()
   const messageId = useId()
+  const Glyph = tone === 'danger' ? IconWarning : IconInfo
 
   return (
     <Modal
@@ -110,24 +113,39 @@ export function ConfirmDialog({
       busy={busy}
     >
       <form
-        onSubmit={(event) => { event.preventDefault(); if (!busy && !confirmDisabled) onConfirm() }}
+        onSubmit={(event) => {
+          event.preventDefault()
+          if (!busy && !confirmDisabled) onConfirm()
+        }}
         className="p-5 sm:p-6"
       >
-        <span className={`grid h-11 w-11 place-items-center rounded-[14px] ${tone === 'danger' ? 'bg-[#fff0ee] text-[#c0392b]' : 'bg-[#eaf4ff] text-[#318deb]'}`} aria-hidden>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
-            <path d="M12 8v5m0 4h.01M10.2 3.7 2.6 17a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.8 3.7a2 2 0 0 0-3.6 0Z" />
-          </svg>
+        <span
+          className={`grid h-11 w-11 place-items-center rounded-[14px] ${
+            tone === 'danger' ? 'bg-danger-soft text-danger' : 'bg-primary-soft text-primary'
+          }`}
+          aria-hidden
+        >
+          <Glyph className="h-5 w-5" />
         </span>
-        <h2 id={titleId} className="mt-4 text-[18px] font-semibold text-[#1b3658]">{title}</h2>
-        <p id={messageId} className="mt-2 text-[13px] leading-6 text-[#61758d]">{message}</p>
+        <h2 id={titleId} className="mt-4 text-[16px] font-semibold tracking-tight text-ink">
+          {title}
+        </h2>
+        <p id={messageId} className="mt-2 text-[13px] leading-6 text-ink-secondary">
+          {message}
+        </p>
         {children && <div className="mt-4">{children}</div>}
         <div className="mt-6 flex flex-wrap justify-end gap-2.5">
-          <button data-modal-initial-focus type="button" disabled={busy} onClick={onCancel} className="min-h-9 rounded-lg border border-[#dce7f4] bg-white px-4 text-[13px] font-medium text-[#4b6380] transition hover:bg-[#f5f9fd] disabled:opacity-60">
+          <Button data-modal-initial-focus type="button" disabled={busy} onClick={onCancel}>
             {cancelText}
-          </button>
-          <button type="submit" disabled={busy || confirmDisabled} className={`min-h-9 rounded-lg px-4 text-[13px] font-semibold text-white transition disabled:cursor-not-allowed disabled:opacity-60 ${tone === 'danger' ? 'bg-[#c0392b] hover:bg-[#a62e22]' : 'bg-[#318deb] hover:bg-[#267bd2]'}`}>
-            {busy ? '处理中…' : confirmText}
-          </button>
+          </Button>
+          <Button
+            type="submit"
+            variant={tone === 'danger' ? 'danger' : 'primary'}
+            loading={busy}
+            disabled={confirmDisabled}
+          >
+            {confirmText}
+          </Button>
         </div>
       </form>
     </Modal>

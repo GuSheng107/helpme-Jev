@@ -1,97 +1,202 @@
 @import 'tailwindcss';
 
 /* ============================================================
-   设计 Token —— 对齐 human-llm-gateway 的浅色业务后台风格
-   （语义变量集中定义；业务组件不得散落重复色值）
+   HelpMe JEV · 设计系统
+   浅色精品工具风（Linear / Vercel 调性）：克制、精密、耐看。
+   纪律：业务组件只引用语义 token，禁止散落原始色值。
    ============================================================ */
+
+/* ------------------------------------------------------------
+   字号刻度（全站只用这 8 级，不要再引入 12.5 / 15 / 17 这类中间值）
+   ┌ 11 · micro   大写小标签、计数、极简提示
+   ├ 12 · meta    芯片、辅助信息、按钮 sm
+   ├ 13 · small   表单标签、次要正文、密集列表
+   ├ 14 · body    正文、气泡、按钮 md
+   ├ 16 · title   卡片标题、区块标题、弹窗标题
+   ├ 20 · heading 页面标题、面板主结论
+   ├ 24 · metric  同级指标数值
+   └ 30 · display Hero 数值 / 欢迎语
+   ------------------------------------------------------------ */
 @theme {
-  /* 表面与边框：和登录页同一套蓝白 */
-  --color-page: #eef5ff;
+  /* —— 画布与表面 —— */
+  --color-canvas: #f5f7fb;
   --color-surface: #ffffff;
-  --color-surface-muted: #f4f8fd;
-  --color-border: #dbe7f5;
-  --color-border-subtle: #e8f0fa;
+  --color-surface-muted: #f4f7fc;
+  --color-surface-sunken: #edf2f9;
+  --color-surface-hover: #f1f5fb;
 
-  /* 文字三档 */
-  --color-ink: #1e293b;
-  --color-ink-secondary: #475569;
-  --color-ink-muted: #94a3b8;
+  /* —— 描边三档 —— */
+  --color-border: #e2e9f3;
+  --color-border-subtle: #edf2f9;
+  --color-border-strong: #cdd8e8;
 
-  /* 主色：登录页的蓝 */
-  --color-primary: #409eff;
-  --color-primary-hover: #337ecc;
-  --color-primary-soft: #ecf5ff;
+  /* —— 文字四档 —— */
+  --color-ink: #101d33;
+  --color-ink-secondary: #46586f;
+  --color-ink-muted: #8494a9;
+  --color-ink-faint: #aab7c8;
 
-  /* 状态色 —— 只用于表达状态与风险 */
-  --color-success: #2f7d32;
-  --color-warning: #b26a00;
-  --color-danger: #c0392b;
-  --color-info: #6b645b;
+  /* —— 主色 —— */
+  --color-primary: #2f6bff;
+  --color-primary-hover: #1f56e0;
+  --color-primary-soft: #eef3ff;
+  --color-primary-border: #d5e2ff;
 
-  /* 形状 */
-  --radius-control: 6px;
-  --radius-card: 8px;
-  --shadow-card: 0 1px 3px rgb(0 0 0 / 0.06);
+  /* —— 状态色（文字用深色，背景用 soft）—— */
+  --color-success: #0f9d63;
+  --color-success-soft: #e9f9f1;
+  --color-warning: #b7791f;
+  --color-warning-soft: #fdf5e6;
+  --color-danger: #d94a48;
+  --color-danger-soft: #fdeded;
+  --color-info: #64748b;
+  --color-info-soft: #f1f4f9;
+
+  /* —— 圆角 —— */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-2xl: 22px;
+  --radius-control: 8px;
+  --radius-card: 12px;
+
+  /* —— 阴影：多层叠加，深度细腻 —— */
+  --shadow-xs: 0 1px 2px rgb(16 29 51 / 0.05);
+  --shadow-sm: 0 1px 2px rgb(16 29 51 / 0.05), 0 2px 6px -2px rgb(16 29 51 / 0.06);
+  --shadow-md: 0 4px 14px -4px rgb(16 29 51 / 0.1), 0 2px 6px -2px rgb(16 29 51 / 0.05);
+  --shadow-lg: 0 14px 36px -12px rgb(16 29 51 / 0.18), 0 4px 12px -4px rgb(16 29 51 / 0.08);
+  --shadow-xl: 0 28px 72px -20px rgb(16 29 51 / 0.3);
+  --shadow-card: 0 1px 2px rgb(16 29 51 / 0.05), 0 2px 6px -2px rgb(16 29 51 / 0.06);
+  --shadow-ring: 0 0 0 3px rgb(47 107 255 / 0.16);
+
+  /* —— 缓动 —— */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-spring: cubic-bezier(0.34, 1.46, 0.64, 1);
+
+  /* —— 动效 —— */
+  --animate-fade-in: fade-in 0.22s var(--ease-out) both;
+  --animate-rise: rise 0.3s var(--ease-out) both;
+  --animate-pop: pop 0.2s var(--ease-spring) both;
+  --animate-slide-up: slide-up 0.32s var(--ease-out) both;
+  --animate-slide-down: slide-down 0.24s var(--ease-out) both;
+  --animate-shimmer: shimmer 1.5s linear infinite;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes pop {
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes slide-down {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes shimmer {
+  from { background-position: -200% 0; }
+  to { background-position: 200% 0; }
 }
 
 /* ============================================================
    全局基线
+   必须放在 @layer base 内：Tailwind v4 里未分层的规则会压过所有
+   utilities，导致 focus:outline-none 之类的工具类失效。
    ============================================================ */
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
 
-html,
-body,
-#root {
-  height: 100%;
-}
+  body {
+    margin: 0;
+    font-size: 14px;
+    line-height: 22px;
+    color: #101d33;
+    background-color: #f5f7fb;
+    font-family:
+      -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+      'Microsoft YaHei', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
 
-body {
-  margin: 0;
-  /* 正文 14px/22px 为基准；辅助文字用 13px/20px */
-  font-size: 14px;
-  line-height: 22px;
-  color: #1e293b;
-  background-color: #eef5ff;
-  font-family:
-    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei',
-    Roboto, 'Helvetica Neue', Arial, sans-serif;
-  -webkit-font-smoothing: antialiased;
-}
-
-/* 等宽数据：API Key / 模型 ID / traceId / 任务 ID */
-.mono {
-  font-family:
-    ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
-}
-
-/* iOS 上字号 < 16px 会触发自动放大 */
-input,
-textarea,
-select {
-  font-size: 16px;
-}
-
-/* 日期控件：日历图标始终可见，光标呈可选状态，配合 Field 的 showPicker 整框可点 */
-input[type='date'] {
-  cursor: pointer;
-}
-
-input[type='date']::-webkit-calendar-picker-indicator {
-  opacity: 1;
-  cursor: pointer;
-}
-
-@media (min-width: 640px) {
+  /* iOS 上字号 < 16px 会触发自动放大 */
   input,
   textarea,
   select {
-    font-size: 14px;
+    font-size: 16px;
   }
-}
 
-/* 焦点样式清晰（键盘可用性） */
-:focus-visible {
-  outline: 2px solid #409eff;
-  outline-offset: 1px;
+  @media (min-width: 640px) {
+    input,
+    textarea,
+    select {
+      font-size: 14px;
+    }
+  }
+
+  /* 日期/时间控件的日历图标始终可见，光标呈可选状态 */
+  input[type='date'],
+  input[type='datetime-local'],
+  input[type='time'] {
+    cursor: pointer;
+  }
+  input[type='date']::-webkit-calendar-picker-indicator,
+  input[type='datetime-local']::-webkit-calendar-picker-indicator,
+  input[type='time']::-webkit-calendar-picker-indicator {
+    opacity: 1;
+    cursor: pointer;
+  }
+
+  /* 焦点样式：键盘可达性优先；带 focus:outline-none 的控件会自行接管 */
+  :focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: rgb(47 107 255 / 0.16);
+    color: #101d33;
+  }
+
+  /* 滚动条：细、低调、悬停加深 */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #ccd7e6 transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #ccd7e6;
+    border: 3px solid transparent;
+    border-radius: 99px;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #b3c2d6;
+    background-clip: content-box;
+  }
 }
 
 /* 遵循用户动效偏好 */
@@ -100,6 +205,56 @@ input[type='date']::-webkit-calendar-picker-indicator {
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* ============================================================
+   可复用工具类（少量、语义化）
+   ============================================================ */
+@layer components {
+  /* 卡片表面：白底 + 细边 + 极轻阴影 */
+  .surface-card {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-card);
+    box-shadow: var(--shadow-card);
+  }
+
+  /* 主色渐变文本（品牌标题点缀） */
+  .grad-ink {
+    background: linear-gradient(120deg, #101d33 0%, #2f6bff 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* 极弱网格纹理（用于空状态 / 背景装饰） */
+  .grid-veil {
+    background-image:
+      linear-gradient(rgb(16 29 51 / 0.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(16 29 51 / 0.035) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+
+  /* 骨架屏 */
+  .skeleton {
+    background: linear-gradient(90deg, #eef2f8 25%, #e3eaf4 37%, #eef2f8 63%);
+    background-size: 400% 100%;
+    animation: shimmer 1.5s linear infinite;
+    border-radius: var(--radius-sm);
+  }
+}
+
+/* 数字/编号对齐：表格、ID、百分比用等宽数字 */
+@utility tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 等宽数据：API Key / 模型 ID / traceId / 任务 ID */
+@utility mono {
+  font-family:
+    ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  font-variant-numeric: tabular-nums;
 }
