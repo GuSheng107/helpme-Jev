@@ -190,7 +190,7 @@ export default function ScenarioQuestionEditor({ kind, items, onChange, disabled
 
       {kind === 'persona' && (
         <p className="text-[12px] leading-5 text-ink-muted">
-          人设题集需要一道「证据是否充足」是非题，以及至少一道选项题或评分题。
+          人设题集至少需要一道选项题或评分题。
         </p>
       )}
     </div>

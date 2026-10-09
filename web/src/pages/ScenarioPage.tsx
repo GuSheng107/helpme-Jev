@@ -7,7 +7,7 @@ import { confirmAction } from '../components/confirm'
 import { DataCard, Notice, PageBody, PageHeader, PageShell, StatusTag } from '../components/layout'
 import Modal from '../components/Modal'
 import TabNav from '../components/TabNav'
-import { CONTEXT_LABELS, traitCount } from '../data/personaCatalog'
+import { contextLabelOf, contextOfPersonaQuestions, traitCount } from '../data/personaCatalog'
 import ScenarioEditor from './ScenarioEditor'
 import { questionCount, QuestionSetView } from './ScenarioQuestions'
 
@@ -20,7 +20,7 @@ const VIEW_TABS: { key: ViewTab; label: string }[] = [
 ]
 
 function contextOf(row: CustomScenario) {
-  return row.persona_questions.includes('"disc"') ? ('workplace' as const) : ('romance' as const)
+  return contextOfPersonaQuestions(row.persona_questions)
 }
 
 export default function ScenarioPage({ user }: { user: UserSummary }) {
@@ -120,7 +120,7 @@ export default function ScenarioPage({ user }: { user: UserSummary }) {
         <div className="space-y-5">
           <ScenarioGroup
             title="系统内置"
-            description="随产品提供，覆盖最常见的两类关系"
+            description="随产品提供，覆盖恋爱与职场两类场景"
             rows={builtins}
             loading={loading}
             empty="还没有内置场景"
@@ -132,7 +132,7 @@ export default function ScenarioPage({ user }: { user: UserSummary }) {
           />
           <ScenarioGroup
             title="我的场景"
-            description="按你的关系量身定制"
+            description="自建的判断视角与语气"
             rows={mine}
             loading={loading}
             empty="还没有自建场景，可从系统场景复制一份再改。"
@@ -221,7 +221,7 @@ function ScenarioGroup({
                   <div className="flex flex-wrap items-center gap-2">
                     <h3 className="text-[14px] font-medium text-ink">{row.name}</h3>
                     <StatusTag tone={context === 'workplace' ? 'primary' : 'info'}>
-                      {CONTEXT_LABELS[context]}
+                      {contextLabelOf(context)}
                     </StatusTag>
                   </div>
                   {row.description && (
@@ -288,7 +288,7 @@ function ScenarioView({
               {row.name}
             </h2>
             <StatusTag tone={context === 'workplace' ? 'primary' : 'info'}>
-              {CONTEXT_LABELS[context]}档
+              {contextLabelOf(context)}档
             </StatusTag>
           </div>
           {row.description && (
@@ -318,7 +318,7 @@ function ScenarioView({
         {tab === 'persona' && (
           <>
             <p className="mb-3 text-[13px] leading-5 text-ink-muted">
-              人设维度来自标准档，由维度库确定性拼装，不由模型现编。
+              这些维度决定了建档时要问什么、判断时能看到什么。
             </p>
             <QuestionSetView raw={row.persona_questions} />
           </>

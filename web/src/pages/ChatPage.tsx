@@ -44,6 +44,7 @@ import {
   IconUpload,
   IconWarning,
 } from '../components/icons'
+import { contextLabelOf } from '../data/personaCatalog'
 
 interface Props {
   currentId: number | null
@@ -66,8 +67,6 @@ interface PendingImage {
 
 /** 一条消息最多带的图片数 */
 const MAX_IMAGES = 9
-
-const CONTEXT_LABELS: Record<string, string> = { romance: '恋爱', workplace: '职场' }
 
 /** 行内文字按钮：用于「为什么这么判」「跳过」这类次要动作，不抢主按钮的注意力。 */
 const LINK_CHIP =
@@ -636,7 +635,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                               }
                             >
                               {profile.nickname}
-                              <span className="ml-1 text-[11px] opacity-70">{CONTEXT_LABELS[profile.context]}</span>
+                              <span className="ml-1 text-[11px] opacity-70">{contextLabelOf(profile.context, profile.context_label)}</span>
                             </button>
                           )
                         })}
@@ -661,7 +660,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                     >
                       {profiles.map((profile) => (
                         <option key={profile.id} value={profile.id}>
-                          {profile.nickname}（{CONTEXT_LABELS[profile.context]}）
+                          {profile.nickname}（{contextLabelOf(profile.context, profile.context_label)}）
                         </option>
                       ))}
                     </select>
@@ -878,7 +877,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                         <p className="truncate text-[13px] font-medium text-ink">
                           {profile.nickname}
                           <span className="ml-1.5 text-[11px] font-normal text-ink-muted">
-                            {CONTEXT_LABELS[profile.context]} · 置信度 {profile.confidence}%
+                            {contextLabelOf(profile.context, profile.context_label)} · 置信度 {profile.confidence}%
                           </span>
                         </p>
                         {profile.summary ? (

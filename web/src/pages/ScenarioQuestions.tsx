@@ -23,7 +23,7 @@ export const typeNames: Record<QuestionType, string> = {
   score: '评分题',
 }
 const knownTitles: Record<string, string> = {
-  evidence_sufficient: '证据是否充足',
+  evidence_sufficient: '信息是否足够',
   openness: '开放性',
   conscientiousness: '尽责性',
   extraversion: '外向性',
@@ -147,7 +147,7 @@ export function serializeQuestionSet(items: QuestionItem[], kind: 'judge' | 'per
   })
   if (kind === 'persona') {
     if (items.find((item) => item.key.trim() === 'evidence_sufficient')?.type !== 'noul') {
-      throw new Error('人设题集需要“证据是否充足”是非题，编号为 evidence_sufficient')
+      throw new Error('人设题集缺少编号为 evidence_sufficient 的是非题')
     }
     if (!items.some((item) => item.key.trim() !== 'evidence_sufficient' && item.type !== 'noul')) {
       throw new Error('人设题集还需要至少一道选项题或评分题')
@@ -180,7 +180,7 @@ export function newQuestion(items: QuestionItem[], kind: 'judge' | 'persona'): Q
   return {
     id: nextQuestionId++,
     key: evidence ? 'evidence_sufficient' : `${keyBase}_${number}`,
-    title: evidence ? '证据是否充足' : '',
+    title: evidence ? '信息是否足够' : '',
     type,
     instructions: '',
     options: defaultOptions(type),
@@ -200,10 +200,12 @@ export function QuestionSetView({ raw }: { raw: string }) {
   try { items = parseQuestionSet(raw) } catch {
     return <p className="text-[13px] text-ink-muted">题集内容无法显示</p>
   }
-  if (!items.length) return <p className="text-[13px] text-ink-muted">暂无题目</p>
+  // 「信息是否足够」是判定链路内部的兜底题，不对外展示
+  const visible = items.filter((item) => item.key !== 'evidence_sufficient')
+  if (!visible.length) return <p className="text-[13px] text-ink-muted">暂无题目</p>
   return (
     <div className="space-y-2.5">
-      {items.map((item, index) => (
+      {visible.map((item, index) => (
         <details
           key={item.id}
           open={index === 0}

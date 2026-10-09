@@ -21,12 +21,17 @@ import {
 } from '../api/personas'
 import Button from '../components/Button'
 import { confirmAction } from '../components/confirm'
+import ContextPicker from '../components/ContextPicker'
 import { DataCard, EmptyState, Notice, PageBody, PageHeader, PageShell, StatusTag } from '../components/layout'
 import Modal from '../components/Modal'
 import Segmented from '../components/Segmented'
 import {
-  CONTEXT_LABELS,
-  dimensionsFor,
+  contextLabelOf,
+  CUSTOM_CONTEXT_DEFAULT_DIMENSIONS,
+  DEFAULT_CONTEXT,
+  dimensionKeysOf,
+  dimensionsOf,
+  isPresetContext,
   SCORE_LEVELS,
   type Dimension,
 } from '../data/personaCatalog'
@@ -65,7 +70,10 @@ export default function PersonaPage() {
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [currentId, setCurrentId] = useState<number | null>(null)
   const [subject, setSubject] = useState<'me' | 'other'>('other')
-  const [context, setContext] = useState<PersonaContext>('romance')
+  const [context, setContext] = useState<string>(DEFAULT_CONTEXT)
+  // 自定义档位的档位名与勾选的维度（内置档位不用这两个）
+  const [customLabel, setCustomLabel] = useState('')
+  const [customKeys, setCustomKeys] = useState<string[]>(CUSTOM_CONTEXT_DEFAULT_DIMENSIONS)
   const [persona, setPersona] = useState<PersonaView | null>(null)
   const [usage, setUsage] = useState({ adopted: 0, rewritten: 0 })
   const [text, setText] = useState('')
@@ -180,6 +188,8 @@ export default function PersonaPage() {
             effectiveSubject === 'me' ? selfAnswers : {},
             context,
             current?.is_group && effectiveSubject === 'other' ? groupSel.key : '',
+            isPresetContext(context) ? '' : customLabel.trim(),
+            dimensionKeysOf(context, customKeys),
           ),
         setRetryHint,
       )
@@ -283,14 +293,14 @@ export default function PersonaPage() {
     }
   }
 
-  const selfDimensions = dimensionsFor(context)
+  const selfDimensions = dimensionsOf(context, customKeys)
 
   return (
     <PageShell>
       <PageBody>
         <PageHeader
           title="人设"
-          description="按情境分档：恋爱与职场各一份，互不覆盖。这不是临床诊断。"
+          description="同一个人在不同档位各存一份，互不覆盖。不做临床诊断。"
           actions={
             tab === 'library' ? (
               <Button size="sm" variant="primary" onClick={() => setWizardOpen(true)}>
@@ -337,13 +347,13 @@ export default function PersonaPage() {
         {tab === 'library' && (
           <section className="space-y-4">
             <p className="text-[13px] leading-5 text-ink-muted">
-              先按维度作答、由模型生成人设速写，聊天（单聊 / 群聊）创建时直接选用。
+              选好档位、按维度作答，保存后在新建聊天时可直接选用。
             </p>
             {profiles.length === 0 ? (
               <DataCard>
                 <EmptyState
                   title="还没有人设"
-                  description="人设是判断的锚点：先给聊天对象建一份，聊天时判断会更准。"
+                  description="先给聊天对象建一份，判断时会带上 TA 的性格特点。"
                   action={
                     <Button size="sm" variant="primary" onClick={() => setWizardOpen(true)}>
                       新建人设
@@ -380,7 +390,7 @@ export default function PersonaPage() {
                           <div className="flex flex-wrap items-center gap-2">
                             <h3 className="truncate text-[14px] font-semibold text-ink">{profile.nickname}</h3>
                             <StatusTag tone={profile.context === 'workplace' ? 'primary' : 'info'}>
-                              {CONTEXT_LABELS[profile.context]}
+                              {contextLabelOf(profile.context, profile.context_label)}
                             </StatusTag>
                           </div>
                         )}
@@ -460,14 +470,6 @@ export default function PersonaPage() {
                         </option>
                       ))}
                     </select>
-                    <Segmented
-                      value={context}
-                      options={(['romance', 'workplace'] as const).map((item) => ({
-                        value: item,
-                        label: CONTEXT_LABELS[item],
-                      }))}
-                      onChange={setContext}
-                    />
                     {current?.is_group ? (
                       <select
                         className="h-9 rounded-[8px] border border-border bg-surface px-2.5 text-[14px] text-ink focus:border-primary focus:outline-none"
@@ -504,6 +506,27 @@ export default function PersonaPage() {
                     </Button>
                   </div>
 
+                  <div className="mb-4">
+                    <p className="text-[13px] font-medium text-ink-secondary">人设档</p>
+                    <div className="mt-2">
+                      <ContextPicker
+                        value={context}
+                        label={customLabel}
+                        keys={customKeys}
+                        disabled={busy}
+                        onChange={(value) => {
+                          setContext(value)
+                          setSelfAnswers({})
+                        }}
+                        onLabel={setCustomLabel}
+                        onKeys={(keys) => {
+                          setCustomKeys(keys)
+                          setSelfAnswers({})
+                        }}
+                      />
+                    </div>
+                  </div>
+
                   {effectiveSubject === 'me' && (
                     <div className="mb-4 space-y-3">
                       {selfDimensions.map((dim) => (
@@ -524,7 +547,11 @@ export default function PersonaPage() {
                       {current?.is_group
                         ? `${memberKey === 'me' ? '我' : (current.members.find((member) => member.key === memberKey)?.name ?? memberKey)}　`
                         : ''}
-                      {CONTEXT_LABELS[linkedProfile?.context ?? persona?.context ?? context]}情境
+                      {contextLabelOf(
+                        linkedProfile?.context ?? persona?.context ?? context,
+                        linkedProfile?.context_label,
+                      )}
+                      档
                     </span>
                     <span className="tabular-nums">
                       置信度 {linkedProfile?.confidence ?? persona?.confidence ?? 0}% · 版本{' '}
@@ -535,7 +562,7 @@ export default function PersonaPage() {
 
                   {linkedIsPlaceholder && (
                     <p className="mt-2 text-[13px] leading-5 text-ink-secondary">
-                      这是待补全的占位档案：点上方「补全占位档案」用对话证据补全，或到人设库用同名昵称补全。
+                      这是待补全的占位档案：点上方「补全占位档案」用这段对话补全，或到人设库用同名昵称补全。
                     </p>
                   )}
 
@@ -543,12 +570,7 @@ export default function PersonaPage() {
                     <ul className="mt-3 divide-y divide-border-subtle">
                       {(linkedProfile?.traits ?? persona?.traits ?? []).map((trait) => (
                         <li key={trait.key} className="flex items-baseline justify-between gap-3 py-2">
-                          <span className="text-[13px] text-ink-secondary">
-                            {trait.title}
-                            {trait.weak_science && (
-                              <span className="ml-1 text-[11px] text-ink-faint">证据有限</span>
-                            )}
-                          </span>
+                          <span className="text-[13px] text-ink-secondary">{trait.title}</span>
                           <span className="text-right text-[14px] text-ink">{trait.text}</span>
                         </li>
                       ))}
@@ -591,7 +613,7 @@ export default function PersonaPage() {
 
         {tab === 'import' && (
           <section className="space-y-4">
-            <DataCard title="导入聊天记录" description="粘贴过往对话，系统按说话人拆条入库，供判断参考。">
+            <DataCard title="导入聊天记录" description="粘贴过往对话，按说话人分开保存，判断时会参考。">
               <textarea
                 className="min-h-32 w-full rounded-[10px] border border-border bg-surface p-3 text-[14px] leading-6 text-ink focus:border-primary focus:outline-none focus:ring-[3px] focus:ring-primary/15"
                 placeholder={'我: 在吗\nTA: 没怎么'}
@@ -631,7 +653,7 @@ export default function PersonaPage() {
               )}
             </DataCard>
 
-            <DataCard title="导入问答" description="以 JSON 数组提供问答对，用于补充背景事实。">
+            <DataCard title="导入问答" description="用 JSON 数组补充已知的事实。">
               <textarea
                 className="min-h-24 w-full rounded-[10px] border border-border bg-surface p-3 font-mono text-[13px] leading-6 text-ink focus:border-primary focus:outline-none focus:ring-[3px] focus:ring-primary/15"
                 placeholder='[{"question":"雷区？","answer":"不要提前任"}]'
@@ -672,12 +694,14 @@ export default function PersonaPage() {
 function ProfileWizard({ onClose, onSaved }: { onClose: () => void; onSaved: () => Promise<void> }) {
   const [nickname, setNickname] = useState('')
   const [avatar, setAvatar] = useState('')
-  const [context, setContext] = useState<PersonaContext>('romance')
+  const [context, setContext] = useState<string>(DEFAULT_CONTEXT)
+  const [contextLabel, setContextLabel] = useState('')
+  const [dimensionKeys, setDimensionKeys] = useState<string[]>(CUSTOM_CONTEXT_DEFAULT_DIMENSIONS)
   const [answers, setAnswers] = useState<Record<string, string | number>>({})
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
-  const dimensions = dimensionsFor(context)
+  const dimensions = dimensionsOf(context, dimensionKeys)
   const answered = Object.keys(answers).length
 
   function onAvatarFile(file: File) {
@@ -725,6 +749,8 @@ function ProfileWizard({ onClose, onSaved }: { onClose: () => void; onSaved: () 
         nickname: nickname.trim(),
         avatar_base64: avatar,
         context,
+        context_label: isPresetContext(context) ? '' : contextLabel.trim(),
+        dimension_keys: dimensionKeysOf(context, dimensionKeys),
         answers,
       })
       await onSaved()
@@ -787,14 +813,18 @@ function ProfileWizard({ onClose, onSaved }: { onClose: () => void; onSaved: () 
 
         <div>
           <p className="mb-1.5 text-[13px] font-medium text-ink-secondary">人设档</p>
-          <Segmented
+          <ContextPicker
             value={context}
-            options={(['romance', 'workplace'] as const).map((item) => ({
-              value: item,
-              label: `${CONTEXT_LABELS[item]}档`,
-            }))}
+            label={contextLabel}
+            keys={dimensionKeys}
+            disabled={busy}
             onChange={(value) => {
               setContext(value)
+              setAnswers({})
+            }}
+            onLabel={setContextLabel}
+            onKeys={(keys) => {
+              setDimensionKeys(keys)
               setAnswers({})
             }}
           />
@@ -820,7 +850,7 @@ function ProfileWizard({ onClose, onSaved }: { onClose: () => void; onSaved: () 
         </div>
 
         <p className="text-[12px] leading-5 text-ink-muted">
-          维度来自标准人格框架（大五、依恋、爱的语言等），不做临床诊断；保存后由模型按作答生成一句速写。
+          维度取自公开的人格框架，不做临床诊断。保存后按作答生成一句速写。
         </p>
       </div>
 
@@ -852,10 +882,7 @@ function DimensionRow({
   return (
     <div className="py-3.5">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <p className="text-[13px] font-medium text-ink">
-          {dimension.title}
-          {dimension.weakScience && <span className="ml-1.5 text-[11px] font-normal text-ink-faint">证据有限</span>}
-        </p>
+        <p className="text-[13px] font-medium text-ink">{dimension.title}</p>
         <p className="text-[12px] text-ink-muted">{dimension.question}</p>
       </div>
       <div className="mt-2.5">
