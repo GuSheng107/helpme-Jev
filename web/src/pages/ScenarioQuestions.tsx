@@ -1,3 +1,5 @@
+import { IconChevronDown } from '../components/icons'
+
 export type QuestionType = 'noul' | 'choice' | 'score'
 export interface QuestionOption {
   key: string
@@ -200,32 +202,50 @@ export function QuestionSetView({ raw }: { raw: string }) {
   }
   if (!items.length) return <p className="text-[13px] text-ink-muted">暂无题目</p>
   return (
-    <div className="space-y-2">
+    <div className="space-y-2.5">
       {items.map((item, index) => (
-        <details key={item.id} open={index === 0} className="rounded-[8px] border border-border bg-surface">
-          <summary className="cursor-pointer px-3 py-3">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <span className="mr-2 text-[12px] text-ink-muted">{index + 1}.</span>
-                <span className="font-medium text-ink">{displayTitle(item)}</span>
-                {displayTitle(item) !== item.key && <span className="ml-2 break-all text-[11px] text-ink-muted">{item.key}</span>}
-              </div>
-              <span className="shrink-0 rounded bg-surface-muted px-2 py-0.5 text-[11px] text-ink-secondary">{typeNames[item.type]}</span>
-            </div>
+        <details
+          key={item.id}
+          open={index === 0}
+          className="group/q overflow-hidden rounded-[12px] border border-border bg-surface transition-colors duration-200 hover:border-border-strong open:border-border-strong"
+        >
+          <summary className="flex cursor-pointer list-none items-center gap-2.5 px-3.5 py-3 [&::-webkit-details-marker]:hidden">
+            <span className="tnum grid h-5 w-5 shrink-0 place-items-center rounded-[6px] bg-surface-muted text-[11px] font-semibold text-ink-muted transition-colors duration-200 group-open/q:bg-primary-soft group-open/q:text-primary">
+              {index + 1}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[13px] font-medium text-ink">{displayTitle(item)}</span>
+              {displayTitle(item) !== item.key && (
+                <span className="mono mt-0.5 block truncate text-[11px] text-ink-faint">{item.key}</span>
+              )}
+            </span>
+            <span className="shrink-0 rounded-[6px] bg-surface-muted px-1.5 py-0.5 text-[11px] text-ink-secondary">
+              {typeNames[item.type]}
+            </span>
+            <IconChevronDown className="h-4 w-4 shrink-0 text-ink-faint transition-transform duration-200 group-open/q:rotate-180" />
           </summary>
-          <div className="space-y-3 border-t border-border-subtle px-3 py-3 text-[13px]">
+
+          <div className="space-y-3.5 border-t border-border-subtle bg-surface-muted/40 px-3.5 py-3.5">
             <div>
-              <p className="mb-1 text-[12px] text-ink-muted">判断说明</p>
-              <p className="whitespace-pre-wrap break-words leading-5 text-ink">{item.instructions || '未填写'}</p>
+              <p className="mb-1.5 text-[11px] font-semibold tracking-[0.12em] text-ink-faint">判断说明</p>
+              <p className="whitespace-pre-wrap break-words text-[13px] leading-[22px] text-ink">
+                {item.instructions || '未填写'}
+              </p>
             </div>
             <div className="space-y-1.5">
-              <p className="text-[12px] text-ink-muted">{item.type === 'score' ? '评分档位' : '选项'}</p>
+              <p className="text-[11px] font-semibold tracking-[0.12em] text-ink-faint">
+                {item.type === 'score' ? '评分档位' : '选项'}
+                <span className="tnum ml-1.5 font-normal tracking-normal text-ink-muted">{item.options.length}</span>
+              </p>
               {item.options.map((option, optionIndex) => (
-                <div key={`${option.key}-${optionIndex}`} className="grid gap-0.5 rounded-[6px] bg-surface-muted px-3 py-2 sm:grid-cols-[minmax(120px,1fr)_minmax(0,3fr)] sm:gap-3">
-                  <span className="break-all font-medium text-ink-secondary">
-                    {option.label || (item.type === 'noul' ? option.key === 'true' ? '是' : '否' : item.type === 'score' ? `档位 ${optionIndex + 1}` : option.key)}
+                <div
+                  key={`${option.key}-${optionIndex}`}
+                  className="grid gap-x-3 gap-y-0.5 rounded-[9px] border border-border-subtle bg-surface px-3 py-2 sm:grid-cols-[minmax(120px,1fr)_minmax(0,3fr)]"
+                >
+                  <span className="break-all text-[13px] font-medium text-ink-secondary">
+                    {option.label || (item.type === 'noul' ? (option.key === 'true' ? '是' : '否') : item.type === 'score' ? `档位 ${optionIndex + 1}` : option.key)}
                   </span>
-                  <span className="whitespace-pre-wrap break-words text-ink">{option.description}</span>
+                  <span className="whitespace-pre-wrap break-words text-[13px] leading-5 text-ink">{option.description}</span>
                 </div>
               ))}
             </div>

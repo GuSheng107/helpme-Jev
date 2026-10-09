@@ -21,11 +21,22 @@ import {
 } from '../api/personas'
 import Button from '../components/Button'
 import { confirmAction } from '../components/confirm'
-import { DataCard, EmptyState, Notice, PageBody, PageHeader, PageShell } from '../components/layout'
+import { DataCard, EmptyState, Notice, PageBody, PageHeader, PageShell, StatusTag } from '../components/layout'
+import Modal from '../components/Modal'
+import Segmented from '../components/Segmented'
+import {
+  CONTEXT_LABELS,
+  dimensionsFor,
+  SCORE_LEVELS,
+  type Dimension,
+} from '../data/personaCatalog'
 
-type SelfItem =
-  | { key: string; kind: 'score'; statement: string }
-  | { key: string; kind: 'choice'; statement: string; options: [string, string][] }
+type Tab = 'library' | 'archive' | 'import'
+const TABS: { key: Tab; label: string }[] = [
+  { key: 'library', label: '人设库' },
+  { key: 'archive', label: '会话档案' },
+  { key: 'import', label: '导入数据' },
+]
 
 /** 上游瞬断自动重试：最多 2 次、间隔 10 秒，进度经 onHint 提示；非 retryable 直接抛。 */
 const RETRY_MAX = 2
@@ -49,74 +60,8 @@ async function withAutoRetry<T>(run: () => Promise<T>, onHint: (text: string) =>
   }
 }
 
-// 直接选结果：题目沿用陈述句，但选项直接给特质档位/画像，选好即最终结果。
-// score 档位 1–8 对应后端 criteria 索引；choice 为特质枚举。
-const SCORE_OPTIONS: [string, number][] = [
-  ['很低', 1],
-  ['偏低', 2],
-  ['中下', 3],
-  ['一般', 4],
-  ['中上', 5],
-  ['偏高', 6],
-  ['较高', 7],
-  ['很高', 8],
-]
-
-const ATTACHMENT_OPTIONS: [string, string][] = [
-  ['安全型：既能亲近也能独立', 'secure'],
-  ['焦虑型：常要确认对方还在意', 'anxious'],
-  ['回避型：太近了会想退开', 'avoidant'],
-  ['混乱型：时近时远，说不清', 'disorganized'],
-]
-
-const LOVE_LANGUAGE_OPTIONS: [string, string][] = [
-  ['肯定的言辞', 'words'],
-  ['精心的时刻', 'time'],
-  ['接受礼物', 'gifts'],
-  ['服务的行动', 'service'],
-  ['身体的接触', 'touch'],
-]
-
-const CONFLICT_OPTIONS: [string, string][] = [
-  ['竞争：坚持我的立场', 'competing'],
-  ['协作：一起找两边都接受的办法', 'collaborating'],
-  ['妥协：各退一步', 'compromising'],
-  ['回避：先放着，缓一缓', 'avoiding'],
-  ['迁就：我让步，息事宁人', 'accommodating'],
-]
-
-const DISC_OPTIONS: [string, string][] = [
-  ['支配型（D）：直接，先冲结果', 'dominance'],
-  ['影响型（I）：热情，靠说服和关系', 'influence'],
-  ['稳健型（S）：耐心，求稳求节奏', 'steadiness'],
-  ['严谨型（C）：严谨，细节要核对', 'conscientiousness'],
-]
-
-const SELF_FORMS: Record<PersonaContext, SelfItem[]> = {
-  romance: [
-    { key: 'openness', kind: 'score', statement: '开放性（爱尝新 vs 保守）' },
-    { key: 'conscientiousness', kind: 'score', statement: '尽责性（有计划 vs 随性）' },
-    { key: 'extraversion', kind: 'score', statement: '外向性（人来疯 vs 独处充电）' },
-    { key: 'agreeableness', kind: 'score', statement: '宜人性（随和 vs 直接）' },
-    { key: 'emotional_stability', kind: 'score', statement: '情绪稳定（稳得住 vs 易起伏）' },
-    { key: 'attachment', kind: 'choice', statement: '依恋倾向', options: ATTACHMENT_OPTIONS },
-    { key: 'love_language', kind: 'choice', statement: '爱的语言（最在意哪种被在乎）', options: LOVE_LANGUAGE_OPTIONS },
-    { key: 'conflict_style', kind: 'choice', statement: '冲突风格', options: CONFLICT_OPTIONS },
-  ],
-  workplace: [
-    { key: 'openness', kind: 'score', statement: '开放性（新工具新流程）' },
-    { key: 'conscientiousness', kind: 'score', statement: '尽责性（计划与截止）' },
-    { key: 'extraversion', kind: 'score', statement: '外向性（群体场合）' },
-    { key: 'agreeableness', kind: 'score', statement: '宜人性（协作姿态）' },
-    { key: 'emotional_stability', kind: 'score', statement: '情绪稳定（压力之下）' },
-    { key: 'disc', kind: 'choice', statement: 'DISC 工作风格', options: DISC_OPTIONS },
-    { key: 'conflict_style', kind: 'choice', statement: '冲突风格', options: CONFLICT_OPTIONS },
-  ],
-}
-
-const CONTEXT_LABELS: Record<PersonaContext, string> = { romance: '恋爱', workplace: '职场' }
-
 export default function PersonaPage() {
+  const [tab, setTab] = useState<Tab>('library')
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [currentId, setCurrentId] = useState<number | null>(null)
   const [subject, setSubject] = useState<'me' | 'other'>('other')
@@ -137,10 +82,6 @@ export default function PersonaPage() {
   // 人设库
   const [profiles, setProfiles] = useState<PersonaProfileView[]>([])
   const [wizardOpen, setWizardOpen] = useState(false)
-  const [pNickname, setPNickname] = useState('')
-  const [pAvatar, setPAvatar] = useState('')
-  const [pContext, setPContext] = useState<PersonaContext>('romance')
-  const [pAnswers, setPAnswers] = useState<Record<string, string | number>>({})
   const [editingId, setEditingId] = useState<number | null>(null)
   const [eNickname, setENickname] = useState('')
 
@@ -158,7 +99,6 @@ export default function PersonaPage() {
     current && effectiveSubject === 'other'
       ? profiles.find((item) => item.key === groupSel.key)
       : undefined
-  // 迁移占位档案（空 traits）：判断链路还没东西可认，「从对话推断」可直接吸收补全
   const linkedIsPlaceholder = Boolean(linkedProfile) && (linkedProfile?.traits.length ?? 0) === 0
 
   useEffect(() => {
@@ -170,8 +110,12 @@ export default function PersonaPage() {
         if (kind === 'workplace') setContext('workplace')
       })
       .catch(() => setError('会话未能载入'))
-    personaUsage().then(setUsage).catch(() => undefined)
-    listProfiles().then(setProfiles).catch(() => undefined)
+    personaUsage()
+      .then(setUsage)
+      .catch(() => undefined)
+    listProfiles()
+      .then(setProfiles)
+      .catch(() => undefined)
   }, [])
 
   useEffect(() => {
@@ -186,10 +130,8 @@ export default function PersonaPage() {
   useEffect(() => {
     if (!current?.is_group) return
     let cancelled = false
-    // 情境跟随恋爱 / 职场切换，和下方单份档案保持一致
     fetchPersonaBatch(current.id, context)
       .then((result) => {
-        // 快速切换会话时，慢的旧响应不能覆盖新会话的批量档案
         if (!cancelled) setBatch(result)
       })
       .catch(() => {
@@ -243,8 +185,9 @@ export default function PersonaPage() {
       )
       setPersona(built)
       setNotice(built.kept ? built.reason || '已保留原档案' : '档案已更新')
-      // 对方建模会吸收人设库占位档案：人设库卡片同步刷新
-      listProfiles().then(setProfiles).catch(() => undefined)
+      listProfiles()
+        .then(setProfiles)
+        .catch(() => undefined)
       if (current?.is_group) {
         fetchPersonaBatch(current.id, context).then(setBatch).catch(() => undefined)
       }
@@ -306,69 +249,6 @@ export default function PersonaPage() {
     }
   }
 
-  const selfItems = SELF_FORMS[context]
-  const wizardItems = SELF_FORMS[pContext]
-
-  function onProfileAvatarFile(file: File) {
-    // 现代浏览器解码 <img> 时会自动按 EXIF 方向摆正，drawImage 拿到的已是转正后的像素
-    if (!file.type.startsWith('image/')) {
-      setError('头像需要是图片文件')
-      return
-    }
-    setError(null)
-    const reader = new FileReader()
-    reader.onerror = () => setError('头像读取失败，请换一张试试')
-    reader.onload = () => {
-      const img = new Image()
-      img.onerror = () => setError('头像读取失败，请换一张试试')
-      img.onload = () => {
-        const canvas = document.createElement('canvas')
-        canvas.width = 96
-        canvas.height = 96
-        const ctx = canvas.getContext('2d')
-        if (!ctx) return
-        const scale = Math.max(96 / img.width, 96 / img.height)
-        const w = img.width * scale
-        const h = img.height * scale
-        ctx.drawImage(img, (96 - w) / 2, (96 - h) / 2, w, h)
-        setPAvatar(canvas.toDataURL('image/jpeg', 0.85))
-      }
-      img.src = String(reader.result)
-    }
-    reader.readAsDataURL(file)
-  }
-
-  async function saveProfile() {
-    if (!pNickname.trim()) {
-      setError('请先填写昵称')
-      return
-    }
-    if (Object.keys(pAnswers).length === 0) {
-      setError('请至少回答一道题')
-      return
-    }
-    setBusy(true)
-    setError(null)
-    try {
-      await createProfile({
-        nickname: pNickname.trim(),
-        avatar_base64: pAvatar,
-        context: pContext,
-        answers: pAnswers,
-      })
-      setProfiles(await listProfiles())
-      setWizardOpen(false)
-      setPNickname('')
-      setPAvatar('')
-      setPAnswers({})
-      setNotice('人设已保存，聊天里可以直接选用')
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : '人设未生成')
-    } finally {
-      setBusy(false)
-    }
-  }
-
   async function renameProfile(profile: PersonaProfileView) {
     const nickname = eNickname.trim()
     if (!nickname) return
@@ -403,352 +283,317 @@ export default function PersonaPage() {
     }
   }
 
+  const selfDimensions = dimensionsFor(context)
+
   return (
     <PageShell>
       <PageBody>
         <PageHeader
-          title="人设档案"
+          title="人设"
           description="按情境分档：恋爱与职场各一份，互不覆盖。这不是临床诊断。"
+          actions={
+            tab === 'library' ? (
+              <Button size="sm" variant="primary" onClick={() => setWizardOpen(true)}>
+                新建人设
+              </Button>
+            ) : undefined
+          }
         />
-        {current?.scenario_kind === 'custom' && (
-          <div className="mb-3"><Notice>此会话使用我的场景中的人设题；恋爱 / 职场用于区分档案和自评表。</Notice></div>
-        )}
-        {error && <Notice tone="danger">{error}</Notice>}
-        {retryHint && <div className="mb-3"><Notice tone="warning">{retryHint}</Notice></div>}
-        {notice && <div className="mb-3"><Notice tone="info">{notice}</Notice></div>}
-        <div className="space-y-4">
-            <DataCard title={`人设库${profiles.length > 0 ? `（${profiles.length}）` : ''}`}>
-              <p className="mb-3 text-[13px] text-ink-muted">
-                先答题、由语言模型生成人设，聊天（单聊 / 群聊）创建时直接选用。
-              </p>
-              {profiles.length === 0 && !wizardOpen && (
-                <p className="text-[14px] text-ink-secondary">还没有人设，点「新建人设」开始。</p>
+
+        <div className="mb-5 flex gap-1 border-b border-border">
+          {TABS.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              onClick={() => setTab(item.key)}
+              className={`relative -mb-px px-3.5 py-2.5 text-[13px] transition-colors duration-150 ${
+                tab === item.key ? 'font-semibold text-primary' : 'text-ink-secondary hover:text-ink'
+              }`}
+            >
+              {item.label}
+              {tab === item.key && (
+                <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-primary" aria-hidden />
               )}
-              {profiles.length > 0 && (
-                <ul className="mb-3 space-y-2">
-                  {profiles.map((profile) => (
-                    <li key={profile.id} className="flex items-start gap-3 rounded-[6px] bg-surface-muted px-3 py-2">
-                      {profile.avatar_base64 ? (
-                        <img
-                          src={profile.avatar_base64}
-                          alt=""
-                          className="h-10 w-10 shrink-0 rounded-full object-cover"
-                        />
-                      ) : (
-                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary-soft text-[16px] text-primary">
-                          {profile.nickname.slice(0, 1)}
-                        </span>
-                      )}
+            </button>
+          ))}
+        </div>
+
+        {error && (
+          <div className="mb-4">
+            <Notice tone="danger">{error}</Notice>
+          </div>
+        )}
+        {retryHint && (
+          <div className="mb-4">
+            <Notice tone="warning">{retryHint}</Notice>
+          </div>
+        )}
+        {notice && (
+          <div className="mb-4">
+            <Notice tone="success">{notice}</Notice>
+          </div>
+        )}
+
+        {tab === 'library' && (
+          <section className="space-y-4">
+            <p className="text-[13px] leading-5 text-ink-muted">
+              先按维度作答、由模型生成人设速写，聊天（单聊 / 群聊）创建时直接选用。
+            </p>
+            {profiles.length === 0 ? (
+              <DataCard>
+                <EmptyState
+                  title="还没有人设"
+                  description="人设是判断的锚点：先给聊天对象建一份，聊天时判断会更准。"
+                  action={
+                    <Button size="sm" variant="primary" onClick={() => setWizardOpen(true)}>
+                      新建人设
+                    </Button>
+                  }
+                />
+              </DataCard>
+            ) : (
+              <div className="grid gap-3.5 md:grid-cols-2">
+                {profiles.map((profile) => (
+                  <article
+                    key={profile.id}
+                    className="group rounded-[14px] border border-border bg-surface p-4 shadow-card transition-[box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:shadow-md"
+                  >
+                    <div className="flex items-start gap-3">
+                      <Avatar src={profile.avatar_base64} name={profile.nickname} size={44} />
                       <div className="min-w-0 flex-1">
                         {editingId === profile.id ? (
                           <div className="flex items-center gap-2">
                             <input
-                              className="w-40 rounded-[6px] border border-border px-2 py-1 text-[14px]"
+                              className="h-8 w-36 rounded-[8px] border border-border px-2.5 text-[13px] focus:border-primary focus:outline-none"
                               value={eNickname}
                               onChange={(event) => setENickname(event.target.value)}
+                              autoFocus
                             />
                             <Button size="sm" variant="primary" loading={busy} onClick={() => void renameProfile(profile)}>
                               保存
                             </Button>
-                            <Button size="sm" onClick={() => setEditingId(null)}>取消</Button>
+                            <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>
+                              取消
+                            </Button>
                           </div>
                         ) : (
-                          <p className="text-[14px] text-ink">
-                            {profile.nickname}
-                            <span className="ml-2 text-[12px] text-ink-muted">
-                              {CONTEXT_LABELS[profile.context]}　置信度 {profile.confidence}%
-                            </span>
-                          </p>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="truncate text-[14px] font-semibold text-ink">{profile.nickname}</h3>
+                            <StatusTag tone={profile.context === 'workplace' ? 'primary' : 'info'}>
+                              {CONTEXT_LABELS[profile.context]}
+                            </StatusTag>
+                          </div>
                         )}
-                        {profile.summary && (
-                          <p className="mt-0.5 text-[13px] leading-5 text-ink-secondary">{profile.summary}</p>
-                        )}
-                        {profile.traits.length > 0 && (
-                          <p className="mt-0.5 truncate text-[12px] text-ink-muted">
-                            {profile.traits.map((trait) => `${trait.title} ${trait.text}`).join('　')}
-                          </p>
-                        )}
+                        <p className="mt-1 text-[12px] tabular-nums text-ink-faint">
+                          置信度 {profile.confidence}% · 版本 {profile.version}
+                        </p>
                       </div>
-                      {editingId !== profile.id && (
-                        <div className="flex shrink-0 gap-1">
-                          <Button
-                            size="sm"
-                            onClick={() => {
-                              setEditingId(profile.id)
-                              setENickname(profile.nickname)
-                            }}
-                          >
-                            改名
-                          </Button>
-                          <Button size="sm" onClick={() => void removeProfile(profile)}>删除</Button>
-                        </div>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {!wizardOpen ? (
-                <Button size="sm" variant="primary" onClick={() => setWizardOpen(true)}>新建人设</Button>
-              ) : (
-                <div className="space-y-3 rounded-[6px] border border-border p-3">
-                  <div className="flex items-center gap-3">
-                    {pAvatar ? (
-                      <img src={pAvatar} alt="" className="h-14 w-14 rounded-full object-cover" />
-                    ) : (
-                      <span className="flex h-14 w-14 items-center justify-center rounded-full bg-surface-muted text-[12px] text-ink-muted">
-                        头像
-                      </span>
+                    </div>
+
+                    {profile.summary && (
+                      <p className="mt-3 rounded-[10px] bg-surface-muted px-3 py-2 text-[13px] leading-5 text-ink-secondary">
+                        {profile.summary}
+                      </p>
                     )}
-                    <label className="cursor-pointer text-[13px] text-primary">
-                      上传头像
-                      <input
-                        type="file"
-                        accept="image/png,image/jpeg,image/webp"
-                        className="hidden"
-                        onChange={(event) => {
-                          const file = event.target.files?.[0]
-                          event.target.value = ''
-                          if (file) onProfileAvatarFile(file)
-                        }}
-                      />
-                    </label>
-                  </div>
-                  <div>
-                    <span className="mb-1 block text-[12px] text-ink-muted">昵称</span>
-                    <input
-                      className="w-full rounded-[6px] border border-border px-2 py-1.5 text-[14px]"
-                      value={pNickname}
-                      onChange={(event) => setPNickname(event.target.value)}
-                      placeholder="给这个人设起个名字"
-                    />
-                  </div>
-                  <div>
-                    <span className="mb-1 block text-[12px] text-ink-muted">场景</span>
-                    <div className="flex rounded-[6px] border border-border p-0.5">
-                      {(['romance', 'workplace'] as const).map((item) => (
-                        <button
-                          key={item}
-                          type="button"
-                          className={`rounded-[4px] px-3 py-1 text-[13px] ${
-                            pContext === item ? 'bg-primary text-white' : 'text-ink-secondary'
-                          }`}
+
+                    {profile.traits.length > 0 && (
+                      <div className="mt-3 flex flex-wrap gap-1.5">
+                        {profile.traits.map((trait) => (
+                          <span
+                            key={trait.key}
+                            className="inline-flex items-center gap-1 rounded-[6px] border border-border-subtle px-2 py-0.5 text-[12px] text-ink-secondary"
+                          >
+                            <span className="text-ink-faint">{trait.title}</span>
+                            {trait.text}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {editingId !== profile.id && (
+                      <div className="mt-4 flex justify-end gap-1.5 opacity-70 transition-opacity duration-150 group-hover:opacity-100">
+                        <Button
+                          size="sm"
+                          variant="ghost"
                           onClick={() => {
-                            setPContext(item)
-                            setPAnswers({})
+                            setEditingId(profile.id)
+                            setENickname(profile.nickname)
                           }}
                         >
-                          {CONTEXT_LABELS[item]}
-                        </button>
+                          改名
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-danger hover:bg-danger-soft"
+                          onClick={() => void removeProfile(profile)}
+                        >
+                          删除
+                        </Button>
+                      </div>
+                    )}
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        {tab === 'archive' && (
+          <section className="space-y-4">
+            {conversations.length === 0 ? (
+              <DataCard>
+                <EmptyState title="还没有聊天对象" description="先在「聊天」页新建会话，再回来查看档案。" />
+              </DataCard>
+            ) : (
+              <>
+                <DataCard title="档案">
+                  <div className="mb-4 flex flex-wrap items-center gap-2">
+                    <select
+                      className="h-9 rounded-[8px] border border-border bg-surface px-2.5 text-[14px] text-ink focus:border-primary focus:outline-none"
+                      value={currentId ?? ''}
+                      onChange={(event) => pickConversation(Number(event.target.value))}
+                    >
+                      {conversations.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.counterpart_name || item.title}
+                        </option>
+                      ))}
+                    </select>
+                    <Segmented
+                      value={context}
+                      options={(['romance', 'workplace'] as const).map((item) => ({
+                        value: item,
+                        label: CONTEXT_LABELS[item],
+                      }))}
+                      onChange={setContext}
+                    />
+                    {current?.is_group ? (
+                      <select
+                        className="h-9 rounded-[8px] border border-border bg-surface px-2.5 text-[14px] text-ink focus:border-primary focus:outline-none"
+                        value={memberKey}
+                        onChange={(event) => setMemberKey(event.target.value)}
+                      >
+                        <option value="me">我（自评）</option>
+                        {current.members.map((member) => (
+                          <option key={member.key} value={member.key}>
+                            {member.name}（从对话推断）
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <Segmented
+                        value={subject}
+                        options={[
+                          { value: 'other', label: '对方' },
+                          { value: 'me', label: '我' },
+                        ]}
+                        onChange={setSubject}
+                      />
+                    )}
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      className="ml-auto"
+                      loading={busy}
+                      disabled={Boolean(linkedProfile) && !linkedIsPlaceholder}
+                      disabledReason="已有人设库档案，判断以档案为准；自评请切到「我」，或到人设库用同名昵称补全"
+                      onClick={() => void build()}
+                    >
+                      {effectiveSubject === 'me' ? '提交自评' : linkedIsPlaceholder ? '补全占位档案' : '从对话推断'}
+                    </Button>
+                  </div>
+
+                  {effectiveSubject === 'me' && (
+                    <div className="mb-4 space-y-3">
+                      {selfDimensions.map((dim) => (
+                        <DimensionRow
+                          key={dim.key}
+                          dimension={dim}
+                          value={selfAnswers[dim.key]}
+                          onChange={(value) =>
+                            setSelfAnswers((prev) => ({ ...prev, [dim.key]: value }))
+                          }
+                        />
                       ))}
                     </div>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-[12px] text-ink-muted">按你了解的 TA 作答（至少一题）</span>
-                    <span className={`text-[12px] ${Object.keys(pAnswers).length > 0 ? 'text-ink-muted' : 'text-ink-secondary'}`}>
-                      已答 {Object.keys(pAnswers).length}/{wizardItems.length}
+                  )}
+
+                  <div className="flex flex-wrap items-center gap-2 border-t border-border-subtle pt-3 text-[13px] text-ink-muted">
+                    <span>
+                      {current?.is_group
+                        ? `${memberKey === 'me' ? '我' : (current.members.find((member) => member.key === memberKey)?.name ?? memberKey)}　`
+                        : ''}
+                      {CONTEXT_LABELS[linkedProfile?.context ?? persona?.context ?? context]}情境
                     </span>
+                    <span className="tabular-nums">
+                      置信度 {linkedProfile?.confidence ?? persona?.confidence ?? 0}% · 版本{' '}
+                      {linkedProfile?.version ?? persona?.version ?? 0}
+                    </span>
+                    {linkedProfile && <StatusTag tone="primary">人设库档案</StatusTag>}
                   </div>
-                  <ul className="space-y-2">
-                    {wizardItems.map((item) => (
-                      <li key={item.key} className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="text-[13px] leading-5 text-ink-secondary">{item.statement}</span>
-                        <select
-                          className="rounded-[6px] border border-border px-2 py-1 text-[13px]"
-                          value={String(pAnswers[item.key] ?? '')}
-                          onChange={(event) => {
-                            const raw = event.target.value
-                            if (!raw) {
-                              setPAnswers((prev) => {
-                                const next = { ...prev }
-                                delete next[item.key]
-                                return next
-                              })
-                              return
-                            }
-                            setPAnswers((prev) => ({
-                              ...prev,
-                              [item.key]: item.kind === 'score' ? Number(raw) : raw,
-                            }))
-                          }}
-                        >
-                          <option value="">未作答</option>
-                          {item.kind === 'score'
-                            ? SCORE_OPTIONS.map(([label, value]) => (
-                                <option key={value} value={value}>{label}</option>
-                              ))
-                            : item.options.map(([label, value]) => (
-                                <option key={value} value={value}>{label}</option>
-                              ))}
-                        </select>
-                      </li>
-                    ))}
-                  </ul>
-                  <p className="text-[12px] text-ink-muted">
-                    选好就是最终画像，保存后由语言模型生成人设速写；不确定的项留空即可。
+
+                  {linkedIsPlaceholder && (
+                    <p className="mt-2 text-[13px] leading-5 text-ink-secondary">
+                      这是待补全的占位档案：点上方「补全占位档案」用对话证据补全，或到人设库用同名昵称补全。
+                    </p>
+                  )}
+
+                  {(linkedProfile?.traits ?? persona?.traits ?? []).length > 0 ? (
+                    <ul className="mt-3 divide-y divide-border-subtle">
+                      {(linkedProfile?.traits ?? persona?.traits ?? []).map((trait) => (
+                        <li key={trait.key} className="flex items-baseline justify-between gap-3 py-2">
+                          <span className="text-[13px] text-ink-secondary">
+                            {trait.title}
+                            {trait.weak_science && (
+                              <span className="ml-1 text-[11px] text-ink-faint">证据有限</span>
+                            )}
+                          </span>
+                          <span className="text-right text-[14px] text-ink">{trait.text}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mt-3 text-[13px] text-ink-muted">还没有档案内容。</p>
+                  )}
+
+                  <p className="mt-4 text-[12px] text-ink-faint">
+                    候选直接采用 {usage.adopted} 次，手动改写 {usage.rewritten} 次
                   </p>
-                  <div className="flex gap-2">
-                    <Button variant="primary" size="sm" loading={busy} onClick={() => void saveProfile()}>
-                      生成并保存
-                    </Button>
-                    <Button size="sm" onClick={() => setWizardOpen(false)}>取消</Button>
-                  </div>
-                </div>
-              )}
-            </DataCard>
-            {conversations.length === 0 ? (
-          <EmptyState title="还没有聊天对象" description="人设保存后，去聊天里新建会话并选用它。" />
-        ) : (
-            <>
-                <DataCard title="档案">
-              <div className="mb-3 flex flex-wrap items-center gap-2">
-                <select
-                  className="rounded-[6px] border border-border px-2 py-1 text-[14px]"
-                  value={currentId ?? ''}
-                  onChange={(event) => pickConversation(Number(event.target.value))}
-                >
-                  {conversations.map((item) => (
-                    <option key={item.id} value={item.id}>{item.counterpart_name || item.title}</option>
-                  ))}
-                </select>
-                <div className="flex rounded-[6px] border border-border p-0.5">
-                  {(['romance', 'workplace'] as const).map((item) => (
-                    <button
-                      key={item}
-                      type="button"
-                      className={`rounded-[4px] px-2 py-0.5 text-[13px] ${
-                        context === item ? 'bg-primary text-white' : 'text-ink-secondary'
-                      }`}
-                      onClick={() => setContext(item)}
-                    >
-                      {CONTEXT_LABELS[item]}
-                    </button>
-                  ))}
-                </div>
-                {current?.is_group ? (
-                  <select
-                    className="rounded-[6px] border border-border px-2 py-1 text-[14px]"
-                    value={memberKey}
-                    onChange={(event) => setMemberKey(event.target.value)}
-                  >
-                    <option value="me">我（自评）</option>
-                    {current.members.map((member) => (
-                      <option key={member.key} value={member.key}>{member.name}（从对话推断）</option>
-                    ))}
-                  </select>
-                ) : (
-                  <div className="flex rounded-[6px] border border-border p-0.5">
-                    {(['other', 'me'] as const).map((item) => (
-                      <button
-                        key={item}
-                        type="button"
-                        className={`rounded-[4px] px-2 py-0.5 text-[13px] ${
-                          subject === item ? 'bg-primary text-white' : 'text-ink-secondary'
-                        }`}
-                        onClick={() => setSubject(item)}
-                      >
-                        {item === 'me' ? '我' : '对方'}
-                      </button>
-                    ))}
-                  </div>
+                </DataCard>
+
+                {current?.is_group && batch && (
+                  <DataCard title={`群成员档案`} description={`共 ${batch.participants.length} 人`}>
+                    <ul className="space-y-2">
+                      {batch.participants.map((participant) => (
+                        <li key={participant.key} className="rounded-[10px] bg-surface-muted px-3.5 py-2.5">
+                          <p className="flex flex-wrap items-center gap-2 text-[14px] text-ink">
+                            {participant.name}
+                            <span className="text-[12px] tabular-nums text-ink-faint">
+                              置信度 {participant.persona.confidence}% · 版本 {participant.persona.version}
+                            </span>
+                          </p>
+                          <p className="mt-1 text-[13px] leading-5 text-ink-secondary">
+                            {participant.persona.traits.length > 0
+                              ? participant.persona.traits.map((trait) => `${trait.title} ${trait.text}`).join('　')
+                              : '还没有档案，可在上方选中后「从对话推断」'}
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="mt-3 text-[12px] text-ink-faint">共享上下文（记忆）{batch.memories.length} 条</p>
+                  </DataCard>
                 )}
-                <Button
-                  size="sm"
-                  variant="primary"
-                  loading={busy}
-                  disabled={Boolean(linkedProfile) && !linkedIsPlaceholder}
-                  disabledReason="已有人设库档案，判断以档案为准；自评请切到「我」，或到人设库向导用同名昵称补全"
-                  onClick={() => void build()}
-                >
-                  {effectiveSubject === 'me' ? '提交自评' : linkedIsPlaceholder ? '从对话推断（补全占位档案）' : '从对话推断'}
-                </Button>
-              </div>
-              {effectiveSubject === 'me' && (
-                <ul className="mb-3 space-y-2">
-                  {selfItems.map((item) => (
-                    <li key={item.key} className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-[13px] leading-5 text-ink-secondary">{item.statement}</span>
-                      <select
-                        className="rounded-[6px] border border-border px-2 py-1 text-[13px]"
-                        value={String(selfAnswers[item.key] ?? '')}
-                        onChange={(event) => {
-                          const raw = event.target.value
-                          setSelfAnswers((prev) => ({
-                            ...prev,
-                            [item.key]: item.kind === 'score' ? Number(raw) : raw,
-                          }))
-                        }}
-                      >
-                        <option value="">未作答</option>
-                        {item.kind === 'score'
-                          ? SCORE_OPTIONS.map(([label, value]) => (
-                              <option key={value} value={value}>{label}</option>
-                            ))
-                          : item.options.map(([label, value]) => (
-                              <option key={value} value={value}>{label}</option>
-                            ))}
-                      </select>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <p className="text-[13px] text-ink-muted">
-                {current?.is_group
-                  ? `${memberKey === 'me' ? '我' : current.members.find((member) => member.key === memberKey)?.name ?? memberKey}　`
-                  : ''}
-                {CONTEXT_LABELS[linkedProfile?.context ?? persona?.context ?? context]}情境　置信度 {linkedProfile?.confidence ?? persona?.confidence ?? 0}%　版本 {linkedProfile?.version ?? persona?.version ?? 0}
-                {linkedProfile && <span className="ml-2 text-primary">（人设库档案）</span>}
-              </p>
-              {linkedIsPlaceholder && (
-                <p className="text-[13px] text-ink-secondary">
-                  这是待补全的占位档案：点上方「从对话推断」用对话证据补全，或到下方人设库向导用同名昵称补全。
-                </p>
-              )}
-              <ul className="mt-2 space-y-1">
-                {(linkedProfile?.traits ?? persona?.traits ?? []).map((trait) => (
-                  <li key={trait.key} className="flex justify-between gap-2 text-[14px]">
-                    <span className="text-ink-secondary">
-                      {trait.title}
-                      {trait.weak_science && (
-                        <span className="ml-1 text-[11px] text-ink-muted">（该框架证据有限）</span>
-                      )}
-                    </span>
-                    <span className="text-ink">{trait.text}</span>
-                  </li>
-                ))}
-              </ul>
-              <p className="mt-3 text-[13px] text-ink-muted">
-                直接采用 {usage.adopted} 次，手动改写 {usage.rewritten} 次
-              </p>
-            </DataCard>
-            {current?.is_group && batch && (
-              <DataCard title={`群成员档案（${batch.participants.length} 人）`}>
-                <ul className="space-y-2">
-                  {batch.participants.map((participant) => (
-                    <li key={participant.key} className="rounded-[6px] bg-surface-muted px-3 py-2">
-                      <p className="text-[14px] text-ink">
-                        {participant.name}
-                        <span className="ml-2 text-[12px] text-ink-muted">
-                          置信度 {participant.persona.confidence}%　版本 {participant.persona.version}
-                        </span>
-                      </p>
-                      <p className="mt-0.5 text-[13px] leading-5 text-ink-secondary">
-                        {participant.persona.traits.length > 0
-                          ? participant.persona.traits
-                              .map((trait) => `${trait.title} ${trait.text}`)
-                              .join('　')
-                          : '还没有档案，可在上方选中后「从对话推断」'}
-                      </p>
-                    </li>
-                  ))}
-                </ul>
-                <p className="mt-2 text-[13px] text-ink-muted">
-                  共享上下文（记忆）{batch.memories.length} 条
-                </p>
-              </DataCard>
+              </>
             )}
-            <DataCard title="导入聊天记录">
+          </section>
+        )}
+
+        {tab === 'import' && (
+          <section className="space-y-4">
+            <DataCard title="导入聊天记录" description="粘贴过往对话，系统按说话人拆条入库，供判断参考。">
               <textarea
-                className="min-h-28 w-full rounded-[6px] border border-border p-2 text-[14px]"
+                className="min-h-32 w-full rounded-[10px] border border-border bg-surface p-3 text-[14px] leading-6 text-ink focus:border-primary focus:outline-none focus:ring-[3px] focus:ring-primary/15"
                 placeholder={'我: 在吗\nTA: 没怎么'}
                 value={text}
                 onChange={(event) => setText(event.target.value)}
@@ -757,20 +602,27 @@ export default function PersonaPage() {
                 <p className="mt-2 text-[13px] text-ink-muted">群聊按成员名识别发言归属，无需填标签</p>
               ) : (
                 <input
-                  className="mt-2 w-full rounded-[6px] border border-border px-2 py-1 text-[13px]"
-                  placeholder="对方标签（选填，逗号分隔，默认认 她 / 他 / TA，这里可以补充名字）"
+                  className="mt-2 h-9 w-full rounded-[8px] border border-border bg-surface px-3 text-[13px] text-ink focus:border-primary focus:outline-none"
+                  placeholder="对方标签（选填，逗号分隔，默认认 她 / 他 / TA）"
                   value={otherLabels}
                   onChange={(event) => setOtherLabels(event.target.value)}
                 />
               )}
-              <div className="mt-2 flex items-center gap-2">
-                <Button size="sm" loading={busy} onClick={() => void previewImport()}>预览</Button>
-                <Button size="sm" variant="primary" loading={busy} disabled={preview === null} disabledReason="请先预览" onClick={() => void confirmImport()}>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <Button size="sm" loading={busy} onClick={() => void previewImport()}>
+                  预览
+                </Button>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  loading={busy}
+                  disabled={preview === null}
+                  disabledReason="请先预览"
+                  onClick={() => void confirmImport()}
+                >
                   确认导入
                 </Button>
-                {preview === null && (
-                  <span className="text-[12px] text-ink-muted">先点「预览」，确认结果后才能导入</span>
-                )}
+                {preview === null && <span className="text-[12px] text-ink-muted">先点「预览」，确认结果后才能导入</span>}
               </div>
               {preview && (
                 <p className="mt-2 text-[13px] text-ink-secondary">
@@ -778,21 +630,358 @@ export default function PersonaPage() {
                 </p>
               )}
             </DataCard>
-            <DataCard title="导入问答">
+
+            <DataCard title="导入问答" description="以 JSON 数组提供问答对，用于补充背景事实。">
               <textarea
-                className="min-h-24 w-full rounded-[6px] border border-border p-2 text-[14px]"
+                className="min-h-24 w-full rounded-[10px] border border-border bg-surface p-3 font-mono text-[13px] leading-6 text-ink focus:border-primary focus:outline-none focus:ring-[3px] focus:ring-primary/15"
                 placeholder='[{"question":"雷区？","answer":"不要提前任"}]'
                 value={qa}
                 onChange={(event) => setQa(event.target.value)}
               />
-              <Button className="mt-2" size="sm" loading={busy} disabled={!qa.trim()} disabledReason="请先粘贴问答" onClick={() => void saveQa()}>
+              <Button
+                className="mt-3"
+                size="sm"
+                loading={busy}
+                disabled={!qa.trim()}
+                disabledReason="请先粘贴问答"
+                onClick={() => void saveQa()}
+              >
                 导入
               </Button>
             </DataCard>
-              </>
-            )}
-          </div>
+          </section>
+        )}
       </PageBody>
+
+      {wizardOpen && (
+        <ProfileWizard
+          onClose={() => setWizardOpen(false)}
+          onSaved={async () => {
+            setWizardOpen(false)
+            setProfiles(await listProfiles())
+            setNotice('人设已保存，聊天里可以直接选用')
+          }}
+        />
+      )}
     </PageShell>
+  )
+}
+
+/* ------------------------------------------------------------------ 建档向导 */
+
+function ProfileWizard({ onClose, onSaved }: { onClose: () => void; onSaved: () => Promise<void> }) {
+  const [nickname, setNickname] = useState('')
+  const [avatar, setAvatar] = useState('')
+  const [context, setContext] = useState<PersonaContext>('romance')
+  const [answers, setAnswers] = useState<Record<string, string | number>>({})
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const dimensions = dimensionsFor(context)
+  const answered = Object.keys(answers).length
+
+  function onAvatarFile(file: File) {
+    // 现代浏览器解码 <img> 时会自动按 EXIF 方向摆正，drawImage 拿到的已是转正后的像素
+    if (!file.type.startsWith('image/')) {
+      setError('头像需要是图片文件')
+      return
+    }
+    setError('')
+    const reader = new FileReader()
+    reader.onerror = () => setError('头像读取失败，请换一张试试')
+    reader.onload = () => {
+      const img = new Image()
+      img.onerror = () => setError('头像读取失败，请换一张试试')
+      img.onload = () => {
+        const canvas = document.createElement('canvas')
+        canvas.width = 96
+        canvas.height = 96
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return
+        const scale = Math.max(96 / img.width, 96 / img.height)
+        const w = img.width * scale
+        const h = img.height * scale
+        ctx.drawImage(img, (96 - w) / 2, (96 - h) / 2, w, h)
+        setAvatar(canvas.toDataURL('image/jpeg', 0.85))
+      }
+      img.src = String(reader.result)
+    }
+    reader.readAsDataURL(file)
+  }
+
+  async function save() {
+    if (!nickname.trim()) {
+      setError('请先填写昵称')
+      return
+    }
+    if (answered === 0) {
+      setError('请至少回答一道题')
+      return
+    }
+    setBusy(true)
+    setError('')
+    try {
+      await createProfile({
+        nickname: nickname.trim(),
+        avatar_base64: avatar,
+        context,
+        answers,
+      })
+      await onSaved()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '人设未生成')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal size="lg" scroll="hidden" busy={busy} onClose={onClose} labelledBy="profile-wizard-title" className="flex flex-col">
+      <div className="flex shrink-0 items-start justify-between gap-3 border-b border-border-subtle px-5 py-4">
+        <div>
+          <h2 id="profile-wizard-title" className="text-[16px] font-semibold tracking-tight text-ink">
+            新建人设
+          </h2>
+          <p className="mt-1 text-[13px] text-ink-muted">按你了解的 TA 作答，至少一题；不确定的留空即可。</p>
+        </div>
+        <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>
+          关闭
+        </Button>
+      </div>
+
+      <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-5">
+        {error && <Notice tone="danger">{error}</Notice>}
+
+        <div className="flex items-center gap-4">
+          {avatar ? (
+            <img src={avatar} alt="" className="h-14 w-14 shrink-0 rounded-full object-cover ring-1 ring-border" />
+          ) : (
+            <span className="grid h-14 w-14 shrink-0 place-items-center rounded-full bg-surface-muted text-[16px] text-ink-faint">
+              {nickname.slice(0, 1) || '头'}
+            </span>
+          )}
+          <div className="min-w-0 flex-1">
+            <label className="mb-1.5 block text-[13px] font-medium text-ink-secondary">昵称</label>
+            <input
+              className="h-9 w-full rounded-[8px] border border-border bg-surface px-3 text-[14px] text-ink focus:border-primary focus:outline-none focus:ring-[3px] focus:ring-primary/15"
+              value={nickname}
+              onChange={(event) => setNickname(event.target.value)}
+              placeholder="给这个人设起个名字"
+              autoFocus
+            />
+          </div>
+          <label className="mt-5 cursor-pointer self-start rounded-[8px] border border-border px-3 py-1.5 text-[13px] text-ink-secondary transition-colors hover:bg-surface-muted">
+            {avatar ? '换头像' : '上传头像'}
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0]
+                event.target.value = ''
+                if (file) onAvatarFile(file)
+              }}
+            />
+          </label>
+        </div>
+
+        <div>
+          <p className="mb-1.5 text-[13px] font-medium text-ink-secondary">人设档</p>
+          <Segmented
+            value={context}
+            options={(['romance', 'workplace'] as const).map((item) => ({
+              value: item,
+              label: `${CONTEXT_LABELS[item]}档`,
+            }))}
+            onChange={(value) => {
+              setContext(value)
+              setAnswers({})
+            }}
+          />
+        </div>
+
+        <div className="space-y-1">
+          <div className="flex items-center justify-between">
+            <p className="text-[13px] font-medium text-ink-secondary">按你了解的 TA 作答</p>
+            <p className="text-[12px] tabular-nums text-ink-muted">
+              已答 {answered}/{dimensions.length}
+            </p>
+          </div>
+          <div className="divide-y divide-border-subtle">
+            {dimensions.map((dim) => (
+              <DimensionRow
+                key={dim.key}
+                dimension={dim}
+                value={answers[dim.key]}
+                onChange={(value) => setAnswers((prev) => ({ ...prev, [dim.key]: value }))}
+              />
+            ))}
+          </div>
+        </div>
+
+        <p className="text-[12px] leading-5 text-ink-muted">
+          维度来自标准人格框架（大五、依恋、爱的语言等），不做临床诊断；保存后由模型按作答生成一句速写。
+        </p>
+      </div>
+
+      <div className="flex shrink-0 justify-end gap-2 border-t border-border-subtle px-5 py-3.5">
+        <Button size="sm" onClick={onClose} disabled={busy}>
+          取消
+        </Button>
+        <Button size="sm" variant="primary" loading={busy} onClick={() => void save()}>
+          生成并保存
+        </Button>
+      </div>
+    </Modal>
+  )
+}
+
+/* ------------------------------------------------------------------ 作答控件 */
+
+function DimensionRow({
+  dimension,
+  value,
+  onChange,
+  disabled,
+}: {
+  dimension: Dimension
+  value: string | number | undefined
+  onChange: (value: string | number) => void
+  disabled?: boolean
+}) {
+  return (
+    <div className="py-3.5">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <p className="text-[13px] font-medium text-ink">
+          {dimension.title}
+          {dimension.weakScience && <span className="ml-1.5 text-[11px] font-normal text-ink-faint">证据有限</span>}
+        </p>
+        <p className="text-[12px] text-ink-muted">{dimension.question}</p>
+      </div>
+      <div className="mt-2.5">
+        {dimension.type === 'score' ? (
+          <ScorePicker
+            value={typeof value === 'number' ? value : undefined}
+            disabled={disabled}
+            onChange={onChange}
+          />
+        ) : (
+          <ChoicePicker
+            dimension={dimension}
+            value={typeof value === 'string' ? value : undefined}
+            disabled={disabled}
+            onChange={onChange}
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ScorePicker({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: number | undefined
+  onChange: (value: number) => void
+  disabled?: boolean
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="flex flex-1 gap-1" role="group">
+        {SCORE_LEVELS.map((label, index) => {
+          const selected = value === index
+          const filled = value !== undefined && index < value
+          return (
+            <button
+              key={label}
+              type="button"
+              disabled={disabled}
+              title={label}
+              aria-label={label}
+              aria-pressed={selected}
+              onClick={() => onChange(index)}
+              className={`h-7 flex-1 rounded-[6px] border transition-all duration-150 ${
+                selected
+                  ? 'border-primary bg-primary shadow-xs'
+                  : filled
+                    ? 'border-primary-border bg-primary-soft'
+                    : 'border-border bg-surface hover:border-border-strong hover:bg-surface-muted'
+              } ${disabled ? 'cursor-not-allowed opacity-60' : ''}`}
+            />
+          )
+        })}
+      </div>
+      <span
+        className={`w-14 shrink-0 text-right text-[12px] tabular-nums ${
+          value === undefined ? 'text-ink-faint' : 'font-medium text-ink'
+        }`}
+      >
+        {value === undefined ? '未作答' : SCORE_LEVELS[value]}
+      </span>
+    </div>
+  )
+}
+
+function ChoicePicker({
+  dimension,
+  value,
+  onChange,
+  disabled,
+}: {
+  dimension: Dimension
+  value: string | undefined
+  onChange: (value: string) => void
+  disabled?: boolean
+}) {
+  const selected = dimension.options?.find((option) => option.value === value)
+  return (
+    <div>
+      <div className="flex flex-wrap gap-1.5" role="group">
+        {(dimension.options ?? []).map((option) => {
+          const active = value === option.value
+          return (
+            <button
+              key={option.value}
+              type="button"
+              disabled={disabled}
+              title={option.note}
+              aria-pressed={active}
+              onClick={() => onChange(option.value)}
+              className={`rounded-[8px] border px-3 py-1.5 text-[13px] transition-all duration-150 ${
+                active
+                  ? 'border-primary bg-primary-soft font-medium text-primary'
+                  : 'border-border bg-surface text-ink-secondary hover:border-border-strong hover:bg-surface-muted hover:text-ink'
+              } ${disabled ? 'cursor-not-allowed opacity-60' : ''}`}
+            >
+              {option.label}
+            </button>
+          )
+        })}
+      </div>
+      {selected && <p className="mt-2 text-[12px] text-ink-muted">{selected.note}</p>}
+    </div>
+  )
+}
+
+function Avatar({ src, name, size }: { src: string; name: string; size: number }) {
+  if (src) {
+    return (
+      <img
+        src={src}
+        alt=""
+        style={{ width: size, height: size }}
+        className="shrink-0 rounded-full object-cover ring-1 ring-border"
+      />
+    )
+  }
+  return (
+    <span
+      style={{ width: size, height: size, fontSize: size * 0.4 }}
+      className="grid shrink-0 place-items-center rounded-full bg-primary-soft font-medium text-primary"
+    >
+      {name.slice(0, 1)}
+    </span>
   )
 }
