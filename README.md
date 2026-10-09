@@ -170,7 +170,9 @@ After signing in, open **Settings → Providers**.
    - Mark it as vision-capable if it should read screenshots.
 3. Run the connection test for each provider. New providers are enabled after a successful test.
 
-The LLM is used where the workflow needs language work: translation, clarification, image description, reply drafts, and polishing. JEV remains the structured decision layer. Admins can create invitation codes and copy any visible code repeatedly from the invitation page.
+The LLM is used where the workflow needs language work: translation, clarification, image description, reply drafts, and polishing. JEV remains the structured decision layer.
+
+Native JEV reads English best, so automatic translation is on by default: Chinese input is translated into English before JEV judges it. If your JEV is self-trained and Chinese-friendly, turn off **Settings → Translation → Auto translate** and input is passed through as-is. Admins can create invitation codes and copy any visible code repeatedly from the invitation page.
 
 ## 🔧 Environment variables
 

@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
+from app.clients.http_client import reset_client
 from app.domain.enums import UserRole
 from app.repositories.auth_repo import UserRepository
 from app.repositories.models import User
@@ -249,6 +250,54 @@ def test_decide_stream_skips_bridge_for_ascii(
     assert [event["stage"] for event in events] == ["plan", "done"]
     assert events[0]["steps"] == ["decide"]
     assert all("systemone" in call["url"] for call in router.calls)
+
+
+def test_decide_stream_skips_bridge_when_auto_translate_off(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    headers = _user(client, db, "decidetoggle")
+    _configure(client, headers)
+    # 关掉自动翻译（自训练中文 JEV），开关随即在用户信息里生效
+    toggled = client.patch(
+        "/api/account/translation", headers=headers, json={"auto_translate": False}
+    )
+    assert toggled.status_code == 200, toggled.text
+    assert toggled.json()["auto_translate"] is False
+    me = client.get("/api/auth/me", headers=headers).json()
+    assert me["auto_translate"] is False
+
+    router = _DecideRouter()
+    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: router)
+    streamed = client.post(
+        "/api/decide/stream",
+        headers=headers,
+        json={"question": "现在适合提加薪吗？", "question_type": "noul", "context": "老板刚夸过我"},
+    )
+    assert streamed.status_code == 200, streamed.text
+    events = _events(streamed)
+    # 翻译关着时中文也不走翻译桥：plan 只剩决策一步，原文直通 JEV
+    assert [event["stage"] for event in events] == ["plan", "done"]
+    assert events[0]["steps"] == ["decide"]
+    assert events[-1]["payload"]["result"]["percent"] == 72
+    assert all("systemone" in call["url"] for call in router.calls)
+    jev_call = next(call for call in router.calls if "systemone" in call["url"])
+    assert jev_call["json"]["state"]["question"] == "现在适合提加薪吗？"
+    assert jev_call["json"]["state"]["context"] == "老板刚夸过我"
+
+    # 再打开开关，恢复走翻译桥
+    client.patch("/api/account/translation", headers=headers, json={"auto_translate": True})
+    router = _DecideRouter()
+    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: router)
+    reset_client()  # 共享客户端缓存着上一个假路由，重置后才会拿到新 router
+    streamed = client.post(
+        "/api/decide/stream",
+        headers=headers,
+        json={"question": "现在适合提加薪吗？", "question_type": "noul"},
+    )
+    assert streamed.status_code == 200, streamed.text
+    events = _events(streamed)
+    assert events[0]["steps"] == ["translate", "decide"]
+    assert any("systemone" not in call["url"] for call in router.calls)
 
 
 def test_decide_stream_validates_before_opening_stream(

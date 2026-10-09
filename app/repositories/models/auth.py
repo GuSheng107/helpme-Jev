@@ -33,6 +33,8 @@ class User(Base, TimestampMixin):
     disabled_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     avatar_base64: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # 自动翻译开关：原生 JEV 对中文不友好，默认开；自训练中文 JEV 可关
+    auto_translate: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     sessions: Mapped[list["AuthSession"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"

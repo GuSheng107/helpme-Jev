@@ -2,7 +2,8 @@
 
 产品约束（DESIGN.md §8.7）：
 - 只有默认 LLM ``supports_vision`` 时图片才可用 —— **系统不做任何 OCR**，
-  原图以 data URL 交给多模态 LLM 读，读出的英文描述进注释翻译管线；
+  原图以 data URL 交给多模态 LLM 读，读出的描述进注释翻译管线
+  （自动翻译关闭时用中文描述，直通给中文 JEV）；
 - PNG / JPEG / WEBP，单张 ≤ 4MB，一条消息最多 9 张。
 """
 
@@ -30,6 +31,11 @@ _DESCRIBE_PROMPT = """You read chat screenshots for a decision model that only r
 Describe what is visible: who is talking (if determinable), the key readable content translated
 into English, and the overall tone. Do not invent anything you cannot see.
 Keep it under 3 sentences. Return JSON: {"description": "..."}"""
+
+# 自动翻译关闭（自训练中文 JEV）时改用中文描述，与直通的中文正文保持一致
+_DESCRIBE_PROMPT_ZH = """你在为只读中文的决策模型读聊天截图。
+描述画面内容：谁在说话（若能判断）、可读的关键内容（保持原文，不要翻译）、整体语气。
+不要编造看不到的东西。控制在 3 句以内。返回 JSON：{"description": "..."}"""
 
 
 def _extension(mime: str) -> str:
@@ -104,12 +110,14 @@ def image_context_contents(
     rows,
     owner_user_id: int,
     trace_id: str = "",
+    describe_english: bool = True,
 ) -> list[str]:
     """消息正文 + 附件图片的多模态描述。
 
     仅当默认 LLM 支持看图时读图；读出的描述以 ``[attached image: …]``
     追加在正文后，走同一条注释翻译管线进 JEV。不支持看图或读失败时
-    原样返回正文（不阻塞主流程）。
+    原样返回正文（不阻塞主流程）。自动翻译关闭时用中文描述，
+    与直通给 JEV 的中文正文保持一致。
     """
     contents: list[str] = []
     for row in rows:
@@ -135,7 +143,7 @@ def image_context_contents(
             model=llm.model,
             protocol=llm.protocol,
             messages=[
-                {"role": "system", "content": _DESCRIBE_PROMPT},
+                {"role": "system", "content": _DESCRIBE_PROMPT if describe_english else _DESCRIBE_PROMPT_ZH},
                 {
                     "role": "user",
                     "content": [

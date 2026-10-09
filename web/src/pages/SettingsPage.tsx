@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { ApiError } from '../api/client'
-import { avatarDataUrl, changePassword, updateAvatar, updateProfile, type UserSummary } from '../api/auth'
+import { avatarDataUrl, changePassword, updateAutoTranslate, updateAvatar, updateProfile, type UserSummary } from '../api/auth'
 import { deleteAccount, exportAccountData } from '../api/logs'
 import {
   createProvider,
@@ -273,6 +273,8 @@ export default function SettingsPage({ user, onUserChange, onLogout }: Props) {
             />
           ))}
 
+          <TranslationCard user={user} onUserChange={onUserChange} />
+
           <DataCard title="数据与账号" description="导出留档，或彻底注销账号。">
             <div className="divide-y divide-border-subtle">
               <div className="flex flex-wrap items-center justify-between gap-3 pb-4">
@@ -324,6 +326,51 @@ export default function SettingsPage({ user, onUserChange, onLogout }: Props) {
 }
 
 const MAX_AVATAR_BYTES = 1024 * 1024
+
+/** 自动翻译开关：原生 JEV 对中文不友好，默认开；自训练中文 JEV 的用户可关。 */
+function TranslationCard({
+  user,
+  onUserChange,
+}: {
+  user: UserSummary
+  onUserChange: (user: UserSummary) => void
+}) {
+  const [busy, setBusy] = useState(false)
+
+  async function toggle(next: boolean) {
+    setBusy(true)
+    try {
+      onUserChange(await updateAutoTranslate(next))
+      toast(next ? '已开启自动翻译' : '已关闭自动翻译')
+    } catch (err) {
+      toastError(err, '保存失败')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <DataCard title="翻译" description="中文输入交给 JEV 判断前，是否先由语言模型译成英文。">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[14px] font-medium text-ink">自动翻译</p>
+          <p className="mt-0.5 max-w-xl text-[13px] leading-5 text-ink-muted">
+            原生 JEV 对中文并不友好，建议保持开启；如果你的 JEV 是自己训练的中文模型，可以关闭。
+          </p>
+        </div>
+        <label className="flex shrink-0 cursor-pointer items-center gap-2 text-[13px] text-ink-secondary">
+          <span>{user.auto_translate ? '已开启' : '已关闭'}</span>
+          <Switch
+            checked={user.auto_translate}
+            disabled={busy}
+            label={user.auto_translate ? '关闭自动翻译' : '开启自动翻译'}
+            onChange={(next) => void toggle(next)}
+          />
+        </label>
+      </div>
+    </DataCard>
+  )
+}
 
 function AccountCard({
   user,

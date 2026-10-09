@@ -124,6 +124,22 @@ def update_avatar(
     return to_summary(user)
 
 
+class TranslationPreferenceRequest(StrictModel):
+    auto_translate: bool
+
+
+@router.patch("/translation", response_model=UserSummary)
+def update_translation_preference(
+    payload: TranslationPreferenceRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_active_user),
+) -> UserSummary:
+    """自动翻译开关：关闭后中文原样交给 JEV（自训练中文模型适用）。"""
+    user.auto_translate = payload.auto_translate
+    db.commit()
+    return to_summary(user)
+
+
 class AccountDeleteRequest(StrictModel):
     password: str = Field(min_length=1, max_length=128)
 
