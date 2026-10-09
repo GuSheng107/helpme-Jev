@@ -14,10 +14,12 @@ import {
 } from '../api/providers'
 import Button from '../components/Button'
 import { ConfirmDialog, confirmAction } from '../components/confirm'
+import Field, { controlClass } from '../components/Field'
 import Modal from '../components/Modal'
+import Switch from '../components/Switch'
 import { toast, toastError } from '../components/toast'
-import Field from '../components/Field'
-import { DataCard, EmptyState, Notice, PageBody, PageHeader, PageShell, StatusTag } from '../components/layout'
+import { DataCard, EmptyState, PageBody, PageHeader, PageShell, StatusTag } from '../components/layout'
+import { IconDecide, IconSparkle } from '../components/icons'
 import { formatLocalDate } from '../utils/datetime'
 
 interface Props {
@@ -38,18 +40,28 @@ interface FormState {
   context_window_tokens: number
 }
 
-const COPY: Record<ProviderKind, { title: string; address: string; model: string }> = {
+const COPY: Record<ProviderKind, { title: string; role: string; address: string; model: string }> = {
   llm: {
     title: '语言模型',
+    role: '起草回复、润色与翻译走这里',
     address: 'https://api.example.com/v1/chat/completions',
     model: 'gpt-4o-mini',
   },
   jev: {
     title: '决策模型',
+    role: '判断意图、评分与排序走这里',
     address: 'https://api.typesafe.ai/v1/systemone',
     model: 'jev-latest',
   },
 }
+
+const PROTOCOL_LABELS: Record<FormState['protocol'], string> = {
+  openai: 'OpenAI',
+  openai_responses: 'OpenAI Responses',
+  anthropic: 'Anthropic',
+}
+
+const CONTEXT_PRESETS: [string, number][] = [['128K', 131072], ['256K', 262144], ['1M', 1048576]]
 
 function blank(kind: ProviderKind): FormState {
   return {
@@ -63,6 +75,12 @@ function blank(kind: ProviderKind): FormState {
     supports_vision: false,
     context_window_tokens: 64000,
   }
+}
+
+/** 64000 → 63K，131072 → 128K，1048576 → 1M */
+function formatTokens(value: number): string {
+  if (value >= 1048576 && value % 1048576 === 0) return `${value / 1048576}M`
+  return `${Math.round(value / 1024)}K`
 }
 
 /** 设置：语言模型和决策模型完全分开，下面只留账号自己的数据操作。 */
@@ -216,11 +234,12 @@ export default function SettingsPage({ user, onUserChange, onLogout }: Props) {
   return (
     <PageShell>
       <PageBody className="flex h-full max-h-full min-h-0 w-full flex-col !py-0">
-        <div className="pt-6">
-          <PageHeader title="设置" description="账号、语言模型和决策模型。" />
+        <div className="pt-6 sm:pt-8">
+          <PageHeader title="设置" description="账号资料、两个模型的连接，以及你自己的数据。" />
         </div>
-        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pb-6">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pb-6 sm:pb-8">
           <AccountCard user={user} onUserChange={onUserChange} />
+
           {(['llm', 'jev'] as const).map((kind) => (
             <ProviderSection
               key={kind}
@@ -254,29 +273,36 @@ export default function SettingsPage({ user, onUserChange, onLogout }: Props) {
             />
           ))}
 
-          <DataCard title="导出数据">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-[13px] leading-5 text-ink-secondary">
-                将个人数据导出为 Markdown 文件。
-              </p>
-              <Button size="sm" loading={exporting} onClick={() => void downloadExport()}>
-                导出
-              </Button>
+          <DataCard title="数据与账号" description="导出留档，或彻底注销账号。">
+            <div className="divide-y divide-border-subtle">
+              <div className="flex flex-wrap items-center justify-between gap-3 pb-4">
+                <div className="min-w-0">
+                  <p className="text-[14px] font-medium text-ink">导出个人数据</p>
+                  <p className="mt-0.5 text-[13px] leading-5 text-ink-muted">
+                    会话、人设、记忆与设置打包成一份 Markdown 文件。
+                  </p>
+                </div>
+                <Button size="sm" loading={exporting} onClick={() => void downloadExport()}>
+                  导出
+                </Button>
+              </div>
+
+              {user.role !== 'admin' && (
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-4">
+                  <div className="min-w-0">
+                    <p className="text-[14px] font-medium text-ink">注销账号</p>
+                    <p className="mt-0.5 text-[13px] leading-5 text-ink-muted">
+                      账号、会话、人设、记忆和上传的图片会全部删除，无法恢复。
+                    </p>
+                  </div>
+                  <Button size="sm" variant="danger" onClick={() => setConfirmDelete(true)}>
+                    注销账号
+                  </Button>
+                </div>
+              )}
             </div>
           </DataCard>
 
-          {user.role !== 'admin' && (
-            <DataCard title="注销账号">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <p className="text-[13px] leading-5 text-ink-secondary">
-                  账号、会话、人设和配置会全部删除，无法恢复。建议先下载一份数据。
-                </p>
-                <Button size="sm" variant="danger" onClick={() => setConfirmDelete(true)}>
-                  注销账号
-                </Button>
-              </div>
-            </DataCard>
-          )}
           {confirmDelete && (
             <ConfirmDialog
               title="确认注销"
@@ -334,29 +360,60 @@ function AccountCard({
 
   return (
     <DataCard title="账号">
-      <div className="flex items-center gap-4">
+      <div className="flex flex-wrap items-center gap-4">
         {user.avatar_base64 ? (
-          <img src={avatarDataUrl(user.avatar_base64)} alt="" className="h-14 w-14 rounded-full object-cover" />
+          <img
+            src={avatarDataUrl(user.avatar_base64)}
+            alt=""
+            className="h-16 w-16 shrink-0 rounded-full object-cover ring-1 ring-border"
+          />
         ) : (
-          <span className="inline-flex h-14 w-14 items-center justify-center rounded-full bg-primary text-[18px] font-medium text-white">
+          <span className="grid h-16 w-16 shrink-0 place-items-center rounded-full bg-primary text-[20px] font-semibold text-white">
             {(user.display_name || user.username).slice(0, 1)}
           </span>
         )}
-        <div>
-          <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(event) => { pickAvatar(event.target.files?.[0]); event.target.value = '' }} />
+
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="truncate text-[16px] font-semibold tracking-tight text-ink">
+              {user.display_name || user.username}
+            </span>
+            <StatusTag tone={user.role === 'admin' ? 'primary' : 'info'}>
+              {user.role === 'admin' ? '管理员' : '用户'}
+            </StatusTag>
+          </div>
+          <p className="mono mt-1 truncate text-[13px] text-ink-muted">{user.username}</p>
+          <p className="mt-1 text-[12px] text-ink-faint">
+            没有头像时显示昵称首字；选择图片后可拖动和缩放裁剪。
+          </p>
+        </div>
+
+        <div className="shrink-0">
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            className="hidden"
+            onChange={(event) => { pickAvatar(event.target.files?.[0]); event.target.value = '' }}
+          />
           <Button size="sm" onClick={() => fileRef.current?.click()}>更换头像</Button>
-          <p className="mt-1 text-[12px] text-ink-muted">选择图片后可拖动和缩放裁剪。没有头像时显示昵称首字。</p>
         </div>
       </div>
-      <form onSubmit={saveProfile} className="mt-4 grid gap-3 sm:grid-cols-2">
+
+      <form onSubmit={saveProfile} className="mt-4 grid gap-3.5 border-t border-border-subtle pt-4 sm:grid-cols-2">
+        <Field label="昵称" value={displayName} onChange={(event) => setDisplayName(event.target.value)} required autoComplete="nickname" />
         <Field label="用户名" value={user.username} disabled hint="登录名创建后不可修改" />
-        <Field label="昵称" value={displayName} onChange={(event) => setDisplayName(event.target.value)} required />
-        <div><Button type="submit" size="sm" variant="primary" loading={busy}>保存资料</Button></div>
+        <div className="flex flex-wrap items-end justify-between gap-3 sm:col-span-2">
+          <p className="text-[12px] leading-5 text-ink-muted">
+            密码至少 10 位，需包含字母、数字和符号。
+          </p>
+          <div className="flex gap-2">
+            <Button type="button" size="sm" onClick={() => setPwdOpen(true)}>修改密码</Button>
+            <Button type="submit" size="sm" variant="primary" loading={busy}>保存资料</Button>
+          </div>
+        </div>
       </form>
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border-subtle pt-4">
-        <p className="text-[12px] text-ink-muted">密码至少 10 位，需包含字母、数字和符号。</p>
-        <Button size="sm" onClick={() => setPwdOpen(true)}>修改密码</Button>
-      </div>
+
       {pwdOpen && (
         <PasswordModal onClose={() => setPwdOpen(false)} onSaved={(next) => { setPwdOpen(false); onUserChange(next); toast('密码已修改') }} />
       )}
@@ -396,18 +453,18 @@ function PasswordModal({ onClose, onSaved }: { onClose: () => void; onSaved: (us
   return (
     <Modal size="sm" scroll="hidden" onClose={onClose} busy={busy} labelledBy={titleId} initialFocusSelector="input" className="flex flex-col">
       <form onSubmit={submit} className="flex min-h-0 flex-col">
-        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border-subtle px-4 py-3 sm:px-5">
-          <h3 id={titleId} className="text-[17px] font-semibold text-ink">修改密码</h3>
-          <Button size="sm" variant="text" type="button" disabled={busy} onClick={onClose} aria-label="关闭修改密码弹窗">关闭</Button>
+        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border-subtle px-5 py-4">
+          <h3 id={titleId} className="text-[16px] font-semibold tracking-tight text-ink">修改密码</h3>
+          <Button size="sm" variant="ghost" type="button" disabled={busy} onClick={onClose} aria-label="关闭修改密码弹窗">关闭</Button>
         </header>
-        <div className="space-y-3 px-4 py-4 sm:px-5">
-          <Field label="原密码" type="password" value={oldPwd} onChange={(event) => setOldPwd(event.target.value)} required />
-          <Field label="新密码" type="password" value={nextPwd} onChange={(event) => setNextPwd(event.target.value)} required hint="至少 10 位，含字母、数字和符号" />
-          <Field label="再输一次新密码" type="password" value={confirmPwd} onChange={(event) => setConfirmPwd(event.target.value)} required />
-          {problem && <p className="text-[12px] text-danger">{problem}</p>}
+        <div className="space-y-3.5 px-5 py-5">
+          <Field label="原密码" type="password" value={oldPwd} onChange={(event) => setOldPwd(event.target.value)} required autoComplete="current-password" />
+          <Field label="新密码" type="password" value={nextPwd} onChange={(event) => setNextPwd(event.target.value)} required autoComplete="new-password" hint="至少 10 位，含字母、数字和符号" />
+          <Field label="再输一次新密码" type="password" value={confirmPwd} onChange={(event) => setConfirmPwd(event.target.value)} required autoComplete="new-password" />
+          {problem && <p className="text-[13px] leading-5 text-danger">{problem}</p>}
         </div>
-        <footer className="flex shrink-0 justify-end gap-2 border-t border-border-subtle px-4 py-3 sm:px-5">
-          <Button type="button" disabled={busy} onClick={onClose}>取消</Button>
+        <footer className="flex shrink-0 justify-end gap-2 border-t border-border-subtle px-5 py-3">
+          <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>取消</Button>
           <Button type="submit" variant="primary" loading={busy} disabled={!oldPwd || !nextPwd || !confirmPwd || problem !== null}
             disabledReason={problem ?? '请填写完整'}>确认修改</Button>
         </footer>
@@ -493,14 +550,14 @@ function AvatarEditorModal({ src, onClose, onSaved }: { src: string; onClose: ()
 
   return (
     <Modal size="sm" scroll="hidden" onClose={onClose} busy={uploading} labelledBy={titleId} className="flex flex-col">
-      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border-subtle px-4 py-3 sm:px-5">
-        <h3 id={titleId} className="text-[17px] font-semibold text-ink">更换头像</h3>
-        <Button size="sm" variant="text" type="button" disabled={uploading} onClick={onClose} aria-label="关闭头像编辑弹窗">关闭</Button>
+      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border-subtle px-5 py-4">
+        <h3 id={titleId} className="text-[16px] font-semibold tracking-tight text-ink">更换头像</h3>
+        <Button size="sm" variant="ghost" type="button" disabled={uploading} onClick={onClose} aria-label="关闭头像编辑弹窗">关闭</Button>
       </header>
-      <div className="space-y-4 px-4 py-4 sm:px-5">
+      <div className="space-y-4 px-5 py-5">
         <div className="flex justify-center">
           <div
-            className="relative h-72 w-72 cursor-grab touch-none select-none overflow-hidden rounded-full bg-surface-muted active:cursor-grabbing"
+            className="group relative h-72 w-72 cursor-grab touch-none select-none overflow-hidden rounded-full bg-surface-muted ring-1 ring-border ring-inset active:cursor-grabbing"
             onPointerDown={(event) => {
               dragRef.current = { px: event.clientX, py: event.clientY, ox: offset.x, oy: offset.y }
               event.currentTarget.setPointerCapture(event.pointerId)
@@ -521,20 +578,22 @@ function AvatarEditorModal({ src, onClose, onSaved }: { src: string; onClose: ()
                   transform: `translate(-50%, -50%) translate(${offset.x}px, ${offset.y}px) rotate(${rotation}rad)`,
                 }} />
             )}
-            <span className="pointer-events-none absolute inset-0 rounded-full ring-1 ring-black/10 ring-inset" />
+            <span className="pointer-events-none absolute inset-0 rounded-full ring-1 ring-ink/10 ring-inset" />
           </div>
         </div>
         <div className="flex items-center gap-3">
           <Button size="sm" type="button" disabled={uploading || !img}
             onClick={() => setRotation((value) => value + HALF_PI)}>旋转</Button>
           <input type="range" min={1} max={3} step={0.01} value={zoom} disabled={uploading || !img}
-            onChange={(event) => setZoom(Number(event.target.value))} className="min-w-0 flex-1 accent-[#409eff]" aria-label="缩放" />
-          <span className="w-12 text-right text-[12px] text-ink-muted">{Math.round(zoom * 100)}%</span>
+            onChange={(event) => setZoom(Number(event.target.value))} className="min-w-0 flex-1 accent-primary" aria-label="缩放" />
+          <span className="tnum w-12 text-right text-[12px] text-ink-muted">{Math.round(zoom * 100)}%</span>
         </div>
-        <p className="text-[12px] text-ink-muted">拖动调整位置，滑动缩放；确认后裁剪为 {AVATAR_OUTPUT}×{AVATAR_OUTPUT}。</p>
+        <p className="text-[12px] leading-5 text-ink-muted">
+          拖动调整位置，滑动缩放；确认后裁剪为 {AVATAR_OUTPUT}×{AVATAR_OUTPUT} 的方形图。
+        </p>
       </div>
-      <footer className="flex shrink-0 justify-end gap-2 border-t border-border-subtle px-4 py-3 sm:px-5">
-        <Button type="button" disabled={uploading} onClick={onClose}>取消</Button>
+      <footer className="flex shrink-0 justify-end gap-2 border-t border-border-subtle px-5 py-3">
+        <Button type="button" variant="ghost" disabled={uploading} onClick={onClose}>取消</Button>
         <Button type="button" variant="primary" loading={uploading} disabled={!img} disabledReason="图片尚未载入" onClick={() => void confirmCrop()}>确认</Button>
       </footer>
     </Modal>
@@ -579,159 +638,244 @@ function ProviderSection({
   return (
     <DataCard
       title={copy.title}
-      actions={rows.length === 0 ? <Button size="sm" variant="primary" onClick={onAdd}>添加</Button> : undefined}
+      description={copy.role}
+      actions={
+        rows.length === 0 ? (
+          <Button size="sm" variant="primary" onClick={onAdd}>添加配置</Button>
+        ) : undefined
+      }
     >
       {form && (
         <Modal size="md" labelledBy={formTitleId} initialFocusSelector="input" onClose={onCancel} busy={busy}>
-          <form
-            onSubmit={onSubmit}
-            className="space-y-3 p-5 sm:p-6"
-          >
-            <h3 id={formTitleId} className="text-[17px] font-semibold text-[#1b3658]">{form.id === null ? `添加${copy.title}` : `编辑${copy.title}`}</h3>
-            <Field label="名称（页面显示）" value={form.name} onChange={(event) => onChange({ ...form, name: event.target.value })} required />
+          <form onSubmit={onSubmit} className="space-y-3.5 p-5 sm:p-6">
+            <div>
+              <h3 id={formTitleId} className="text-[16px] font-semibold tracking-tight text-ink">
+                {form.id === null ? `添加${copy.title}` : `编辑${copy.title}`}
+              </h3>
+              <p className="mt-1 text-[13px] leading-5 text-ink-muted">
+                {form.id === null
+                  ? '保存前会先测一次连通性；测不通就不落库。'
+                  : '地址与密钥不可改；要换服务请新建一个配置。'}
+              </p>
+            </div>
+
+            <Field label="名称（页面显示）" value={form.name} onChange={(event) => onChange({ ...form, name: event.target.value })} required placeholder={kind === 'llm' ? '例如：主力 GPT' : '例如：JEV 生产'} />
+
             {kind === 'llm' && form.id === null && (
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="block">
-                  <span className="mb-1.5 block text-[13px] font-medium text-ink-secondary">协议</span>
-                  <select
-                    value={form.protocol}
-                    onChange={(event) => onChange({ ...form, protocol: event.target.value as FormState['protocol'] })}
-                    className="h-9 w-full rounded-[6px] border border-border bg-surface px-3"
-                  >
-                    <option value="openai">OpenAI Chat Completions</option>
-                    <option value="openai_responses">OpenAI Responses</option>
-                    <option value="anthropic">Anthropic Messages</option>
-                  </select>
-                </label>
-              </div>
+              <label className="block">
+                <span className="mb-1.5 block text-[13px] font-medium text-ink-secondary">协议</span>
+                <select
+                  value={form.protocol}
+                  onChange={(event) => onChange({ ...form, protocol: event.target.value as FormState['protocol'] })}
+                  className={controlClass + ' cursor-pointer'}
+                >
+                  <option value="openai">OpenAI Chat Completions</option>
+                  <option value="openai_responses">OpenAI Responses</option>
+                  <option value="anthropic">Anthropic Messages</option>
+                </select>
+              </label>
             )}
+
             {form.id === null && (
               <>
-            <Field
-              label={kind === 'llm' ? 'API Base URL' : '接口地址'}
-              value={form.endpoint_url}
-              onChange={(event) => onChange({ ...form, endpoint_url: event.target.value })}
-              required
-              placeholder={
-                kind === 'llm'
-                  ? form.protocol === 'anthropic'
-                    ? 'https://api.anthropic.com/v1'
-                    : 'https://api.openai.com/v1'
-                  : copy.address
-              }
-            />
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="模型" value={form.model} onChange={(event) => onChange({ ...form, model: event.target.value })} required placeholder={form.protocol === 'anthropic' ? 'claude-sonnet-4-5' : 'gpt-4o-mini'} />
-              <Field label="API Key" type="password" value={form.api_key} onChange={(event) => onChange({ ...form, api_key: event.target.value })} required={form.id === null} placeholder={form.id === null ? 'sk-...' : '留空则保持不变'} />
-            </div>
+                <Field
+                  label={kind === 'llm' ? 'API Base URL' : '接口地址'}
+                  value={form.endpoint_url}
+                  onChange={(event) => onChange({ ...form, endpoint_url: event.target.value })}
+                  required
+                  placeholder={
+                    kind === 'llm'
+                      ? form.protocol === 'anthropic'
+                        ? 'https://api.anthropic.com/v1'
+                        : 'https://api.openai.com/v1'
+                      : copy.address
+                  }
+                />
+                <div className="grid gap-3.5 sm:grid-cols-2">
+                  <Field label="模型" value={form.model} onChange={(event) => onChange({ ...form, model: event.target.value })} required placeholder={form.protocol === 'anthropic' ? 'claude-sonnet-4-5' : copy.model} />
+                  <Field label="API Key" type="password" value={form.api_key} onChange={(event) => onChange({ ...form, api_key: event.target.value })} required placeholder="sk-..." autoComplete="off" />
+                </div>
               </>
             )}
+
             {kind === 'llm' && (
-              <details className="rounded-[8px] border border-border">
-                <summary className="cursor-pointer px-3 py-2 text-[13px] font-medium text-ink-secondary">高级配置</summary>
-                <div className="grid gap-3 border-t border-border p-3 sm:grid-cols-2">
+              <div className="rounded-[12px] border border-border-subtle bg-surface-muted/60">
+                <div className="flex items-center justify-between gap-3 px-3.5 pt-3">
                   <div>
-                    <div className="mb-1.5 flex items-center justify-between">
-                      <span className="text-[13px] font-medium text-ink-secondary">上下文窗口</span>
-                      <span className="flex gap-1">
-                        {[['128K', 131072], ['256K', 262144], ['1M', 1048576]].map(([label, value]) => (
-                          <button key={label} type="button" className="rounded border border-border px-1.5 py-0.5 text-[11px] text-ink-muted hover:text-primary" onClick={() => onChange({ ...form, context_window_tokens: Number(value) })}>
-                            {label}
-                          </button>
-                        ))}
-                      </span>
-                    </div>
+                    <p className="text-[13px] font-medium text-ink-secondary">上下文窗口</p>
+                    <p className="mt-0.5 text-[12px] text-ink-muted">
+                      决定历史对话能带多长，超出会被截断。
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 gap-1">
+                    {CONTEXT_PRESETS.map(([label, value]) => (
+                      <button
+                        key={label}
+                        type="button"
+                        className={`rounded-[7px] border px-2 py-0.5 text-[12px] transition-colors duration-150 ${
+                          form.context_window_tokens === value
+                            ? 'border-primary-border bg-primary-soft text-primary'
+                            : 'border-border bg-surface text-ink-muted hover:border-border-strong hover:text-ink-secondary'
+                        }`}
+                        onClick={() => onChange({ ...form, context_window_tokens: value })}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="grid items-end gap-3 p-3.5 sm:grid-cols-2">
+                  <label className="block">
+                    <span className="mb-1.5 block text-[13px] font-medium text-ink-secondary">Token 数</span>
                     <input
                       type="number"
                       min={1000}
                       max={2000000}
                       value={form.context_window_tokens}
                       onChange={(event) => onChange({ ...form, context_window_tokens: Number(event.target.value) || 64000 })}
-                      className="h-9 w-full rounded-[6px] border border-border bg-surface px-3"
+                      className={controlClass + ' tnum'}
                     />
-                  </div>
-                  {form.id === null && <label className="block">
-                    <span className="mb-1.5 block text-[13px] font-medium text-ink-secondary">图片输入</span>
-                    <select
-                      value={form.supports_vision ? 'yes' : 'no'}
-                      onChange={(event) => onChange({ ...form, supports_vision: event.target.value === 'yes' })}
-                      className="h-9 w-full rounded-[6px] border border-border bg-surface px-3"
-                    >
-                      <option value="no">不支持</option>
-                      <option value="yes">支持</option>
-                    </select>
-                  </label>}
+                  </label>
+                  {form.id === null && (
+                    <label className="block">
+                      <span className="mb-1.5 block text-[13px] font-medium text-ink-secondary">图片输入</span>
+                      <select
+                        value={form.supports_vision ? 'yes' : 'no'}
+                        onChange={(event) => onChange({ ...form, supports_vision: event.target.value === 'yes' })}
+                        className={controlClass + ' cursor-pointer'}
+                      >
+                        <option value="no">不支持</option>
+                        <option value="yes">支持（可读聊天里的图片）</option>
+                      </select>
+                    </label>
+                  )}
                 </div>
-              </details>
+              </div>
             )}
+
             <div className="flex justify-end gap-2 pt-1">
-              <Button type="button" disabled={busy} onClick={onCancel}>取消</Button>
-              <Button type="submit" variant="primary" loading={busy}>保存</Button>
+              <Button type="button" variant="ghost" disabled={busy} onClick={onCancel}>取消</Button>
+              <Button type="submit" variant="primary" loading={busy}>{form.id === null ? '测试并保存' : '保存'}</Button>
             </div>
           </form>
         </Modal>
       )}
+
       {loading ? (
-        <p className="py-4 text-center text-[13px] text-ink-muted">加载中…</p>
+        <ul className="space-y-3">
+          {[0, 1].map((row) => (
+            <li key={row} className="flex items-center gap-4">
+              <span className="skeleton h-10 w-10 shrink-0 rounded-[11px]" />
+              <span className="min-w-0 flex-1 space-y-2">
+                <span className="skeleton block h-4 w-32" />
+                <span className="skeleton block h-3.5 w-2/3" />
+              </span>
+            </li>
+          ))}
+        </ul>
       ) : rows.length === 0 ? (
-        <EmptyState title={`还没有${copy.title}`} description="每种只能配置一个。" />
+        <EmptyState
+          title={`还没有${copy.title}`}
+          description={`${copy.role}。每种只能配一个，填好后会先测连通性。`}
+          action={<Button size="sm" variant="primary" onClick={onAdd}>添加配置</Button>}
+        />
       ) : (
         <ul className="divide-y divide-border-subtle">
           {rows.map((row) => {
             const result = results[row.id]
             return (
-              <li key={row.id} className="py-3 first:pt-0 last:pb-0">
-                <div>
-                  <div className="flex items-center gap-2">
-                      <span className="text-[14px] font-medium text-ink">{row.name}</span>
+              <li key={row.id} className="py-4 first:pt-0 last:pb-0">
+                <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
+                  <span
+                    className="grid h-10 w-10 shrink-0 place-items-center rounded-[11px] border border-border bg-surface-muted text-ink-secondary"
+                    aria-hidden
+                  >
+                    {kind === 'llm' ? <IconSparkle className="h-5 w-5" /> : <IconDecide className="h-5 w-5" />}
+                  </span>
+
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="truncate text-[14px] font-medium text-ink">{row.name}</span>
                       <StatusTag tone={row.last_test_ok ? 'success' : row.last_tested_at ? 'danger' : 'info'}>
                         {row.last_tested_at ? (row.last_test_ok ? '测试成功' : '测试失败') : '未测试'}
                       </StatusTag>
+                      {!row.is_enabled && <StatusTag tone="info">已停用</StatusTag>}
                     </div>
-                    <p className="mono mt-1 truncate text-[13px] text-ink-muted">{row.endpoint_url}</p>
-                    <p className="mono mt-0.5 text-[13px] text-ink-muted">
-                      {kind === 'llm' && `${{ openai: 'OpenAI', openai_responses: 'OpenAI Responses', anthropic: 'Anthropic' }[row.protocol] ?? 'OpenAI'} · `}
-                      {row.model}
-                      {kind === 'llm' && row.supports_vision ? ' · 可看图' : ''}
+                    <p className="mono mt-1.5 truncate text-[12px] text-ink-muted" title={row.endpoint_url}>
+                      {row.endpoint_url}
                     </p>
-                </div>
-                <div className="mt-3 flex items-center justify-between border-t border-border-subtle pt-3">
-                  <span className="text-[13px] text-ink-secondary">{row.is_enabled ? '已启用' : '已停用'}</span>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={row.is_enabled}
-                    aria-label={row.is_enabled ? '停用' : '启用'}
-                    onClick={() => void onToggle(row)}
-                    className={`relative h-5 w-9 rounded-full transition-colors ${row.is_enabled ? 'bg-[#409eff]' : 'bg-slate-300'}`}
-                  >
-                    <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${row.is_enabled ? 'left-4' : 'left-0.5'}`} />
-                  </button>
-                </div>
-                <div className="mt-2 flex gap-2">
-                  <Button size="sm" loading={testing === row.id} onClick={() => void onTest(row)}>测试</Button>
-                  <Button size="sm" onClick={() => onEdit(row)}>编辑</Button>
-                  <Button size="sm" variant="danger" onClick={() => void onRemove(row)}>删除</Button>
-                </div>
-                {result && (
-                  <div className="mt-3 rounded-[6px] bg-surface-muted p-3">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <StatusTag tone={result.ok ? 'success' : 'danger'}>{result.ok ? '连接成功' : '连接失败'}</StatusTag>
-                      <span className="text-[13px] text-ink-secondary">耗时 {result.latency_ms} ms</span>
-                    </div>
-                    <p className="mt-2 text-[13px] leading-5 text-ink-secondary">{result.detail}</p>
-                    {result.smoke && (
-                      <p className="mt-2 text-[13px] text-ink-secondary">
-                        健康度 {result.smoke.health}%（{result.smoke.passed}/{result.smoke.total} 通过）
-                      </p>
-                    )}
+                    <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[13px] text-ink-secondary">
+                      {kind === 'llm' && (
+                        <span>{PROTOCOL_LABELS[row.protocol] ?? 'OpenAI'}</span>
+                      )}
+                      <span className="mono">{row.model}</span>
+                      {kind === 'llm' && row.supports_vision && <span>· 可看图</span>}
+                      {kind === 'llm' && <span>· 窗口 {formatTokens(row.context_window_tokens)}</span>}
+                    </p>
                   </div>
-                )}
+
+                  <div className="flex shrink-0 flex-col items-end gap-2.5">
+                    <label className="flex cursor-pointer items-center gap-2 text-[13px] text-ink-secondary">
+                      <span>{row.is_enabled ? '已启用' : '已停用'}</span>
+                      <Switch
+                        checked={row.is_enabled}
+                        label={row.is_enabled ? `停用${row.name}` : `启用${row.name}`}
+                        onChange={() => void onToggle(row)}
+                      />
+                    </label>
+                    <div className="flex items-center gap-0.5">
+                      <Button size="sm" variant="ghost" loading={testing === row.id} onClick={() => void onTest(row)}>测试</Button>
+                      <Button size="sm" variant="ghost" onClick={() => onEdit(row)}>编辑</Button>
+                      <Button size="sm" variant="ghost-danger" onClick={() => void onRemove(row)}>删除</Button>
+                    </div>
+                  </div>
+                </div>
+
+                {result && <TestResult result={result} />}
               </li>
             )
           })}
         </ul>
       )}
     </DataCard>
+  )
+}
+
+/** 连通性测试结果：结论、耗时、诊断文本与健康度条。 */
+function TestResult({ result }: { result: ConnectionTestResult }) {
+  const health = result.smoke ? Math.max(0, Math.min(100, result.smoke.health)) : 0
+  return (
+    <div
+      className={`mt-3 rounded-[10px] border px-3.5 py-3 ${
+        result.ok ? 'border-success/20 bg-success-soft/60' : 'border-danger/20 bg-danger-soft/60'
+      }`}
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <StatusTag tone={result.ok ? 'success' : 'danger'}>
+          {result.ok ? '连接成功' : '连接失败'}
+        </StatusTag>
+        <span className="tnum text-[12px] text-ink-muted">耗时 {result.latency_ms} ms</span>
+      </div>
+      <p className="mt-2 text-[13px] leading-5 text-ink-secondary">{result.detail}</p>
+      {result.smoke && (
+        <div className="mt-2.5">
+          <div className="flex items-baseline justify-between gap-3 text-[12px]">
+            <span className="text-ink-muted">健康度</span>
+            <span className="tnum text-ink">
+              {result.smoke.health}%
+              <span className="ml-1 text-ink-muted">（{result.smoke.passed}/{result.smoke.total} 通过）</span>
+            </span>
+          </div>
+          <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-surface/80">
+            <div
+              className={`h-full rounded-full transition-[width] duration-700 ease-out ${
+                health >= 80 ? 'bg-success' : health >= 50 ? 'bg-warning' : 'bg-danger'
+              }`}
+              style={{ width: `${health}%` }}
+            />
+          </div>
+        </div>
+      )}
+    </div>
   )
 }

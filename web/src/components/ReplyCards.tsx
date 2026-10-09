@@ -1,5 +1,6 @@
 import type { Candidate, ReplyScoreItem } from '../api/chat'
 import StageLoader, { type LoaderStep } from './StageLoader'
+import { IconChevronDown, IconInfo, IconRefresh, IconSparkle, IconWarning } from './icons'
 
 /** 一张自动回复卡片的本地状态：随管线阶段逐步填充（内存级，刷新页面即清） */
 export interface ReplyCard {
@@ -32,7 +33,7 @@ const STEP_LABELS: Record<string, { running: string; done: string }> = {
   rank: { running: '正在排序', done: '排序完成' },
 }
 
-const TONE_CLASS: Partial<Record<NonNullable<ReplyScoreItem['tone']>, string>> = {
+const TONE_TEXT: Partial<Record<NonNullable<ReplyScoreItem['tone']>, string>> = {
   success: 'text-success',
   warning: 'text-warning',
   danger: 'text-danger',
@@ -56,87 +57,120 @@ export default function ReplyCards({ card, onToggle, onPick, onRetry }: Props) {
   const hasBody = card.candidates.length > 0 || (card.scores?.length ?? 0) > 0 || card.blocked !== null
 
   return (
-    <div className="w-full max-w-[92%] rounded-[8px] border border-border bg-surface px-3 py-2">
-      <div className="flex min-h-5 items-center gap-2">
-        <span className="min-w-0 truncate text-[12px] font-medium text-ink-secondary">
-          回复建议{card.targetName ? ` · 回复 ${card.targetName}` : ''}
+    <div className="w-full max-w-[92%] overflow-hidden rounded-[12px] border border-border bg-surface shadow-xs transition-shadow duration-200 hover:shadow-sm">
+      <div className="flex items-center gap-2 px-3 py-2.5">
+        <span className="flex min-w-0 items-center gap-1.5">
+          <IconSparkle className="h-3.5 w-3.5 shrink-0 text-primary" />
+          <span className="truncate text-[12px] font-medium text-ink-secondary">
+            回复建议{card.targetName ? ` · 回复 ${card.targetName}` : ''}
+          </span>
         </span>
+
         {!card.running && hasBody && (
           <button
             type="button"
             aria-expanded={card.expanded}
-            className="ml-auto shrink-0 text-[12px] text-primary"
+            className="ml-auto flex shrink-0 items-center gap-1 rounded-[6px] px-1.5 py-0.5 text-[12px] text-ink-muted transition-colors duration-150 hover:bg-surface-hover hover:text-ink"
             onClick={() => onToggle(card.id, !card.expanded)}
           >
-            {card.expanded ? '收起 ▴' : '展开 ▾'}
+            {card.expanded ? '收起' : '展开'}
+            <IconChevronDown
+              className={`h-3.5 w-3.5 transition-transform duration-200 ${
+                card.expanded ? 'rotate-180' : ''
+              }`}
+            />
           </button>
         )}
       </div>
-      {card.running && (
-        <div className="mt-1.5">
-          <StageLoader steps={loaderSteps} />
-        </div>
-      )}
-      {card.error && (
-        <div className="mt-1.5 flex items-center gap-2">
-          <p className="min-w-0 flex-1 text-[13px] leading-5 text-danger">{card.error}</p>
-          <button
-            type="button"
-            className="shrink-0 text-[12px] text-primary"
-            onClick={() => onRetry(card.id)}
-          >
-            重试
-          </button>
-        </div>
-      )}
-      {card.blocked && (
-        <p className="mt-1.5 rounded-[6px] bg-surface-muted px-2 py-1.5 text-[13px] leading-5 text-ink-secondary">
-          {card.blocked}
-        </p>
-      )}
-      {!card.running && card.expanded && card.candidates.length > 0 && (
-        <div className="mt-1.5 space-y-1.5">
-          {!card.ranked && (
-            <p className="text-[12px] text-ink-muted">排序没完成，以下按起草顺序展示</p>
-          )}
-          {card.candidates.map((item, index) => (
+
+      <div className="space-y-2 px-3 pb-3">
+        {card.running && <StageLoader steps={loaderSteps} />}
+
+        {card.error && (
+          <div className="flex items-start gap-2 rounded-[8px] bg-danger-soft px-2.5 py-2">
+            <IconWarning className="mt-px h-3.5 w-3.5 shrink-0 text-danger" />
+            <p className="min-w-0 flex-1 text-[13px] leading-5 text-danger">{card.error}</p>
             <button
-              key={index}
               type="button"
-              className="block w-full rounded-[6px] border border-border px-2.5 py-1.5 text-left hover:bg-surface-muted"
-              onClick={() => onPick(item.text)}
+              className="flex shrink-0 items-center gap-1 rounded-[6px] px-1.5 py-0.5 text-[12px] font-medium text-danger transition-colors duration-150 hover:bg-danger/10"
+              onClick={() => onRetry(card.id)}
             >
-              <span className="block whitespace-pre-wrap break-words text-[14px] leading-[22px] text-ink">
-                {item.text}
-              </span>
-              {card.ranked && (
-                <span className="mt-0.5 block text-[12px] text-ink-muted">匹配度 {item.percent}%</span>
-              )}
+              <IconRefresh className="h-3.5 w-3.5" />
+              重试
             </button>
-          ))}
-        </div>
-      )}
-      {!card.running && card.expanded && !card.error && (card.scores?.length ?? 0) > 0 && (
-        <div className="mt-1.5 flex flex-wrap gap-1">
-          {card.scores!.map((item) => (
-            <span
-              key={item.key}
-              className={`rounded-[4px] bg-surface-muted px-1.5 py-0.5 text-[11px] ${
-                TONE_CLASS[item.tone ?? 'info'] ?? 'text-ink-secondary'
-              }`}
-            >
-              {item.title} {item.text}
-            </span>
-          ))}
-        </div>
-      )}
-      {!card.running && !card.expanded && !card.error && hasBody && (
-        <p className="mt-0.5 text-[12px] text-ink-muted">
-          {card.candidates.length > 0
-            ? `已生成 ${card.candidates.length} 条候选${card.ranked ? '' : '（排序未完成）'}`
-            : '已给出建议'}
-        </p>
-      )}
+          </div>
+        )}
+
+        {card.blocked && (
+          <div className="flex items-start gap-2 rounded-[8px] bg-warning-soft px-2.5 py-2">
+            <IconInfo className="mt-px h-3.5 w-3.5 shrink-0 text-warning" />
+            <p className="min-w-0 flex-1 text-[13px] leading-5 text-ink-secondary">
+              {card.blocked}
+            </p>
+          </div>
+        )}
+
+        {!card.running && card.expanded && card.candidates.length > 0 && (
+          <div className="space-y-1.5">
+            {!card.ranked && (
+              <p className="flex items-center gap-1.5 text-[12px] text-ink-muted">
+                <IconInfo className="h-3.5 w-3.5" />
+                排序没完成，以下按起草顺序展示
+              </p>
+            )}
+            {card.candidates.map((item, index) => (
+              <button
+                key={index}
+                type="button"
+                className="group/cand block w-full rounded-[10px] border border-border bg-surface px-2.5 py-2 text-left transition-all duration-200 hover:border-primary-border hover:bg-primary-soft/40 hover:shadow-xs active:translate-y-px"
+                onClick={() => onPick(item.text)}
+              >
+                <span className="flex items-start gap-2.5">
+                  <span className="tnum mt-[3px] flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-surface-sunken text-[11px] font-semibold text-ink-muted transition-colors duration-200 group-hover/cand:bg-primary group-hover/cand:text-white">
+                    {index + 1}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block whitespace-pre-wrap break-words text-[14px] leading-[22px] text-ink">
+                      {item.text}
+                    </span>
+                    {card.ranked && (
+                      <span className="mt-1.5 inline-flex items-baseline gap-1 text-[11px] text-ink-faint">
+                        匹配度
+                        <span className="tnum font-medium text-ink-secondary">
+                          {item.percent}%
+                        </span>
+                      </span>
+                    )}
+                  </span>
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {!card.running && card.expanded && !card.error && (card.scores?.length ?? 0) > 0 && (
+          <div className="flex flex-wrap gap-1 pt-0.5">
+            {card.scores!.map((item) => (
+              <span
+                key={item.key}
+                className={`rounded-[6px] bg-surface-sunken px-1.5 py-0.5 text-[11px] ${
+                  TONE_TEXT[item.tone ?? 'info'] ?? 'text-ink-secondary'
+                }`}
+              >
+                {item.title} {item.text}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {!card.running && !card.expanded && !card.error && hasBody && (
+          <p className="text-[12px] text-ink-muted">
+            {card.candidates.length > 0
+              ? `已生成 ${card.candidates.length} 条候选${card.ranked ? '' : '（排序未完成）'}`
+              : '已给出建议'}
+          </p>
+        )}
+      </div>
     </div>
   )
 }

@@ -9,10 +9,17 @@ interface FieldProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'classN
   required?: boolean
 }
 
+/** 表单控件统一样式：输入类元素共用，保证全站一致。 */
+export const controlClass =
+  'h-9 w-full rounded-[8px] border border-border bg-surface px-3 text-[14px] text-ink ' +
+  'shadow-xs transition-colors duration-150 placeholder:text-ink-faint ' +
+  'hover:border-border-strong focus:border-primary focus:outline-none focus:ring-[3px] focus:ring-primary/15 ' +
+  'disabled:cursor-not-allowed disabled:bg-surface-muted disabled:text-ink-muted'
+
 /**
  * 表单字段原语。
  *
- * 纪律（对齐 human-llm-gateway 规范）：
+ * 纪律：
  * - 标签置于控件**上方**，必填项明确标识
  * - 校验错误放在**控件附近**（页面顶部另有摘要由调用方负责）
  * - Secret 用 `type="password"`；读取接口不返回值时显示「已配置」，
@@ -61,19 +68,16 @@ export default function Field({
           aria-invalid={Boolean(error)}
           aria-describedby={describedBy}
           className={
-            'h-9 w-full rounded-[6px] border bg-surface px-3 text-ink transition-colors ' +
-            'placeholder:text-ink-muted focus:outline-none ' +
-            (secret ? 'pr-9 ' : '') +
-            (error
-              ? 'border-danger focus:border-danger'
-              : 'border-border focus:border-primary')
+            controlClass +
+            (secret ? ' pr-9' : '') +
+            (error ? ' border-danger hover:border-danger focus:border-danger focus:ring-danger/15' : '')
           }
         />
         {secret && (
           <button
             type="button"
             aria-label={visible ? '隐藏密码' : '显示密码'}
-            className="absolute right-2 top-1/2 -translate-y-1/2 text-ink-muted hover:text-primary"
+            className="absolute right-1.5 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-[6px] text-ink-muted transition-colors hover:bg-surface-muted hover:text-ink-secondary"
             onClick={() => setVisible((value) => !value)}
           >
             <EyeIcon open={visible} />
@@ -82,11 +86,11 @@ export default function Field({
       </span>
 
       {error ? (
-        <p id={`${inputId}-error`} className="mt-1 text-[13px] leading-5 text-danger">
+        <p id={`${inputId}-error`} className="mt-1.5 text-[13px] leading-5 text-danger">
           {error}
         </p>
       ) : hint ? (
-        <p id={`${inputId}-hint`} className="mt-1 text-[13px] leading-5 text-ink-muted">
+        <p id={`${inputId}-hint`} className="mt-1.5 text-[13px] leading-5 text-ink-muted">
           {hint}
         </p>
       ) : null}

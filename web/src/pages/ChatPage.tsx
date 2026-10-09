@@ -27,11 +27,23 @@ import {
 } from '../api/chat'
 import Button from '../components/Button'
 import DecisionPanel from '../components/DecisionPanel'
-import Field from '../components/Field'
+import Field, { controlClass } from '../components/Field'
 import { EmptyState, Notice } from '../components/layout'
 import Modal from '../components/Modal'
 import ReplyCards, { type ReplyCard } from '../components/ReplyCards'
+import Segmented from '../components/Segmented'
 import { listProfiles, type PersonaProfileView } from '../api/personas'
+import {
+  IconChat,
+  IconCheck,
+  IconChevronDown,
+  IconClose,
+  IconPlus,
+  IconRefresh,
+  IconSparkle,
+  IconUpload,
+  IconWarning,
+} from '../components/icons'
 
 interface Props {
   currentId: number | null
@@ -56,6 +68,11 @@ interface PendingImage {
 const MAX_IMAGES = 9
 
 const CONTEXT_LABELS: Record<string, string> = { romance: '恋爱', workplace: '职场' }
+
+/** 行内文字按钮：用于「为什么这么判」「跳过」这类次要动作，不抢主按钮的注意力。 */
+const LINK_CHIP =
+  'inline-flex items-center gap-1 rounded-[6px] px-1.5 py-0.5 text-[13px] font-medium ' +
+  'text-primary transition-colors duration-150 hover:bg-primary-soft'
 
 export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Props) {
   const [conversations, setConversations] = useState<Conversation[]>([])
@@ -560,34 +577,45 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-page">
+    <div className="flex h-full min-h-0 flex-col bg-canvas">
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         <aside
-          className={`${listOpen ? 'block' : 'hidden'} border-b border-border bg-surface lg:block lg:w-60 lg:shrink-0 lg:border-b-0 lg:border-r`}
+          className={`${listOpen ? 'block' : 'hidden'} border-b border-border bg-surface lg:block lg:w-[268px] lg:shrink-0 lg:border-b-0 lg:border-r`}
         >
-          <div className="flex items-center justify-between px-4 py-3">
-            <span className="text-[14px] font-semibold text-ink">聊天</span>
-            <Button size="sm" onClick={() => setCreating((value) => !value)}>
-              新建
+          <div className="flex h-14 items-center justify-between px-4">
+            <span className="flex items-center gap-2 text-[14px] font-semibold tracking-tight text-ink">
+              <IconChat className="h-[18px] w-[18px] text-ink-muted" />
+              聊天
+            </span>
+            <Button
+              size="sm"
+              variant={creating ? 'secondary' : 'primary'}
+              onClick={() => setCreating((value) => !value)}
+            >
+              {creating ? '取消' : '新建'}
             </Button>
           </div>
           {creating && (
-            <div className="space-y-2 px-4 pb-3">
-              <label className="flex items-center gap-1.5 text-[13px] text-ink-secondary">
-                <input
-                  type="checkbox"
-                  className="h-3.5 w-3.5"
-                  checked={groupMode}
-                  onChange={(event) => setGroupMode(event.target.checked)}
-                />
-                群聊
-              </label>
+            <div className="mx-3 mb-3 space-y-3.5 rounded-[12px] border border-border bg-surface-muted/50 p-3.5">
+              <Segmented
+                fluid
+                value={groupMode ? 'group' : 'solo'}
+                ariaLabel="会话类型"
+                options={[
+                  { value: 'solo', label: '单聊' },
+                  { value: 'group', label: '群聊' },
+                ]}
+                onChange={(next) => setGroupMode(next === 'group')}
+              />
+
               {groupMode ? (
                 <>
                   <Field label="群名（选填）" value={name} onChange={(event) => setName(event.target.value)} />
                   {profiles.length > 0 ? (
                     <div>
-                      <span className="mb-1 block text-[12px] text-ink-muted">从人设库选成员（可多选，至少一位）</span>
+                      <span className="mb-1.5 block text-[12px] font-medium text-ink-secondary">
+                        选成员（可多选，至少一位）
+                      </span>
                       <div className="flex flex-wrap gap-1.5">
                         {profiles.map((profile) => {
                           const picked = memberProfileIds.includes(profile.id)
@@ -595,8 +623,11 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                             <button
                               key={profile.id}
                               type="button"
-                              className={`rounded-[6px] px-2 py-1 text-[13px] ${
-                                picked ? 'bg-primary text-white' : 'border border-border text-ink'
+                              aria-pressed={picked}
+                              className={`rounded-[8px] border px-2.5 py-1 text-[13px] transition-all duration-150 ${
+                                picked
+                                  ? 'border-primary bg-primary-soft font-medium text-primary'
+                                  : 'border-border bg-surface text-ink-secondary hover:border-border-strong hover:text-ink'
                               }`}
                               onClick={() =>
                                 setMemberProfileIds((prev) =>
@@ -604,14 +635,15 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                                 )
                               }
                             >
-                              {profile.nickname}（{CONTEXT_LABELS[profile.context]}）
+                              {profile.nickname}
+                              <span className="ml-1 text-[11px] opacity-70">{CONTEXT_LABELS[profile.context]}</span>
                             </button>
                           )
                         })}
                       </div>
                     </div>
                   ) : (
-                    <p className="text-[13px] leading-5 text-ink-secondary">
+                    <p className="rounded-[8px] bg-warning-soft px-3 py-2 text-[13px] leading-5 text-warning">
                       人设库还是空的——先到「人设」页给每位成员建好人设，再回来建群聊。
                     </p>
                   )}
@@ -619,9 +651,9 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
               ) : profiles.length > 0 ? (
                 <>
                   <div>
-                    <span className="mb-1 block text-[12px] text-ink-muted">从人设库选用</span>
+                    <span className="mb-1.5 block text-[12px] font-medium text-ink-secondary">选用人设</span>
                     <select
-                      className="w-full rounded-[6px] border border-border px-2 py-1.5 text-[14px] text-ink"
+                      className={controlClass + ' cursor-pointer'}
                       value={soloProfileId ?? ''}
                       onChange={(event) =>
                         setSoloProfileId(event.target.value === '' ? null : Number(event.target.value))
@@ -635,29 +667,34 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                     </select>
                   </div>
                   {chosenSoloProfile && (
-                    <div className="flex items-center gap-2 rounded-[6px] bg-surface-muted px-2 py-1.5">
+                    <div className="flex items-center gap-2.5 rounded-[10px] bg-surface px-3 py-2">
                       {chosenSoloProfile.avatar_base64 ? (
-                        <img src={chosenSoloProfile.avatar_base64} alt="" className="h-8 w-8 shrink-0 rounded-full object-cover" />
+                        <img
+                          src={chosenSoloProfile.avatar_base64}
+                          alt=""
+                          className="h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-border"
+                        />
                       ) : (
-                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary-soft text-[14px] text-primary">
+                        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-primary-soft text-[14px] text-primary">
                           {chosenSoloProfile.nickname.slice(0, 1)}
                         </span>
                       )}
-                      <span className="min-w-0 flex-1 truncate text-[13px] text-ink">
+                      <span className="min-w-0 flex-1 truncate text-[13px] text-ink-secondary">
                         {chosenSoloProfile.summary || '这个人设还没有速写'}
                       </span>
                     </div>
                   )}
                 </>
               ) : (
-                <p className="text-[13px] leading-5 text-ink-secondary">
+                <p className="rounded-[8px] bg-warning-soft px-3 py-2 text-[13px] leading-5 text-warning">
                   人设库还是空的——先到「人设」页建一个人设，再回来开始聊天。
                 </p>
               )}
+
               <div>
-                <span className="mb-1 block text-[12px] text-ink-muted">场景</span>
+                <span className="mb-1.5 block text-[12px] font-medium text-ink-secondary">场景</span>
                 <select
-                  className="w-full rounded-[6px] border border-border px-2 py-1.5 text-[14px] text-ink"
+                  className={controlClass + ' cursor-pointer'}
                   value={scenarioId ?? ''}
                   onChange={(event) =>
                     setScenarioId(event.target.value === '' ? null : Number(event.target.value))
@@ -677,12 +714,15 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                   )}
                 </select>
               </div>
+
               <Field
                 label="关系（可选，如 同事 / 恋人 / 客户）"
                 value={relationship}
                 onChange={(event) => setRelationship(event.target.value)}
               />
+
               <Button
+                className="w-full"
                 variant="primary"
                 size="sm"
                 loading={busy}
@@ -690,62 +730,79 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                 disabledReason={groupMode ? '请先从人设库选择成员' : '请先从人设库选用档案'}
                 onClick={() => void create()}
               >
-                创建
+                创建会话
               </Button>
             </div>
           )}
           {conversations.length === 0 && !creating ? (
             <EmptyState title="暂无聊天" description="新建一位对象，再粘贴对方发来的内容。" />
           ) : (
-            <ul>
-              {conversations.map((item) => (
-                <li key={item.id}>
-                  <button
-                    type="button"
-                    className={`block w-full px-4 py-2.5 text-left text-[14px] ${
-                      item.id === currentId ? 'bg-primary-soft text-primary-hover' : 'text-ink'
-                    }`}
-                    onClick={() => {
-                      setCurrentId(item.id)
-                      setResult(null)
-                      setReflection(null)
-                      setPickedText(null)
-                      setListOpen(false)
-                    }}
-                  >
-                    <span className="flex items-center gap-1.5">
-                      <span className="truncate">
-                        {item.is_group
-                          ? item.title
-                          : displayName(item.counterpart_key, item.counterpart_name || item.title)}
+            <ul className="space-y-0.5 px-2 pb-3">
+              {conversations.map((item) => {
+                const active = item.id === currentId
+                const label = item.is_group
+                  ? item.title
+                  : displayName(item.counterpart_key, item.counterpart_name || item.title)
+                return (
+                  <li key={item.id}>
+                    <button
+                      type="button"
+                      aria-current={active ? 'true' : undefined}
+                      className={`flex w-full items-center gap-2.5 rounded-[9px] px-2.5 py-2 text-left transition-colors duration-150 ${
+                        active ? 'bg-primary-soft' : 'hover:bg-surface-muted'
+                      }`}
+                      onClick={() => {
+                        setCurrentId(item.id)
+                        setResult(null)
+                        setReflection(null)
+                        setPickedText(null)
+                        setListOpen(false)
+                      }}
+                    >
+                      <span
+                        className={`grid h-8 w-8 shrink-0 place-items-center text-[13px] ${
+                          item.is_group ? 'rounded-[9px]' : 'rounded-full'
+                        } ${active ? 'bg-primary/10 text-primary' : 'bg-surface-muted text-ink-muted'}`}
+                      >
+                        {item.is_group ? '群' : label.slice(0, 1)}
                       </span>
-                      {item.is_group && (
-                        <span className="shrink-0 rounded-[4px] bg-surface-muted px-1 text-[11px] text-ink-muted">群聊</span>
+                      <span className="min-w-0 flex-1">
+                        <span
+                          className={`block truncate text-[14px] ${
+                            active ? 'font-medium text-primary' : 'text-ink'
+                          }`}
+                        >
+                          {label}
+                        </span>
+                        <span className="mt-0.5 flex items-center gap-1.5 text-[12px] text-ink-muted">
+                          {item.relationship && <span className="truncate">{item.relationship}</span>}
+                          {item.is_group && <span className="shrink-0">群聊</span>}
+                          {item.scenario_kind === 'workplace' && <span className="shrink-0">职场</span>}
+                          {item.scenario_kind === 'custom' && <span className="shrink-0">自定义</span>}
+                        </span>
+                      </span>
+                      {item.message_count > 0 && (
+                        <span className="shrink-0 text-[11px] tabular-nums text-ink-faint">
+                          {item.message_count}
+                        </span>
                       )}
-                      {item.scenario_kind === 'workplace' && (
-                        <span className="shrink-0 rounded-[4px] bg-surface-muted px-1 text-[11px] text-ink-muted">职场</span>
-                      )}
-                      {item.scenario_kind === 'custom' && (
-                        <span className="shrink-0 rounded-[4px] bg-surface-muted px-1 text-[11px] text-ink-muted">自定义</span>
-                      )}
-                    </span>
-                    <span className="block truncate text-[12px] text-ink-muted">{item.relationship}</span>
-                  </button>
-                </li>
-              ))}
+                    </button>
+                  </li>
+                )
+              })}
             </ul>
           )}
         </aside>
 
         <section className="flex min-h-0 flex-1 flex-col">
-          <header className="flex h-[52px] items-center justify-between border-b border-border bg-surface px-4">
-            <div className="flex items-center gap-2">
+          <header className="flex h-14 items-center justify-between gap-3 border-b border-border bg-surface px-4 sm:px-5">
+            <div className="flex min-w-0 items-center gap-2.5">
               <button
                 type="button"
-                className="text-[13px] text-primary lg:hidden"
+                className="shrink-0 rounded-[8px] border border-border bg-surface px-2 py-1 text-[12px] text-ink-secondary transition-colors duration-150 hover:border-border-strong hover:bg-surface-muted hover:text-ink lg:hidden"
                 onClick={() => setListOpen((value) => !value)}
               >
-                聊天
+                列表
               </button>
               {!current?.is_group && current && (() => {
                 const profile = profiles.find((item) => item.key === current.counterpart_key)
@@ -753,11 +810,15 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                   <img
                     src={profile.avatar_base64}
                     alt=""
-                    className="h-7 w-7 shrink-0 rounded-full object-cover"
+                    className="h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-border"
                   />
-                ) : null
+                ) : (
+                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-surface-muted text-[13px] text-ink-muted">
+                    {(current.counterpart_name || current.title).slice(0, 1)}
+                  </span>
+                )
               })()}
-              <span className="truncate text-[16px] font-semibold text-ink">
+              <span className="truncate text-[16px] font-semibold tracking-tight text-ink">
                 {current
                   ? current.is_group
                     ? current.title
@@ -765,7 +826,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                   : 'HelpMe'}
               </span>
               {current?.is_group && (
-                <span className="shrink-0 text-[12px] text-ink-muted">
+                <span className="shrink-0 rounded-[6px] bg-surface-muted px-1.5 py-0.5 text-[12px] text-ink-muted">
                   {current.members.length + 1} 人
                 </span>
               )}
@@ -774,24 +835,25 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                   type="button"
                   aria-expanded={personaOpen}
                   onClick={() => setPersonaOpen((value) => !value)}
-                  className="ml-1 shrink-0 rounded-[4px] bg-surface-muted px-1.5 py-0.5 text-[12px] text-ink-secondary hover:text-ink"
+                  className="ml-1 flex shrink-0 items-center gap-1 rounded-[6px] bg-surface-muted px-2 py-1 text-[12px] text-ink-secondary transition-colors duration-150 hover:text-ink"
                 >
-                  人设 {personaOpen ? '▾' : '▴'}
+                  人设
+                  <IconChevronDown
+                    className={`h-3.5 w-3.5 transition-transform duration-200 ${personaOpen ? 'rotate-180' : ''}`}
+                  />
                 </button>
               )}
             </div>
             <button
               type="button"
               aria-label="新建聊天"
-              className="rounded-[6px] p-1.5 text-primary transition-colors hover:bg-surface-muted lg:hidden"
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-[8px] text-primary transition-colors duration-150 hover:bg-primary-soft lg:hidden"
               onClick={() => {
                 setListOpen(true)
                 setCreating(true)
               }}
             >
-              <svg viewBox="0 0 20 20" className="block h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
-                <path d="M10 4v12M4 10h12" strokeLinecap="round" />
-              </svg>
+              <IconPlus className="h-5 w-5" />
             </button>
           </header>
 
@@ -842,7 +904,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
               <Notice tone="danger">
                 {error}
                 {(error.includes('设置') || error.includes('接上')) && (
-                  <button type="button" className="ml-2 underline" onClick={onOpenSettings}>
+                  <button type="button" className="ml-2 font-medium underline decoration-current/40 underline-offset-2 transition-colors duration-150 hover:decoration-current" onClick={onOpenSettings}>
                     去设置
                   </button>
                 )}
@@ -858,7 +920,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
               {result && <DecisionPanel result={result} scenarioKind={current?.scenario_kind ?? 'romance'} />}
               {result && (
                 <div className="mx-4 mt-3">
-                  <button type="button" className="text-[13px] text-primary" onClick={() => void explain()}>
+                  <button type="button" className={LINK_CHIP} onClick={() => void explain()}>
                     为什么这么判
                   </button>
                   {reason && (
@@ -877,7 +939,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                       <li key={item} className="text-[14px] leading-[22px] text-ink">{item}</li>
                     ))}
                   </ul>
-                  <button type="button" className="mt-1 text-[13px] text-primary" onClick={() => setQuestions([])}>
+                  <button type="button" className={LINK_CHIP + ' mt-1.5'} onClick={() => setQuestions([])}>
                     跳过，直接看结果
                   </button>
                 </div>
@@ -888,7 +950,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                     <li key={item.text}>
                       <button
                         type="button"
-                        className="w-full rounded-[8px] border border-border bg-surface px-3 py-2 text-left"
+                        className="w-full rounded-[10px] border border-border bg-surface px-3 py-2 text-left transition-colors duration-150 hover:border-primary-border hover:bg-primary-soft/40"
                         onClick={() => {
                           setRole('me')
                           setDraft(item.text)
@@ -902,7 +964,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                   ))}
                 </ul>
               )}
-              <div ref={streamRef} className="flex-1 space-y-2 overflow-y-auto px-4 py-3">
+              <div ref={streamRef} className="flex-1 space-y-3 overflow-y-auto px-4 py-4 sm:px-5">
                 {messages.length === 0 && (
                   <EmptyState title="暂无内容" description="在下方粘贴对方的话，发送者选「对方」，然后保存。" />
                 )}
@@ -927,14 +989,14 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                         className={`flex flex-col ${message.role === 'me' ? 'items-end' : 'items-start'}`}
                       >
                         {speakerName && (
-                          <span className="mb-0.5 text-[11px] text-ink-muted">{speakerName}</span>
+                          <span className="mb-1 text-[11px] text-ink-muted">{speakerName}</span>
                         )}
                         {message.content && (
                           <p
-                            className={`max-w-[80%] whitespace-pre-wrap break-words rounded-[12px] px-3 py-2 text-[14px] leading-[22px] ${
+                            className={`max-w-[min(82%,560px)] whitespace-pre-wrap break-words rounded-[14px] px-3.5 py-2.5 text-[14px] leading-[22px] ${
                               message.role === 'me'
-                                ? 'bg-primary-soft text-ink'
-                                : 'border border-border bg-surface text-ink'
+                                ? 'bg-primary-soft text-ink ring-1 ring-primary-border/70'
+                                : 'border border-border bg-surface text-ink shadow-xs'
                             }`}
                           >
                             {message.content}
@@ -984,30 +1046,42 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                 )}
               </div>
               <div className="sticky bottom-0 border-t border-border bg-surface px-4 py-3 pb-[max(12px,env(safe-area-inset-bottom))]">
-                <div className="mb-2 flex gap-2">
-                  <button
-                    type="button"
-                    className={`h-8 rounded-[6px] px-3 text-[13px] ${role === 'other' ? 'bg-primary text-white' : 'border border-border text-ink'}`}
-                    onClick={() => {
-                      setRole('other')
+                <div className="mb-2.5 flex flex-wrap items-center gap-2">
+                  <Segmented
+                    value={role}
+                    size="sm"
+                    ariaLabel="这条消息是谁说的"
+                    options={[
+                      { value: 'other', label: '对方' },
+                      { value: 'me', label: '我' },
+                    ]}
+                    onChange={(item) => {
+                      setRole(item)
                       // 切去保存对方消息时，候选已不适用，清掉免得误记为「改写」
-                      setPickedText(null)
+                      if (item === 'other') setPickedText(null)
                     }}
-                  >
-                    对方
-                  </button>
-                  <button
-                    type="button"
-                    className={`h-8 rounded-[6px] px-3 text-[13px] ${role === 'me' ? 'bg-primary text-white' : 'border border-border text-ink'}`}
-                    onClick={() => setRole('me')}
-                  >
-                    我
-                  </button>
+                  />
+                  {current?.is_group && (
+                    <select
+                      className="ml-auto h-8 cursor-pointer rounded-[8px] border border-border bg-surface px-2 text-[13px] text-ink shadow-xs transition-colors duration-150 hover:border-border-strong focus:border-primary focus:outline-none focus:ring-[3px] focus:ring-primary/15"
+                      value={replyTarget}
+                      aria-label="要回复哪位成员"
+                      onChange={(event) => setReplyTarget(event.target.value)}
+                    >
+                      <option value="">回复对象：自动</option>
+                      {current.members.map((member) => (
+                        <option key={member.key} value={member.key}>
+                          {displayName(member.key, member.name)}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                 </div>
                 {current?.is_group && role === 'other' && (
                   <select
-                    className="mb-2 w-full rounded-[6px] border border-border px-2 py-1.5 text-[13px] text-ink"
+                    className={controlClass + ' mb-2.5 cursor-pointer'}
                     value={speakerKey}
+                    aria-label="发言成员"
                     onChange={(event) => setSpeakerKey(event.target.value)}
                   >
                     <option value="">请选择发言成员</option>
@@ -1027,7 +1101,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                     </p>
                     <button
                       type="button"
-                      className="shrink-0 text-[12px] text-primary"
+                      className={LINK_CHIP + ' shrink-0'}
                       onClick={() => setPickedText(null)}
                     >
                       按自己写的算
@@ -1040,7 +1114,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                       <div key={item.materialId} className="relative">
                         <button
                           type="button"
-                          className="block h-16 w-16 overflow-hidden rounded-[8px] border border-border"
+                          className="block h-16 w-16 cursor-zoom-in overflow-hidden rounded-[8px] border border-border transition-[border-color,box-shadow] duration-150 hover:border-border-strong hover:shadow-sm"
                           onClick={() => setLightbox(item.url)}
                           aria-label="查看大图"
                         >
@@ -1048,7 +1122,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                         </button>
                         <button
                           type="button"
-                          className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-ink text-[12px] leading-none text-white"
+                          className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-ink text-[12px] leading-none text-white shadow-sm transition-transform duration-150 hover:scale-110 active:scale-95"
                           onClick={() => removeImage(item.materialId)}
                           aria-label="移除这张图"
                         >
@@ -1083,7 +1157,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                           : '粘贴对方发来的内容，也可以直接贴聊天截图'
                         : '写下你要回复的话'
                   }
-                  className="w-full resize-none rounded-[6px] border border-border px-3 py-2 text-ink outline-none"
+                  className="w-full resize-none rounded-[10px] border border-border bg-surface px-3.5 py-2.5 text-ink shadow-xs transition-colors duration-150 placeholder:text-ink-faint focus:border-primary focus:outline-none focus:ring-[3px] focus:ring-primary/15"
                 />
                 <input
                   ref={fileInput}
@@ -1101,7 +1175,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                 {previousDraft !== null && (
                   <button
                     type="button"
-                    className="mt-1 text-[13px] text-primary"
+                    className={LINK_CHIP + ' mt-1'}
                     onClick={() => {
                       setDraft(previousDraft)
                       setPreviousDraft(null)
@@ -1110,85 +1184,93 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings }: Pr
                     撤回润色
                   </button>
                 )}
-                <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
-                  {current?.is_group && (
-                    <select
-                      className="h-8 rounded-[6px] border border-border px-2 text-[13px] text-ink"
-                      value={replyTarget}
-                      aria-label="要回复哪位成员"
-                      onChange={(event) => setReplyTarget(event.target.value)}
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-0.5">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      loading={uploading}
+                      disabled={visionReady === false}
+                      disabledReason="当前默认模型不支持看图"
+                      onClick={() => fileInput.current?.click()}
                     >
-                      <option value="">回复对象：自动</option>
-                      {current.members.map((member) => (
-                        <option key={member.key} value={member.key}>
-                          {displayName(member.key, member.name)}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                  <Button
-                    size="sm"
-                    disabled={messages.length === 0}
-                    disabledReason="请先保存至少一条内容"
-                    onClick={() => {
-                      if (currentId === null) return
-                      const last = [...messages].reverse().find((item) => item.role === 'other')
-                      void runAutoReply(
-                        currentId,
-                        last?.content ?? '',
-                        replyTarget || last?.speaker || '',
-                        last?.id ?? null,
-                      )
-                    }}
-                  >
-                    帮我回复
-                  </Button>
-                  <Button
-                    size="sm"
-                    loading={uploading}
-                    disabled={visionReady === false}
-                    disabledReason="当前默认模型不支持看图"
-                    onClick={() => fileInput.current?.click()}
-                  >
-                    图片
-                  </Button>
-                  <Button size="sm" loading={busy} disabled={!draft.trim()} disabledReason="请先输入内容" onClick={() => void polishDraft()}>
-                    润色
-                  </Button>
-                  {result && !result.context_sufficient && (
-                    <Button size="sm" loading={busy} onClick={() => void askMore()}>
-                      继续问
+                      <IconUpload className="h-4 w-4" />
+                      图片
                     </Button>
-                  )}
-                  {result && !result.high_danger && (
-                    <Button size="sm" loading={busy} onClick={() => void makeCandidates()}>
-                      生成候选
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      loading={busy}
+                      disabled={!draft.trim()}
+                      disabledReason="请先输入内容"
+                      onClick={() => void polishDraft()}
+                    >
+                      润色
                     </Button>
-                  )}
-                  {role === 'me' && (
-                    <Button size="sm" loading={busy} disabled={!draft.trim()} disabledReason="请先写回复" onClick={() => void checkMine()}>
-                      评估这句
+                    {role === 'me' && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        loading={busy}
+                        disabled={!draft.trim()}
+                        disabledReason="请先写回复"
+                        onClick={() => void checkMine()}
+                      >
+                        评估这句
+                      </Button>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {result && !result.context_sufficient && (
+                      <Button size="sm" loading={busy} onClick={() => void askMore()}>
+                        继续问
+                      </Button>
+                    )}
+                    {result && !result.high_danger && (
+                      <Button size="sm" loading={busy} onClick={() => void makeCandidates()}>
+                        生成候选
+                      </Button>
+                    )}
+                    <Button
+                      size="sm"
+                      className="text-primary"
+                      disabled={messages.length === 0}
+                      disabledReason="请先保存至少一条内容"
+                      onClick={() => {
+                        if (currentId === null) return
+                        const last = [...messages].reverse().find((item) => item.role === 'other')
+                        void runAutoReply(
+                          currentId,
+                          last?.content ?? '',
+                          replyTarget || last?.speaker || '',
+                          last?.id ?? null,
+                        )
+                      }}
+                    >
+                      <IconSparkle className="h-4 w-4" />
+                      帮我回复
                     </Button>
-                  )}
-                  <Button
-                    size="sm"
-                    loading={busy}
-                    disabled={chatLocked || (!draft.trim() && images.length === 0)}
-                    disabledReason={chatLocked ? '人设档案缺失，先重建同名档案' : '请先输入内容或贴图'}
-                    onClick={() => void send()}
-                  >
-                    保存
-                  </Button>
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    loading={busy}
-                    disabled={messages.length === 0}
-                    disabledReason="请先保存至少一条内容"
-                    onClick={() => void judge()}
-                  >
-                    分析
-                  </Button>
+                    <Button
+                      size="sm"
+                      loading={busy}
+                      disabled={chatLocked || (!draft.trim() && images.length === 0)}
+                      disabledReason={chatLocked ? '人设档案缺失，先重建同名档案' : '请先输入内容或贴图'}
+                      onClick={() => void send()}
+                    >
+                      保存
+                    </Button>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      loading={busy}
+                      disabled={messages.length === 0}
+                      disabledReason="请先保存至少一条内容"
+                      onClick={() => void judge()}
+                    >
+                      分析
+                    </Button>
+                  </div>
                 </div>
               </div>
             </>
@@ -1228,7 +1310,7 @@ function AttachmentThumb({
   return (
     <button
       type="button"
-      className="block h-16 w-16 overflow-hidden rounded-[8px] border border-border bg-surface-muted"
+      className="block h-16 w-16 cursor-zoom-in overflow-hidden rounded-[8px] border border-border bg-surface-muted transition-[border-color,box-shadow] duration-150 hover:border-border-strong hover:shadow-sm"
       onClick={() => url && onOpen(url)}
       aria-label="查看大图"
     >
@@ -1254,7 +1336,7 @@ function Lightbox({ url, onClose }: { url: string; onClose: () => void }) {
       />
       <button
         type="button"
-        className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-[18px] leading-none text-ink"
+        className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-[16px] leading-none text-ink"
         onClick={onClose}
         aria-label="关闭"
       >
@@ -1282,7 +1364,7 @@ function MemoryNote({ reflection, onUndo }: { reflection: Reflection; onUndo: ()
           </li>
         ))}
       </ul>
-      <button type="button" className="mt-1 text-[13px] text-primary" onClick={onUndo}>
+      <button type="button" className={LINK_CHIP + ' mt-1'} onClick={onUndo}>
         撤销
       </button>
     </div>

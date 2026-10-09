@@ -86,8 +86,11 @@ export default function App() {
   function body() {
   if (restoring) {
     return (
-      <div className="flex min-h-screen items-center justify-center text-sm text-slate-400">
-        加载中…
+      <div className="grid min-h-screen place-items-center bg-canvas">
+        <div className="flex items-center gap-2.5 text-[13px] text-ink-muted">
+          <span className="h-4 w-4 animate-spin rounded-full border-2 border-border-strong border-t-primary" aria-hidden />
+          正在恢复登录状态…
+        </div>
       </div>
     )
   }
