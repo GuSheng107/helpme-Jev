@@ -7,12 +7,20 @@ import Field from '../components/Field'
 import Modal from '../components/Modal'
 import { toast } from '../components/toast'
 import { DataCard, EmptyState, Notice, PageBody, PageHeader, PageShell, StatusTag } from '../components/layout'
+import { IconCopy, IconPlus } from '../components/icons'
 
 const STATUS: Record<Invitation['status'], string> = {
   active: '可用',
   revoked: '已作废',
   expired: '已过期',
   exhausted: '已用完',
+}
+
+const STATUS_TONE: Record<Invitation['status'], 'success' | 'info' | 'warning'> = {
+  active: 'success',
+  revoked: 'info',
+  expired: 'warning',
+  exhausted: 'warning',
 }
 
 function expiryLabel(row: Invitation) {
@@ -61,44 +69,86 @@ export default function InvitationsPage() {
     }
   }
 
+  const activeCount = rows.filter((row) => row.status === 'active').length
+
   return (
     <PageShell>
       <PageBody>
         <PageHeader
           title="邀请码"
-          description="邀请码以 JEV- 开头，生成后可以反复复制。"
-          actions={<Button variant="primary" onClick={() => setCreating(true)}>生成邀请码</Button>}
+          description="邀请码以 JEV- 开头，生成后可以反复复制；作废后已发出的链接立即失效。"
+          actions={
+            <Button variant="primary" onClick={() => setCreating(true)}>
+              <IconPlus className="h-4 w-4" />
+              生成邀请码
+            </Button>
+          }
         />
         {error && <div className="mb-4"><Notice tone="danger">{error}</Notice></div>}
-        <DataCard title="已生成">
+
+        <DataCard
+          title="已生成"
+          description={
+            rows.length > 0 ? `共 ${rows.length} 个 · ${activeCount} 个可用` : undefined
+          }
+          bodyClassName="p-0"
+        >
           {rows.length === 0 ? (
-            <EmptyState title="还没有邀请码" description="生成一个，复制给对方注册。" />
+            <EmptyState
+              title="还没有邀请码"
+              description="生成一个，把邀请码发给对方，对方即可自助注册账号。"
+              action={<Button size="sm" onClick={() => setCreating(true)}>生成邀请码</Button>}
+            />
           ) : (
             <ul className="divide-y divide-border-subtle">
-              {rows.map((row) => (
-                <li key={row.id} className="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="mono text-[15px] font-medium text-ink">{row.code}</span>
-                      <StatusTag tone={row.status === 'active' ? 'success' : 'info'}>{STATUS[row.status]}</StatusTag>
+              {rows.map((row) => {
+                const ratio = row.max_uses > 0 ? Math.min(1, row.used_count / row.max_uses) : 0
+                return (
+                  <li
+                    key={row.id}
+                    className="flex flex-wrap items-center gap-3 px-5 py-3.5 transition-colors duration-150 hover:bg-surface-hover"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="mono select-all rounded-[6px] bg-surface-sunken px-2 py-0.5 text-[14px] font-medium tracking-tight text-ink">
+                          {row.code}
+                        </span>
+                        <StatusTag tone={STATUS_TONE[row.status]}>{STATUS[row.status]}</StatusTag>
+                      </div>
+                      <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[13px] text-ink-muted">
+                        <span className="flex items-center gap-1.5">
+                          <span className="tnum">已用 {row.used_count}/{row.max_uses}</span>
+                          <span className="h-1 w-14 overflow-hidden rounded-full bg-border-subtle">
+                            <span
+                              className={`block h-full rounded-full transition-[width] duration-500 ease-out ${
+                                ratio >= 1 ? 'bg-warning' : 'bg-primary/70'
+                              }`}
+                              style={{ width: `${Math.round(ratio * 100)}%` }}
+                            />
+                          </span>
+                        </span>
+                        <span>{expiryLabel(row)}</span>
+                        {row.note && <span className="truncate">备注：{row.note}</span>}
+                      </div>
                     </div>
-                    <p className="mt-1 text-[13px] text-ink-muted">
-                      已用 {row.used_count}/{row.max_uses} · {expiryLabel(row)}
-                      {row.note ? ` · ${row.note}` : ''}
-                    </p>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button size="sm" onClick={() => void copy(row)}><CopyIcon />复制</Button>
-                    {row.status === 'active' && (
-                      <Button size="sm" variant="danger" onClick={() => void revoke(row)}>作废</Button>
-                    )}
-                  </div>
-                </li>
-              ))}
+
+                    <div className="flex shrink-0 gap-2">
+                      <Button size="sm" onClick={() => void copy(row)}>
+                        <IconCopy className="h-3.5 w-3.5" />
+                        复制
+                      </Button>
+                      {row.status === 'active' && (
+                        <Button size="sm" variant="danger" onClick={() => void revoke(row)}>作废</Button>
+                      )}
+                    </div>
+                  </li>
+                )
+              })}
             </ul>
           )}
         </DataCard>
       </PageBody>
+
       {creating && (
         <CreateInvitationModal
           onClose={() => setCreating(false)}
@@ -152,11 +202,11 @@ function CreateInvitationModal({
   return (
     <Modal size="sm" scroll="hidden" onClose={onClose} busy={busy} labelledBy={titleId} initialFocusSelector="input" className="flex flex-col">
       <form onSubmit={submit} className="flex min-h-0 flex-col">
-        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border-subtle px-4 py-3 sm:px-5">
-          <h3 id={titleId} className="text-[17px] font-semibold text-ink">生成邀请码</h3>
-          <Button size="sm" variant="text" type="button" disabled={busy} onClick={onClose} aria-label="关闭生成邀请码弹窗">关闭</Button>
+        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border-subtle px-5 py-4">
+          <h3 id={titleId} className="text-[16px] font-semibold tracking-tight text-ink">生成邀请码</h3>
+          <Button size="sm" variant="ghost" type="button" disabled={busy} onClick={onClose} aria-label="关闭生成邀请码弹窗">关闭</Button>
         </header>
-        <div className="space-y-3 px-4 py-4 sm:px-5">
+        <div className="space-y-3.5 px-5 py-5">
           <Field label="备注" value={note} onChange={(event) => setNote(event.target.value)} placeholder="发给谁，可不填" />
           <Field
             label="可用次数"
@@ -164,7 +214,7 @@ function CreateInvitationModal({
             min={1}
             value={maxUses}
             onChange={(event) => setMaxUses(event.target.value)}
-            hint="最多 1000 次"
+            hint="最多 1000 次；用满后自动作废"
           />
           <Field
             label="截止日期"
@@ -173,22 +223,13 @@ function CreateInvitationModal({
             onChange={(event) => setExpiresAt(event.target.value)}
             hint="不填视为永久有效"
           />
-          {problem && <p className="text-[12px] text-danger">{problem}</p>}
+          {problem && <p className="text-[13px] leading-5 text-danger">{problem}</p>}
         </div>
-        <footer className="flex shrink-0 justify-end gap-2 border-t border-border-subtle px-4 py-3 sm:px-5">
-          <Button type="button" disabled={busy} onClick={onClose}>取消</Button>
+        <footer className="flex shrink-0 justify-end gap-2 border-t border-border-subtle px-5 py-3">
+          <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>取消</Button>
           <Button type="submit" variant="primary" loading={busy} disabled={incomplete} disabledReason="请填写可用次数">生成</Button>
         </footer>
       </form>
     </Modal>
-  )
-}
-
-function CopyIcon() {
-  return (
-    <svg viewBox="0 0 20 20" className="mr-1 inline-block h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden>
-      <rect x="6" y="6" width="10" height="11" rx="2" />
-      <path d="M13 6V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h1" />
-    </svg>
   )
 }
