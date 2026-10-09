@@ -180,7 +180,7 @@ export default function LoginPage({ onAuthenticated }: Props) {
                 </Line>
                 <Line side="right" who="你">我听出来了，你不是没怎么。</Line>
                 <p className="mt-1 text-right text-[12px] text-ink-faint">
-                  采用了匹配度最高的一条，系统没有发送。
+                  采用了匹配度最高的一条，不会替你发出去。
                 </p>
               </Scene>
             </div>

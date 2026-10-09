@@ -175,7 +175,7 @@ export default function DecisionPanel({
   if (result.context_truncated) {
     notes.push({ tone: 'info', text: '记录较多，较早的条目本次未纳入。' })
   }
-  notes.push({ tone: 'info', text: '人工智能会出错，关键信息请仔细甄别。' })
+  notes.push({ tone: 'info', text: '判断可能不准，重要的事请自己核实。' })
 
   return (
     <section className="border-b border-border-subtle bg-surface-sunken/60">

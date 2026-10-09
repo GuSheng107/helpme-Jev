@@ -8,15 +8,17 @@ import {
   type CustomScenario,
 } from '../api/scenarios'
 import Button from '../components/Button'
+import ContextPicker from '../components/ContextPicker'
 import { Notice } from '../components/layout'
 import Modal from '../components/Modal'
 import StageLoader, { type LoaderStep } from '../components/StageLoader'
 import TabNav from '../components/TabNav'
 import {
   buildPersonaQuestions,
-  CONTEXT_LABELS,
-  dimensionsFor,
-  type PersonaContext,
+  contextOfPersonaQuestions,
+  CUSTOM_CONTEXT_DEFAULT_DIMENSIONS,
+  dimensionKeysOf,
+  personaKeysOf,
 } from '../data/personaCatalog'
 import ScenarioQuestionEditor from './ScenarioQuestionEditor'
 import { parseQuestionSet, serializeQuestionSet, type QuestionItem } from './ScenarioQuestions'
@@ -47,12 +49,12 @@ const GEN_LABELS: Record<GenerateTarget, { running: string; done: string; notice
 const GEN_DIALOG: Record<GenerateTarget, { title: string; hint: string; placeholder: string }> = {
   prompt: {
     title: '起草回复语气',
-    hint: '用当前账号已启用的语言模型，依据场景名称与描述起草一段语气规则。',
+    hint: '用你配置的模型，按场景名称与描述起草一段语气规则。',
     placeholder: '例如：语气专业克制，先共情再给行动建议，不做出未确定的承诺',
   },
   judge: {
     title: '生成判断题集',
-    hint: '用当前账号已启用的语言模型，依据场景信息生成判断题集（判断这次对话的意图、风险与最佳动作）。',
+    hint: '用你配置的模型，按场景信息生成判断题集。',
     placeholder: '例如：重点判断事实、风险和下一步动作',
   },
 }
@@ -70,11 +72,6 @@ function initialQuestions(raw?: string): QuestionItem[] {
   } catch {
     return []
   }
-}
-
-/** 从人设题集反推所属档位：含 DISC 即职场档，否则恋爱档。 */
-function contextOf(raw?: string): PersonaContext {
-  return (raw ?? '').includes('"disc"') ? 'workplace' : 'romance'
 }
 
 async function readQuestionFile(file: File): Promise<QuestionItem[]> {
@@ -114,7 +111,14 @@ export default function ScenarioEditor({ mode, source, onCancel, onSaved }: Prop
   const [description, setDescription] = useState(
     mode === 'copy' ? `复制自「${source?.name ?? ''}」` : (source?.description ?? ''),
   )
-  const [context, setContext] = useState<PersonaContext>(() => contextOf(source?.persona_questions))
+  const [context, setContext] = useState<string>(() =>
+    contextOfPersonaQuestions(source?.persona_questions),
+  )
+  const [customLabel, setCustomLabel] = useState('')
+  const [customKeys, setCustomKeys] = useState<string[]>(() => {
+    const keys = personaKeysOf(source?.persona_questions)
+    return keys.length > 0 ? keys : CUSTOM_CONTEXT_DEFAULT_DIMENSIONS
+  })
   const [prompt, setPrompt] = useState(source?.system_prompt ?? '')
   const [judgeItems, setJudgeItems] = useState(() => initialQuestions(source?.judge_questions))
   const [judgeOpen, setJudgeOpen] = useState(false)
@@ -129,7 +133,6 @@ export default function ScenarioEditor({ mode, source, onCancel, onSaved }: Prop
 
   const title =
     mode === 'edit' ? `编辑「${source?.name ?? ''}」` : mode === 'copy' ? `复制「${source?.name ?? ''}」` : '新建场景'
-  const dimensions = dimensionsFor(context)
   const loaderSteps: LoaderStep[] = genTarget
     ? [{ key: genTarget, ...GEN_LABELS[genTarget], state: genDone ? 'done' : 'running' }]
     : []
@@ -205,8 +208,8 @@ export default function ScenarioEditor({ mode, source, onCancel, onSaved }: Prop
       description: description.trim(),
       system_prompt: prompt.trim(),
       judge_questions: judgeQuestions,
-      // 人设题一律由维度库按档位确定性拼装，杜绝模型现编带来的失真
-      persona_questions: buildPersonaQuestions(context),
+      // 人设题按所选档位的维度拼装
+      persona_questions: buildPersonaQuestions(dimensionKeysOf(context, customKeys)),
     }
     setBusy(true)
     try {
@@ -235,7 +238,7 @@ export default function ScenarioEditor({ mode, source, onCancel, onSaved }: Prop
             {title}
           </h2>
           <p className="mt-1 text-[13px] text-ink-muted">
-            场景决定判断视角与回复语气；人设维度固定取标准档，保证有依据。
+            场景决定判断视角与回复语气；人设维度从标准库里取。
           </p>
         </div>
         <Button size="sm" variant="ghost" onClick={onCancel} disabled={locked} aria-label="关闭场景编辑弹窗">
@@ -292,34 +295,16 @@ export default function ScenarioEditor({ mode, source, onCancel, onSaved }: Prop
 
             <div>
               <p className="text-[13px] font-medium text-ink-secondary">人设档</p>
-              <p className="mt-1 text-[12px] leading-5 text-ink-muted">
-                人设维度按档位固定取用，不再由模型现编——这是保证画像准确、可解释的关键。
-              </p>
-              <div className="mt-2.5 inline-flex rounded-[10px] border border-border bg-surface-muted p-1">
-                {(['romance', 'workplace'] as const).map((item) => (
-                  <button
-                    key={item}
-                    type="button"
-                    disabled={locked}
-                    onClick={() => setContext(item)}
-                    className={`rounded-[7px] px-4 py-1.5 text-[13px] transition-colors duration-150 ${
-                      context === item ? 'bg-surface font-medium text-primary shadow-xs' : 'text-ink-secondary hover:text-ink'
-                    }`}
-                  >
-                    {CONTEXT_LABELS[item]}
-                  </button>
-                ))}
-              </div>
-              <div className="mt-3 flex flex-wrap gap-1.5">
-                {dimensions.map((dim) => (
-                  <span
-                    key={dim.key}
-                    className="inline-flex items-center gap-1 rounded-[6px] bg-surface-muted px-2 py-1 text-[12px] text-ink-secondary"
-                  >
-                    {dim.title}
-                    {dim.weakScience && <span className="text-[11px] text-ink-faint">证据有限</span>}
-                  </span>
-                ))}
+              <div className="mt-2">
+                <ContextPicker
+                  value={context}
+                  label={customLabel}
+                  keys={customKeys}
+                  disabled={locked}
+                  onChange={setContext}
+                  onLabel={setCustomLabel}
+                  onKeys={setCustomKeys}
+                />
               </div>
             </div>
           </div>
@@ -331,7 +316,7 @@ export default function ScenarioEditor({ mode, source, onCancel, onSaved }: Prop
               <div className="min-w-0">
                 <p className="text-[13px] font-medium text-ink">判断题集</p>
                 <p className="mt-1 text-[12px] leading-5 text-ink-muted">
-                  判断这次对话的意图、风险与最佳动作。最多 20 道，需包含「是非 / 选项 / 评分」题型。
+                  判断这次对话的意图、风险与最佳动作。最多 20 道，题型为是非 / 选项 / 评分。
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -345,7 +330,7 @@ export default function ScenarioEditor({ mode, source, onCancel, onSaved }: Prop
             </div>
             {judgeItems.length === 0 ? (
               <p className="rounded-[10px] bg-surface-muted p-3.5 text-[13px] text-ink-muted">
-                还没有题目。可以从基础视角复制、自动生成，或导入 JSON。
+                还没有题目。可以生成一版，或导入之前导出的 JSON。
               </p>
             ) : (
               <ul className="space-y-1.5">
@@ -380,7 +365,7 @@ export default function ScenarioEditor({ mode, source, onCancel, onSaved }: Prop
               <div className="min-w-0">
                 <p className="text-[13px] font-medium text-ink">回复语气</p>
                 <p className="mt-1 text-[12px] leading-5 text-ink-muted">
-                  告诉回复模型该用什么口吻。留空则使用默认规则。
+                  约定回复该用什么口吻。留空则用默认规则。
                 </p>
               </div>
               <Button size="sm" type="button" disabled={locked} onClick={() => askGenerate('prompt')}>

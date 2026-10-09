@@ -234,7 +234,7 @@ export default function DecisionPage() {
                 kind === 'choice'
                   ? '选择题至少填两个选项，JEV 会给出各选项的相对可能性。'
                   : kind === 'score'
-                    ? '评分题结论为 0–10 分，按 10 个档位等比例换算并保留两位小数。'
+                    ? '评分题结论为 0–10 分。'
                     : '是非题结论为「是 / 否」及对应把握程度。'
               }
               className="lg:sticky lg:top-8"

@@ -11,7 +11,8 @@ export interface Trait {
 export interface PersonaView {
   counterpart_key: string
   subject: 'me' | 'other'
-  context: 'romance' | 'workplace'
+  context: PersonaContext
+  context_label?: string
   traits: Trait[]
   confidence: number
   version: number
@@ -25,7 +26,8 @@ export interface ChatPreview {
   messages: { role: string; content: string; label: string }[]
 }
 
-export type PersonaContext = 'romance' | 'workplace'
+/** 人设档位标识：内置档位是固定 slug，自定义档位由前端生成 cx_xxxxxx 形式。 */
+export type PersonaContext = string
 
 export function getPersona(
   counterpartKey: string,
@@ -43,12 +45,16 @@ export function buildPersona(
   selfReport: Record<string, string | number> = {},
   context?: PersonaContext,
   memberKey = '',
+  contextLabel = '',
+  dimensionKeys: string[] = [],
 ) {
   return api.post<PersonaView>('/api/personas/build', {
     conversation_id: conversationId,
     subject,
     self_report: selfReport,
     context,
+    context_label: contextLabel,
+    dimension_keys: dimensionKeys,
     member_key: memberKey,
   })
 }
@@ -82,6 +88,7 @@ export interface PersonaProfileView {
   nickname: string
   avatar_base64: string
   context: PersonaContext
+  context_label?: string
   traits: Trait[]
   summary: string
   confidence: number
@@ -96,6 +103,8 @@ export function createProfile(body: {
   nickname: string
   avatar_base64?: string
   context: PersonaContext
+  context_label?: string
+  dimension_keys?: string[]
   answers: Record<string, string | number>
 }) {
   return api.post<PersonaProfileView>('/api/personas/profiles', body)

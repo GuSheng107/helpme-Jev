@@ -108,7 +108,7 @@ export default function HomePage({ user, onNavigate, onOpenConversation }: Props
           <Notice tone="warning">
             <span className="inline-flex items-center gap-1.5">
               <IconWarning className="h-4 w-4 shrink-0" />
-              AI 会出错，重要决定请自行核实关键信息。
+              判断可能不准，重要的事请自己核实。
             </span>
           </Notice>
         </div>

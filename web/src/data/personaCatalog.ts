@@ -5,11 +5,8 @@ export type { PersonaContext }
 /**
  * 人设维度库 —— 全站唯一的人设题目来源。
  *
- * 为什么要这座库：
- * 人设必须建立在**有依据、可解释**的维度上（大五人格、依恋类型、爱的语言、
- * 冲突风格、DISC）。过去自定义场景让语言模型现编题目，结果题面模板腔、
- * 维度混乱，还会与判断链路用的题目对不上。现在题目一律由本库确定性拼装，
- * 场景只能在库里**挑选**维度，不再自由生成。
+ * 人设建立在有公开定义的维度上（大五人格、依恋类型、爱的语言、冲突风格、DISC），
+ * 题目由本库按所选维度拼装，场景与档位只能从库里取，不另生成题面。
  */
 
 /** 9 档评分，与后端 OCEAN_LEVELS 逐档对齐（0–8）。 */
@@ -44,21 +41,19 @@ export interface Dimension {
   /** 一句话对照说明 */
   hint: string
   type: 'score' | 'choice'
-  /** 英文判别说明（喂给 JEV 决策模型） */
+  /** 英文判别说明（喂给判定模型） */
   instruction: string
   options?: DimOption[]
-  /** 该框架的科学证据有限，展示时需注明 */
-  weakScience?: boolean
   group: DimensionGroup
 }
 
 export type DimensionGroup = 'core' | 'relation' | 'interaction' | 'work'
 
 export const DIMENSION_GROUPS: { key: DimensionGroup; label: string; hint: string }[] = [
-  { key: 'core', label: '核心特质', hint: '性格底色，决定沟通的温度与节奏' },
+  { key: 'core', label: '核心特质', hint: '性格底色' },
   { key: 'relation', label: '关系模式', hint: '亲密关系中的需求与敏感点' },
   { key: 'interaction', label: '互动方式', hint: '出现分歧时的处理倾向' },
-  { key: 'work', label: '工作风格', hint: '职场协作中的行事倾向' },
+  { key: 'work', label: '工作风格', hint: '协作中的行事倾向' },
 ]
 
 export const DIMENSIONS: Dimension[] = [
@@ -135,10 +130,9 @@ export const DIMENSIONS: Dimension[] = [
     key: 'love_language',
     title: '爱的语言',
     question: '最在意哪种被在乎的方式',
-    hint: '哪种方式最能让 TA 感到被爱',
+    hint: '哪种方式最能让 TA 感到被在乎',
     type: 'choice',
     instruction: `Which way of receiving care matters most to the other person? ${INFER_SUFFIX}`,
-    weakScience: true,
     group: 'relation',
     options: [
       { value: 'words', label: '肯定的言辞', note: '被肯定、被鼓励' },
@@ -167,7 +161,7 @@ export const DIMENSIONS: Dimension[] = [
   {
     key: 'disc',
     title: 'DISC 工作风格',
-    question: '职场协作中的行事倾向',
+    question: '协作中的行事倾向',
     hint: '推进事情时的节奏与关注点',
     type: 'choice',
     instruction: `Which DISC profile best fits the other person's work style? ${INFER_SUFFIX}`,
@@ -181,48 +175,152 @@ export const DIMENSIONS: Dimension[] = [
   },
 ]
 
-/** 两档人设各自使用的维度（顺序与后端内置题集一致）。 */
-export const CONTEXT_DIMENSIONS: Record<PersonaContext, string[]> = {
-  romance: [
-    'openness',
-    'conscientiousness',
-    'extraversion',
-    'agreeableness',
-    'emotional_stability',
-    'attachment',
-    'love_language',
-    'conflict_style',
-    'sensitivity',
-  ],
-  workplace: [
-    'openness',
-    'conscientiousness',
-    'extraversion',
-    'agreeableness',
-    'emotional_stability',
-    'disc',
-    'conflict_style',
-  ],
+/* ------------------------------------------------------------------ 档位 */
+
+export interface ContextPreset {
+  key: string
+  label: string
+  /** 一行说明：这个档位用在什么关系里 */
+  hint: string
+  dimensions: string[]
 }
 
-export const CONTEXT_LABELS: Record<PersonaContext, string> = {
-  romance: '恋爱',
-  workplace: '职场',
+/** 内置档位：键名固定，与后端 CONTEXT_PRESETS 一一对应。 */
+export const CONTEXT_PRESETS: ContextPreset[] = [
+  {
+    key: 'romance',
+    label: '恋爱',
+    hint: '亲密关系',
+    dimensions: [
+      'openness',
+      'conscientiousness',
+      'extraversion',
+      'agreeableness',
+      'emotional_stability',
+      'attachment',
+      'love_language',
+      'conflict_style',
+      'sensitivity',
+    ],
+  },
+  {
+    key: 'workplace',
+    label: '职场',
+    hint: '同事与上下级',
+    dimensions: [
+      'openness',
+      'conscientiousness',
+      'extraversion',
+      'agreeableness',
+      'emotional_stability',
+      'disc',
+      'conflict_style',
+    ],
+  },
+  {
+    key: 'family',
+    label: '家人',
+    hint: '亲属关系',
+    dimensions: [
+      'openness',
+      'conscientiousness',
+      'extraversion',
+      'agreeableness',
+      'emotional_stability',
+      'sensitivity',
+      'attachment',
+      'conflict_style',
+    ],
+  },
+  {
+    key: 'friends',
+    label: '朋友',
+    hint: '朋友与同学',
+    dimensions: [
+      'openness',
+      'conscientiousness',
+      'extraversion',
+      'agreeableness',
+      'emotional_stability',
+      'sensitivity',
+      'conflict_style',
+    ],
+  },
+  {
+    key: 'general',
+    label: '通用',
+    hint: '不限关系',
+    dimensions: [
+      'openness',
+      'conscientiousness',
+      'extraversion',
+      'agreeableness',
+      'emotional_stability',
+      'conflict_style',
+    ],
+  },
+]
+
+/** 自定义档位的标识：走这个 slug 落库，档位名另存 context_label。 */
+export const CUSTOM_CONTEXT = 'custom'
+/** 自定义档位默认取用的维度（与「通用」一致）。 */
+export const CUSTOM_CONTEXT_DEFAULT_DIMENSIONS = CONTEXT_PRESETS[4].dimensions
+
+export const DEFAULT_CONTEXT = 'romance'
+
+/** 一个档位最多勾选的维度数（就是维度库本身的上限）。 */
+export const MAX_DIMENSIONS = DIMENSIONS.length
+
+export function isPresetContext(context: string): boolean {
+  return CONTEXT_PRESETS.some((item) => item.key === context)
+}
+
+export function presetOf(context: string): ContextPreset | undefined {
+  return CONTEXT_PRESETS.find((item) => item.key === context)
+}
+
+/** 档位显示名：优先取档位自带的名字，其次内置档位名，最后给个中性兜底。 */
+export function contextLabelOf(context: string, label = ''): string {
+  const trimmed = (label || '').trim()
+  if (trimmed) return trimmed
+  return presetOf(context)?.label ?? '自定义'
 }
 
 export function dimensionByKey(key: string): Dimension | undefined {
   return DIMENSIONS.find((item) => item.key === key)
 }
 
-export function dimensionsFor(context: PersonaContext): Dimension[] {
-  return CONTEXT_DIMENSIONS[context]
-    .map((key) => dimensionByKey(key))
-    .filter((item): item is Dimension => Boolean(item))
+/** 把维度 key 列表解析成维度对象（库外的 key 忽略，顺序按库里定义）。 */
+export function resolveDimensions(keys: string[]): Dimension[] {
+  const wanted = new Set(keys)
+  return DIMENSIONS.filter((item) => wanted.has(item.key))
 }
+
+/**
+ * 某个档位取用的维度。
+ *
+ * 内置档位按预设取；自定义档位用调用方给的 keys，
+ * 没给就回落到「通用」那套。
+ */
+export function dimensionsOf(context: string, keys?: string[]): Dimension[] {
+  const preset = presetOf(context)
+  if (preset) return resolveDimensions(preset.dimensions)
+  const picked = keys && keys.length > 0 ? keys : CUSTOM_CONTEXT_DEFAULT_DIMENSIONS
+  return resolveDimensions(picked)
+}
+
+/** 档位对应的维度 key 列表（拼装题集用）。 */
+export function dimensionKeysOf(context: string, keys?: string[]): string[] {
+  const preset = presetOf(context)
+  if (preset) return [...preset.dimensions]
+  return keys && keys.length > 0 ? [...keys] : [...CUSTOM_CONTEXT_DEFAULT_DIMENSIONS]
+}
+
+/* ------------------------------------------------------------------ 题集 */
 
 const EVIDENCE_QUESTION = {
   type: 'noul',
-  title: '证据是否充足',
+  title: '信息是否足够',
   instructions: `Is there enough evidence to update the other person's persona without guessing? ${INFER_SUFFIX}`,
   criteria: {
     true: 'Several distinct signals support the same reading.',
@@ -249,14 +347,37 @@ function questionOf(dim: Dimension): Record<string, unknown> {
   return { type: 'choice', title: dim.title, instructions: dim.instruction, criteria, labels }
 }
 
-/** 由维度库确定性拼装一套标准人设题集（JSON 字符串），供场景保存 / 预览使用。 */
-export function buildPersonaQuestions(context: PersonaContext): string {
+/** 由维度库按所选维度拼装一套人设题集（JSON 字符串），供场景保存 / 预览使用。 */
+export function buildPersonaQuestions(contextOrKeys: string | string[]): string {
+  const keys = Array.isArray(contextOrKeys)
+    ? contextOrKeys
+    : dimensionKeysOf(contextOrKeys)
   const result: Record<string, unknown> = {}
-  for (const dim of dimensionsFor(context)) {
+  for (const dim of resolveDimensions(keys)) {
     result[dim.key] = questionOf(dim)
   }
   result.evidence_sufficient = EVIDENCE_QUESTION
   return JSON.stringify(result)
+}
+
+/** 从人设题集反推所用的维度 key（顺序按库里定义）。 */
+export function personaKeysOf(raw?: string): string[] {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw || '{}') as Record<string, unknown>
+    if (!parsed || typeof parsed !== 'object') return []
+    return resolveDimensions(Object.keys(parsed)).map((item) => item.key)
+  } catch {
+    return []
+  }
+}
+
+/** 由人设题集反推档位：维度组合与某个内置档位一致就算那一档，否则算自定义。 */
+export function contextOfPersonaQuestions(raw?: string): string {
+  const keys = personaKeysOf(raw)
+  if (keys.length === 0) return CUSTOM_CONTEXT
+  const same = (a: string[]) => a.length === keys.length && a.every((key) => keys.includes(key))
+  return CONTEXT_PRESETS.find((item) => same(item.dimensions))?.key ?? CUSTOM_CONTEXT
 }
 
 const GRADES = ['score', 'choice', 'noul'] as const

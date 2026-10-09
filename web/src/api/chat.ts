@@ -237,7 +237,7 @@ export interface ReplyStreamEvent {
   error?: ApiErrorBody
 }
 
-/** 一键自动回复：对面来话后解读 → 评分 → 按人设起草 → JEV 排序。 */
+/** 解读对面来话 → 评分 → 按人设起草 → JEV 排序。 */
 export function replyStream(
   body: { conversation_id: number; target_member?: string },
   onEvent?: (event: ReplyStreamEvent) => void,

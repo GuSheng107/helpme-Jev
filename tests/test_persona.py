@@ -1209,3 +1209,112 @@ def test_batch_prefers_profiles(client: TestClient, db: Session) -> None:
     xiaolin = next(item for item in body["participants"] if item["key"] == "小林")
     assert xiaolin["persona"]["version"] == 1
     assert xiaolin["persona"]["traits"][0]["text"] == "稳健型（S）"
+
+
+# ------------------------------------------------------------------ 自定义档位
+def test_profile_create_custom_context_uses_picked_dimensions(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """自定义档位：题集按勾选的维度拼装，档位名随档案存下来。"""
+    headers = _user(client, db, "customctx")
+    _ready(client, db, "customctx", headers)
+    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: _SummaryRouter())
+
+    created = client.post(
+        "/api/personas/profiles",
+        headers=headers,
+        json={
+            "nickname": "阿哲",
+            "context": "custom",
+            "context_label": "室友",
+            "dimension_keys": ["openness", "conflict_style"],
+            "answers": {"openness": 6, "conflict_style": "avoiding"},
+        },
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["context"] == "custom"
+    assert body["context_label"] == "室友"
+    assert {item["key"] for item in body["traits"]} == {"openness", "conflict_style"}
+
+    # 没勾的维度不在题集里，作答会被拒
+    rejected = client.post(
+        "/api/personas/profiles",
+        headers=headers,
+        json={
+            "nickname": "阿哲二号",
+            "context": "custom",
+            "context_label": "室友",
+            "dimension_keys": ["openness"],
+            "answers": {"disc": "dominance"},
+        },
+    )
+    assert rejected.status_code == 422, rejected.text
+
+
+def test_profile_context_must_be_slug(client: TestClient, db: Session) -> None:
+    """档位标识只收小写 slug：大写、连字符、中文、数字开头一律拒。"""
+    headers = _user(client, db, "badctx")
+    for bad in ("Bad-Key", "室友", "1abc", "has space"):
+        resp = client.post(
+            "/api/personas/profiles",
+            headers=headers,
+            json={"nickname": "某人", "context": bad, "answers": {"openness": 5}},
+        )
+        assert resp.status_code == 422, f"{bad} 应该被拒：{resp.text}"
+
+
+def test_build_keeps_custom_context_instead_of_falling_back(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """自定义档位不再被强制回落成恋爱档；档案跟着显式选的档位换档。"""
+    headers = _user(client, db, "custombuild")
+    conv_id = _ready(client, db, "custombuild", headers)
+    client.post(
+        f"/api/conversations/{conv_id}/messages",
+        headers=headers,
+        json={"role": "other", "content": "今天不想说话"},
+    )
+    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: _Router())
+
+    built = client.post(
+        "/api/personas/build",
+        headers=headers,
+        json={
+            "conversation_id": conv_id,
+            "subject": "other",
+            "context": "custom",
+            "context_label": "室友",
+            "dimension_keys": ["openness", "conflict_style"],
+        },
+    )
+    assert built.status_code == 200, built.text
+    body = built.json()
+    assert body["context"] == "custom"
+    assert body["context_label"] == "室友"
+    assert {item["key"] for item in body["traits"]} <= {"openness", "conflict_style"}
+
+    # 占位档案被吸收补全，档位随之改成显式选的那个
+    listed = client.get("/api/personas/profiles", headers=headers)
+    profile = next(item for item in listed.json() if item["key"] == "她")
+    assert profile["context"] == "custom"
+    assert profile["context_label"] == "室友"
+
+
+def test_unknown_context_falls_back_to_general_questions() -> None:
+    """未知档位走通用题集（大五 + 冲突风格），不冒充恋爱档。"""
+    from app.scenarios.persona_questions import CONTEXT_PRESETS, persona_questions_for
+
+    general = persona_questions_for("general", "other")
+    assert set(general) == set(CONTEXT_PRESETS["general"]) | {"evidence_sufficient"}
+    assert "love_language" not in general
+    assert "disc" not in general
+
+    # 真·未知 slug 与通用档同形
+    assert set(persona_questions_for("cx_whatever", "other")) == set(general)
+
+    # 家人档取依恋与情绪敏感，但不取爱的语言 / DISC
+    family = persona_questions_for("family", "other")
+    assert {"attachment", "sensitivity"} <= set(family)
+    assert "love_language" not in family
+    assert "disc" not in family

@@ -17,7 +17,7 @@ from ..repositories.models import Conversation, Persona, PersonaProfile, Scenari
 from ..scenarios.persona_questions import (
     TRAIT_LABELS,
     WEAK_SCIENCE_TRAITS,
-    persona_questions_for,
+    questions_for,
     trait_text,
 )
 from .analyze_service import RECENT_MESSAGE_LIMIT, AnalyzeService
@@ -113,6 +113,8 @@ class PersonaService:
         subject: str,
         self_report: dict | None = None,
         context: str | None = None,
+        context_label: str = "",
+        dimension_keys: list[str] | None = None,
         trace_id: str = "",
         member_key: str = "",
     ) -> dict:
@@ -149,8 +151,8 @@ class PersonaService:
                         f"「{profile_hit.nickname}」已有人设库档案，判断时以档案为准；如需重建请先在档案里删除",
                         status_code=409,
                     )
-        # 档案情境可以由用户选择；题集始终取会话挂载的自定义场景。
-        # persona_context_of 已把自定义场景映射到 romance / workplace，这里不可能再是 custom
+        # 档位可以由用户选择：内置档位按预设取题，自定义档位按所选维度拼装。
+        # 挂自定义场景时，题集始终以场景里materialize的那份为准。
         scenario_kind = kind_of(db, conversation)
         kind = context or persona_context_of(db, conversation)
         custom_source = (
@@ -158,8 +160,6 @@ class PersonaService:
             if scenario_kind == "custom" else None
         )
         custom_questions = strip_meta(custom_source) if custom_source else None
-        if kind not in {"romance", "workplace"}:
-            kind = "romance"
         rows = _messages.list_by_conversation(
             db, conversation_id=conversation.id, limit=RECENT_MESSAGE_LIMIT
         )
@@ -173,7 +173,7 @@ class PersonaService:
             db, owner_user_id, conversation, rows, self_report, trace_id,
             focus_name=focus_name,
         )
-        questions = custom_questions or persona_questions_for(kind, subject)
+        questions = custom_questions or questions_for(kind, dimension_keys, subject)
         result = jev_client.call_with_fallback(
             endpoint_url=jev.endpoint_url,
             api_key=_providers.decrypt_key(jev),
@@ -190,7 +190,7 @@ class PersonaService:
         if not result.ok:
             raise DomainError(DomainErrorCode.JEV_UPSTREAM_ERROR, "建模未完成，请重试。", status_code=502)
 
-        traits, confidence, sufficient = _read_answers(result.answers)
+        traits, confidence, sufficient = _read_answers(result.answers, set(questions))
         if subject == "me":
             confidence = max(confidence, SELF_REPORT_CONFIDENCE)
             sufficient = True
@@ -204,13 +204,17 @@ class PersonaService:
                 return {
                     **self._profile_build_view(absorb_profile),
                     "kept": True,
-                    "reason": "证据不足，档案保持原样",
+                    "reason": "这段内容还看不出稳定的变化，档案保持原样",
                 }
             if self_report:
                 absorb_profile.answers = json.dumps(self_report, ensure_ascii=False)
             absorb_profile.traits = json.dumps(
                 _stored_traits(traits, questions), ensure_ascii=False
             )
+            # 调用方显式选了档位：档案跟着换档，否则档案会一直停在建库时那一档
+            if context:
+                absorb_profile.context = kind
+                absorb_profile.context_label = context_label
             absorb_profile.confidence = confidence
             absorb_profile.version += 1
             db.commit()
@@ -228,7 +232,11 @@ class PersonaService:
             context=kind,
         )
         if existing is not None and (not sufficient or confidence < MIN_CONFIDENCE):
-            return {**self._view(existing), "kept": True, "reason": "证据不足，已保留原档案"}
+            return {
+                **self._view(existing),
+                "kept": True,
+                "reason": "这段内容还看不出稳定的变化，档案保持原样",
+            }
 
         row = existing or Persona(
             owner_user_id=owner_user_id,
@@ -236,6 +244,8 @@ class PersonaService:
             subject=subject,
             context=kind,
         )
+        if context_label:
+            row.context_label = context_label
         row.traits = json.dumps(_stored_traits(traits, custom_source), ensure_ascii=False)
         row.evidence = json.dumps(_evidence(rows, self_report), ensure_ascii=False)
         row.confidence = confidence
@@ -252,6 +262,7 @@ class PersonaService:
             "counterpart_key": row.key,
             "subject": "other",
             "context": row.context,
+            "context_label": row.context_label or "",
             "traits": trait_items(row.traits),
             "confidence": round(row.confidence * 100),
             "version": row.version,
@@ -312,6 +323,7 @@ class PersonaService:
                         "counterpart_key": key,
                         "subject": "other",
                         "context": profile.context,
+                        "context_label": profile.context_label or "",
                         "traits": trait_items(profile.traits),
                         "confidence": round(profile.confidence * 100),
                         "version": profile.version,
@@ -411,7 +423,7 @@ class PersonaService:
                 traits = trait_items(profile.traits)[:6]
                 display = profile.nickname or name
             else:
-                row = self._find(
+                row = self._find_any(
                     db, owner_user_id=owner_user_id,
                     counterpart_key=key, subject="other", context=context,
                 )
@@ -502,6 +514,32 @@ class PersonaService:
             )
         ).first()
 
+    def _find_any(
+        self, db, *, owner_user_id, counterpart_key, subject, context: str = ""
+    ) -> Persona | None:
+        """按档位优先、其余档位兜底取一份档案。
+
+        自定义档位的 slug 只存在于前端，服务端按会话推不出档位名；
+        判断背景不该因此丢掉这个人的人设。
+        """
+        rows = list(
+            db.scalars(
+                select(Persona)
+                .where(
+                    Persona.owner_user_id == owner_user_id,
+                    Persona.counterpart_key == counterpart_key,
+                    Persona.subject == subject,
+                )
+                .order_by(Persona.updated_at.desc())
+            )
+        )
+        if not rows:
+            return None
+        for row in rows:
+            if row.context == context:
+                return row
+        return rows[0]
+
     def _view(
         self,
         row: Persona | None,
@@ -515,6 +553,7 @@ class PersonaService:
                 "counterpart_key": counterpart_key,
                 "subject": subject,
                 "context": context,
+                "context_label": "",
                 "traits": [],
                 "confidence": 0,
                 "version": 0,
@@ -524,6 +563,7 @@ class PersonaService:
             "counterpart_key": row.counterpart_key,
             "subject": row.subject,
             "context": row.context,
+            "context_label": row.context_label or "",
             "traits": trait_items(row.traits),
             "confidence": round(row.confidence * 100),
             "version": row.version,
@@ -561,11 +601,18 @@ def _trait_text_with_meta(key: str, value: object, meta: dict) -> str:
     return trait_text(key, value)
 
 
-def _read_answers(answers: dict) -> tuple[dict, float, bool]:
+def _read_answers(answers: dict, asked: set[str] | None = None) -> tuple[dict, float, bool]:
+    """把判定模型返回的作答收成 traits。
+
+    ``asked`` 给出本次真正问过的题：模型多答的维度一律不认，
+    否则换个档位后旧维度会从回答里漏进来污染档案。
+    """
     traits: dict = {}
     confidences: list[float] = []
     for key, raw in answers.items():
         if key == "evidence_sufficient" or not isinstance(raw, dict):
+            continue
+        if asked is not None and key not in asked:
             continue
         if "choice" in raw:
             traits[key] = raw.get("choice")
