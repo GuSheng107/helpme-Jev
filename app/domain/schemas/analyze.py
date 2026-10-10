@@ -11,23 +11,9 @@ class ConversationRef(StrictModel):
     conversation_id: int = Field(ge=1)
 
 
-class ReplyRequest(StrictModel):
-    conversation_id: int = Field(ge=1)
-    decision: dict = Field(default_factory=dict)
-
-
 class ReplyStreamRequest(StrictModel):
     conversation_id: int = Field(ge=1)
     target_member: str = Field(default="", max_length=64)
-
-
-class EvaluateRequest(StrictModel):
-    conversation_id: int = Field(ge=1)
-    text: str = Field(min_length=1, max_length=2000)
-
-
-class ClarifyRequest(StrictModel):
-    conversation_id: int = Field(ge=1)
 
 
 class ExplainRequest(StrictModel):

@@ -82,7 +82,6 @@ class MemorySubject(StrEnum):
 class ScenarioKind(StrEnum):
     ROMANCE = "romance"
     WORKPLACE = "workplace"
-    GENERAL = "general"
     CUSTOM = "custom"
 
 

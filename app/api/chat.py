@@ -13,12 +13,9 @@ from ..core.db import SessionLocal, get_db
 from ..domain.errors import DomainError, DomainErrorCode, error_body
 from ..domain.schemas.analyze import (
     AnalyzeView,
-    ClarifyRequest,
     ConversationRef,
-    EvaluateRequest,
     ExplainRequest,
     PolishRequest,
-    ReplyRequest,
     ReplyStreamRequest,
 )
 from ..repositories.conversations_repo import ConversationRepository
@@ -143,25 +140,6 @@ def revert_reflect(
     return _reflection_view(row)
 
 
-@router.post("/reply")
-def reply(
-    payload: ReplyRequest,
-    request: Request,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_active_user),
-) -> dict:
-    conversation = _conversation_or_404(
-        db, owner_user_id=user.id, conversation_id=payload.conversation_id
-    )
-    return _reply.draft(
-        db,
-        owner_user_id=user.id,
-        conversation=conversation,
-        decision=payload.decision,
-        trace_id=getattr(request.state, "trace_id", ""),
-    )
-
-
 def _frame(payload: dict) -> str:
     """SSE 单帧：一行 data 加一个空行。"""
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -229,38 +207,6 @@ def reply_stream(
         events(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
-
-
-@router.post("/evaluate")
-def evaluate(
-    payload: EvaluateRequest,
-    request: Request,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_active_user),
-) -> dict:
-    conversation = _conversation_or_404(
-        db, owner_user_id=user.id, conversation_id=payload.conversation_id
-    )
-    return _reply.evaluate(
-        db, owner_user_id=user.id, conversation=conversation, text=payload.text,
-        trace_id=getattr(request.state, "trace_id", ""),
-    )
-
-
-@router.post("/clarify")
-def clarify(
-    payload: ClarifyRequest,
-    request: Request,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_active_user),
-) -> dict:
-    conversation = _conversation_or_404(
-        db, owner_user_id=user.id, conversation_id=payload.conversation_id
-    )
-    return _reply.clarify(
-        db, owner_user_id=user.id, conversation=conversation,
-        trace_id=getattr(request.state, "trace_id", ""),
     )
 
 

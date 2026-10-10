@@ -9,9 +9,7 @@ from ..core.db import get_db
 from ..domain.errors import DomainError, DomainErrorCode
 from ..domain.schemas.conversation import parse_members
 from ..domain.schemas.persona import (
-    CONTEXT_PATTERN,
     ChatImportRequest,
-    PersonaBuildRequest,
     PersonaProfileCreate,
     PersonaProfileUpdate,
     QaImportRequest,
@@ -44,23 +42,6 @@ def _member_label_map(conversation) -> dict[str, str] | None:
     if not conversation.is_group:
         return None
     return {member.name: member.key for member in parse_members(conversation.members)}
-
-
-@router.get("/api/personas")
-def get_persona(
-    counterpart_key: str = Query(min_length=1),
-    subject: str = Query(pattern="^(me|other)$"),
-    context: str = Query(default="romance", pattern=CONTEXT_PATTERN),
-    db: Session = Depends(get_db),
-    user: User = Depends(require_active_user),
-) -> dict:
-    return _personas.get(
-        db,
-        owner_user_id=user.id,
-        counterpart_key=counterpart_key,
-        subject=subject,
-        context=context,
-    )
 
 
 @router.get("/api/personas/profiles")
@@ -106,50 +87,6 @@ def delete_profile(
 ) -> Response:
     _profiles.delete(db, owner_user_id=user.id, profile_id=profile_id)
     return Response(status_code=204)
-
-
-@router.get("/api/personas/batch")
-def batch_personas(
-    conversation_id: int = Query(ge=1),
-    context: str = Query(default="", pattern=f"^$|{CONTEXT_PATTERN}"),
-    db: Session = Depends(get_db),
-    user: User = Depends(require_active_user),
-) -> dict:
-    """批量获取一个会话里所有人的人设与上下文（群聊 = 每位成员 + 我）。
-
-    ``context`` 不传则按会话挂的场景推断；前端切恋爱 / 职场时跟随传参。
-    """
-    conversation = _conversation_or_404(
-        db, owner_user_id=user.id, conversation_id=conversation_id
-    )
-    return _personas.batch_for_conversation(
-        db, owner_user_id=user.id, conversation=conversation,
-        context=context or None,
-    )
-
-
-@router.post("/api/personas/build")
-def build_persona(
-    payload: PersonaBuildRequest,
-    request: Request,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_active_user),
-) -> dict:
-    conversation = _conversation_or_404(
-        db, owner_user_id=user.id, conversation_id=payload.conversation_id
-    )
-    return _personas.build(
-        db,
-        owner_user_id=user.id,
-        conversation=conversation,
-        subject=payload.subject,
-        self_report=payload.self_report,
-        context=payload.context,
-        context_label=payload.context_label,
-        dimension_keys=payload.dimension_keys,
-        trace_id=getattr(request.state, "trace_id", ""),
-        member_key=payload.member_key,
-    )
 
 
 @router.get("/api/personas/usage")
