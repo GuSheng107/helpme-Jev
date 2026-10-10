@@ -207,7 +207,11 @@ class PersonaProfileService:
                 raise DomainError(
                     DomainErrorCode.VALIDATION_FAILED, "昵称不能全是空白", status_code=422
                 )
+            old = row.nickname
             row.nickname = nickname
+            # 速写生成时带着旧昵称，改名后纯文本替换同步，不为改名再调一次 LLM
+            if old and old != nickname and row.summary and old in row.summary:
+                row.summary = row.summary.replace(old, nickname)
         if payload.avatar_base64 is not None:
             row.avatar_base64 = payload.avatar_base64
         db.commit()

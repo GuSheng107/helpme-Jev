@@ -127,7 +127,8 @@ export function listScenarios() {
 export function createConversation(body: {
   title: string
   counterpart_name?: string
-  relationship: string
+  /** 不传时后端按人设档位推导（恋爱 → 恋人、职场 → 同事） */
+  relationship?: string
   scenario_id?: number | null
   /** 群聊成员名列表；非空即按群聊建立 */
   members?: string[]

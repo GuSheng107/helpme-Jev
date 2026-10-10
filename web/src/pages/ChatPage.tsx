@@ -13,7 +13,6 @@ import {
   createConversation,
   listConversations,
   listMessages,
-  listScenarios,
   reflect,
   replyStream,
   revertReflection,
@@ -23,11 +22,10 @@ import {
   type ChatMessage,
   type Conversation,
   type Reflection,
-  type Scenario,
 } from '../api/chat'
 import Button from '../components/Button'
 import DecisionPanel from '../components/DecisionPanel'
-import Field, { controlClass } from '../components/Field'
+import { controlClass } from '../components/Field'
 import { EmptyState, Notice } from '../components/layout'
 import Modal from '../components/Modal'
 import ReplyCards, { type ReplyCard } from '../components/ReplyCards'
@@ -81,15 +79,11 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
   const [draft, setDraft] = useState('')
   const [role, setRole] = useState<'other' | 'me'>('other')
   const [creating, setCreating] = useState(false)
-  const [name, setName] = useState('')
-  const [relationship, setRelationship] = useState('')
   const [groupMode, setGroupMode] = useState(false)
   const [speakerKey, setSpeakerKey] = useState('')
   const [profiles, setProfiles] = useState<PersonaProfileView[]>([])
   const [soloProfileId, setSoloProfileId] = useState<number | null>(null)
   const [memberProfileIds, setMemberProfileIds] = useState<number[]>([])
-  const [scenarios, setScenarios] = useState<Scenario[]>([])
-  const [scenarioId, setScenarioId] = useState<number | null>(null)
   const [result, setResult] = useState<AnalyzeResult | null>(null)
   const [reflection, setReflection] = useState<Reflection | null>(null)
   const [step, setStep] = useState('')
@@ -163,12 +157,6 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
     void reloadList().catch((err: unknown) => {
       setError(err instanceof ApiError ? err.message : '聊天列表加载失败')
     })
-    listScenarios()
-      .then((rows) => {
-        setScenarios(rows)
-        setScenarioId(rows[0]?.id ?? null)
-      })
-      .catch(() => undefined)
     listProfiles().then(setProfiles).catch(() => undefined)
     void defaultLlmSupportsVision().then(setVisionReady)
   }, [reloadList])
@@ -209,21 +197,18 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
   }, [messages, replyCards])
 
   async function create() {
-    // 人设前置：单聊必选档案；群聊成员全部来自档案（后端同规则兜底）
+    // 人设前置：单聊必选档案；群聊成员全部来自档案（后端同规则兜底）。
+    // 场景与关系不在这里选：后端按人设档位自动推导。
     if (groupMode) {
-      if (memberProfileIds.length === 0) {
+      const picked = profiles.filter((item) => memberProfileIds.includes(item.id))
+      if (picked.length === 0) {
         setError('群聊至少要一位成员（从人设库选择）')
         return
       }
-      await submitCreate({
-        title:
-          name.trim() ||
-          profiles.find((item) => item.id === memberProfileIds[0])?.nickname ||
-          '群聊',
-        relationship: relationship.trim(),
-        scenario_id: scenarioId,
-        member_profile_ids: memberProfileIds,
-      })
+      // 群名从成员昵称生成：后端要求非空标题稳住群档
+      const names = picked.map((item) => item.nickname)
+      const title = `${names.slice(0, 3).join('、')}${names.length > 3 ? '等' : ''}的群聊`
+      await submitCreate({ title, member_profile_ids: memberProfileIds })
       return
     }
     const soloProfile = chosenSoloProfile
@@ -233,8 +218,6 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
     }
     await submitCreate({
       title: `和${soloProfile.nickname}的聊天`,
-      relationship: relationship.trim(),
-      scenario_id: scenarioId,
       profile_id: soloProfile.id,
     })
   }
@@ -247,7 +230,6 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
       await reloadList()
       setCurrentId(created.id)
       setCreating(false)
-      setName('')
       setGroupMode(false)
       setSoloProfileId(null)
       setMemberProfileIds([])
@@ -597,145 +579,6 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
               {creating ? '取消' : '新建'}
             </Button>
           </div>
-          {creating && (
-            <div className="mx-3 mb-3 space-y-3.5 rounded-[12px] border border-border bg-surface-muted/50 p-3.5">
-              <Segmented
-                fluid
-                value={groupMode ? 'group' : 'solo'}
-                ariaLabel="会话类型"
-                options={[
-                  { value: 'solo', label: '单聊' },
-                  { value: 'group', label: '群聊' },
-                ]}
-                onChange={(next) => setGroupMode(next === 'group')}
-              />
-
-              {groupMode ? (
-                <>
-                  <Field label="群名（选填）" value={name} onChange={(event) => setName(event.target.value)} />
-                  {profiles.length > 0 ? (
-                    <div>
-                      <span className="mb-1.5 block text-[12px] font-medium text-ink-secondary">
-                        选成员（可多选，至少一位）
-                      </span>
-                      <div className="flex flex-wrap gap-1.5">
-                        {profiles.map((profile) => {
-                          const picked = memberProfileIds.includes(profile.id)
-                          return (
-                            <button
-                              key={profile.id}
-                              type="button"
-                              aria-pressed={picked}
-                              className={`rounded-[8px] border px-2.5 py-1 text-[13px] transition-all duration-150 ${
-                                picked
-                                  ? 'border-primary bg-primary-soft font-medium text-primary'
-                                  : 'border-border bg-surface text-ink-secondary hover:border-border-strong hover:text-ink'
-                              }`}
-                              onClick={() =>
-                                setMemberProfileIds((prev) =>
-                                  picked ? prev.filter((id) => id !== profile.id) : [...prev, profile.id],
-                                )
-                              }
-                            >
-                              {profile.nickname}
-                              <span className="ml-1 text-[11px] opacity-70">{contextLabelOf(profile.context, profile.context_label)}</span>
-                            </button>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="rounded-[8px] bg-warning-soft px-3 py-2 text-[13px] leading-5 text-warning">
-                      人设库还是空的——先到「人设」页给每位成员建好人设，再回来建群聊。
-                    </p>
-                  )}
-                </>
-              ) : profiles.length > 0 ? (
-                <>
-                  <div>
-                    <span className="mb-1.5 block text-[12px] font-medium text-ink-secondary">选用人设</span>
-                    <select
-                      className={controlClass + ' cursor-pointer'}
-                      value={soloProfileId ?? ''}
-                      onChange={(event) =>
-                        setSoloProfileId(event.target.value === '' ? null : Number(event.target.value))
-                      }
-                    >
-                      {profiles.map((profile) => (
-                        <option key={profile.id} value={profile.id}>
-                          {profile.nickname}（{contextLabelOf(profile.context, profile.context_label)}）
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  {chosenSoloProfile && (
-                    <div className="flex items-center gap-2.5 rounded-[10px] bg-surface px-3 py-2">
-                      {chosenSoloProfile.avatar_base64 ? (
-                        <img
-                          src={chosenSoloProfile.avatar_base64}
-                          alt=""
-                          className="h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-border"
-                        />
-                      ) : (
-                        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-primary-soft text-[14px] text-primary">
-                          {chosenSoloProfile.nickname.slice(0, 1)}
-                        </span>
-                      )}
-                      <span className="min-w-0 flex-1 truncate text-[13px] text-ink-secondary">
-                        {chosenSoloProfile.summary || '这个人设还没有速写'}
-                      </span>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <p className="rounded-[8px] bg-warning-soft px-3 py-2 text-[13px] leading-5 text-warning">
-                  人设库还是空的——先到「人设」页建一个人设，再回来开始聊天。
-                </p>
-              )}
-
-              <div>
-                <span className="mb-1.5 block text-[12px] font-medium text-ink-secondary">场景</span>
-                <select
-                  className={controlClass + ' cursor-pointer'}
-                  value={scenarioId ?? ''}
-                  onChange={(event) =>
-                    setScenarioId(event.target.value === '' ? null : Number(event.target.value))
-                  }
-                >
-                  <optgroup label="系统内置">
-                    {scenarios.filter((item) => item.is_builtin || item.is_system).map((item) => (
-                      <option key={item.id} value={item.id}>{item.name}</option>
-                    ))}
-                  </optgroup>
-                  {scenarios.some((item) => !item.is_builtin && !item.is_system) && (
-                    <optgroup label="我的场景">
-                      {scenarios.filter((item) => !item.is_builtin && !item.is_system).map((item) => (
-                        <option key={item.id} value={item.id}>{item.name}</option>
-                      ))}
-                    </optgroup>
-                  )}
-                </select>
-              </div>
-
-              <Field
-                label="关系（可选，如 同事 / 恋人 / 客户）"
-                value={relationship}
-                onChange={(event) => setRelationship(event.target.value)}
-              />
-
-              <Button
-                className="w-full"
-                variant="primary"
-                size="sm"
-                loading={busy}
-                disabled={groupMode ? memberProfileIds.length === 0 : !chosenSoloProfile}
-                disabledReason={groupMode ? '请先从人设库选择成员' : '请先从人设库选用档案'}
-                onClick={() => void create()}
-              >
-                创建会话
-              </Button>
-            </div>
-          )}
           {conversations.length === 0 && !creating ? (
             <EmptyState title="暂无聊天" description="新建一位对象，再粘贴对方发来的内容。" />
           ) : (
@@ -1280,6 +1123,86 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
         </section>
       </div>
       {lightbox !== null && <Lightbox url={lightbox} onClose={() => setLightbox(null)} />}
+
+      {creating && (
+        <Modal size="sm" scroll="hidden" labelledBy="new-chat-title" className="flex flex-col" onClose={() => setCreating(false)} busy={busy}>
+          <div className="flex min-h-0 flex-col">
+            <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border-subtle px-5 py-4">
+              <div>
+                <h2 id="new-chat-title" className="text-[16px] font-semibold tracking-tight text-ink">
+                  新建聊天
+                </h2>
+                <p className="mt-1 text-[13px] leading-5 text-ink-muted">
+                  选好人设就开聊，场景与关系按人设档自动带上。
+                </p>
+              </div>
+              <Button size="sm" variant="ghost" type="button" disabled={busy} onClick={() => setCreating(false)} aria-label="关闭新建聊天">
+                关闭
+              </Button>
+            </header>
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4">
+              <Segmented
+                fluid
+                value={groupMode ? 'group' : 'solo'}
+                ariaLabel="会话类型"
+                options={[
+                  { value: 'solo', label: '单聊' },
+                  { value: 'group', label: '群聊' },
+                ]}
+                onChange={(next) => setGroupMode(next === 'group')}
+              />
+              {profiles.length === 0 ? (
+                <p className="rounded-[8px] bg-warning-soft px-3 py-2 text-[13px] leading-5 text-warning">
+                  人设库还是空的——先到「人设」页建好人设，再回来开始聊天。
+                </p>
+              ) : (
+                <div className="space-y-1.5" role="group" aria-label={groupMode ? '选择群成员' : '选择人设'}>
+                  {profiles.map((profile) => {
+                    const picked = groupMode
+                      ? memberProfileIds.includes(profile.id)
+                      : soloProfileId === profile.id
+                    return (
+                      <PersonRow
+                        key={profile.id}
+                        profile={profile}
+                        picked={picked}
+                        disabled={busy}
+                        onPick={() =>
+                          groupMode
+                            ? setMemberProfileIds((prev) =>
+                                prev.includes(profile.id)
+                                  ? prev.filter((id) => id !== profile.id)
+                                  : [...prev, profile.id],
+                              )
+                            : setSoloProfileId(profile.id)
+                        }
+                      />
+                    )
+                  })}
+                </div>
+              )}
+              {groupMode && profiles.length > 0 && (
+                <p className="text-[12px] text-ink-muted">群聊可多选；群名按成员昵称自动生成。</p>
+              )}
+            </div>
+            <footer className="flex shrink-0 justify-end gap-2 border-t border-border-subtle px-5 py-3">
+              <Button type="button" variant="ghost" disabled={busy} onClick={() => setCreating(false)}>
+                取消
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
+                loading={busy}
+                disabled={groupMode ? memberProfileIds.length === 0 : soloProfileId === null}
+                disabledReason={groupMode ? '请先选择群成员' : '请先选一个人设'}
+                onClick={() => void create()}
+              >
+                创建会话
+              </Button>
+            </footer>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }
@@ -1323,6 +1246,55 @@ function AttachmentThumb({
           加载中
         </span>
       )}
+    </button>
+  )
+}
+
+/** 新建聊天弹窗里的一行：头像 + 昵称 + 档位；单聊单选、群聊多选。 */
+function PersonRow({
+  profile,
+  picked,
+  disabled,
+  onPick,
+}: {
+  profile: PersonaProfileView
+  picked: boolean
+  disabled?: boolean
+  onPick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      data-person-option
+      aria-pressed={picked}
+      disabled={disabled}
+      onClick={onPick}
+      className={`flex w-full items-center gap-3 rounded-[10px] border px-3 py-2 text-left transition-colors duration-150 ${
+        picked
+          ? 'border-primary bg-primary-soft/60'
+          : 'border-border bg-surface hover:border-border-strong hover:bg-surface-muted'
+      } ${disabled ? 'cursor-not-allowed opacity-60' : ''}`}
+    >
+      {profile.avatar_base64 ? (
+        <img
+          src={profile.avatar_base64}
+          alt=""
+          className="h-9 w-9 shrink-0 rounded-full object-cover ring-1 ring-border"
+        />
+      ) : (
+        <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-primary-soft text-[14px] text-primary">
+          {profile.nickname.slice(0, 1)}
+        </span>
+      )}
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-[14px] text-ink">{profile.nickname}</span>
+        {profile.summary && (
+          <span className="mt-0.5 block truncate text-[12px] text-ink-muted">{profile.summary}</span>
+        )}
+      </span>
+      <span className="shrink-0 rounded-[6px] bg-surface-sunken px-1.5 py-px text-[12px] text-ink-secondary">
+        {contextLabelOf(profile.context, profile.context_label)}
+      </span>
     </button>
   )
 }

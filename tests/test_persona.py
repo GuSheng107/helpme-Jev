@@ -1301,20 +1301,58 @@ def test_build_keeps_custom_context_instead_of_falling_back(
     assert profile["context_label"] == "室友"
 
 
-def test_unknown_context_falls_back_to_general_questions() -> None:
-    """未知档位走通用题集（大五 + 冲突风格），不冒充恋爱档。"""
+def test_context_presets_follow_builtin_scenarios() -> None:
+    """档位跟随场景：内置只有恋爱 / 职场两档。
+
+    其余 slug（历史遗留档位、自定义档位）一律走通用题面，不冒充恋爱档。
+    """
     from app.scenarios.persona_questions import CONTEXT_PRESETS, persona_questions_for
 
+    assert set(CONTEXT_PRESETS) == {"romance", "workplace"}
+
     general = persona_questions_for("general", "other")
-    assert set(general) == set(CONTEXT_PRESETS["general"]) | {"evidence_sufficient"}
     assert "love_language" not in general
     assert "disc" not in general
+    assert "attachment" not in general
 
-    # 真·未知 slug 与通用档同形
-    assert set(persona_questions_for("cx_whatever", "other")) == set(general)
+    # 历史遗留档位（family / friends）与真·未知 slug 同形：都走通用题面
+    for slug in ("family", "friends", "cx_whatever"):
+        assert set(persona_questions_for(slug, "other")) == set(general)
 
-    # 家人档取依恋与情绪敏感，但不取爱的语言 / DISC
-    family = persona_questions_for("family", "other")
-    assert {"attachment", "sensitivity"} <= set(family)
-    assert "love_language" not in family
-    assert "disc" not in family
+
+def test_profile_rename_replaces_nickname_in_summary(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """改名同步替换速写里的旧昵称：纯文本替换，不为改名再调一次 LLM。"""
+    headers = _user(client, db, "profilenew")
+    _ready(client, db, "profilenew", headers)
+
+    class _NamingRouter(_SummaryRouter):
+        def post(self, url, json=None, headers=None, timeout=None):  # noqa: A002
+            self.calls.append({"url": url, "json": json})
+            return _Response(
+                {"choices": [{"message": {"content": _json.dumps({"summary": "小测做事有计划，容易焦虑。"})}}]}
+            )
+
+    router = _NamingRouter()
+    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: router)
+    created = client.post(
+        "/api/personas/profiles",
+        headers=headers,
+        json={"nickname": "小测", "context": "romance", "answers": _PROFILE_ANSWERS},
+    )
+    assert created.status_code == 201, created.text
+    profile_id = created.json()["id"]
+    assert created.json()["summary"] == "小测做事有计划，容易焦虑。"
+
+    router.calls.clear()
+    renamed = client.patch(
+        f"/api/personas/profiles/{profile_id}",
+        headers=headers,
+        json={"nickname": "小真"},
+    )
+    assert renamed.status_code == 200, renamed.text
+    body = renamed.json()
+    assert body["nickname"] == "小真"
+    assert body["summary"] == "小真做事有计划，容易焦虑。"
+    assert router.calls == []

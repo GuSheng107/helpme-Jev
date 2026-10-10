@@ -86,7 +86,7 @@ def _choice_spec(question: str, options: dict[str, str]) -> dict:
     return {"type": "choice", "question": question, "options": options}
 
 
-# 通用维度题面：不预设关系类型，家人 / 朋友 / 自定义档位都能直接用。
+# 通用维度题面：不预设关系类型，自定义档位直接取用。
 # key 与 web/src/data/personaCatalog.ts 的维度库一一对应，两边增删要同步。
 DIMENSION_SPECS: dict[str, dict] = {
     "openness": _score_spec("How open to new ideas and experiences is {who}?"),
@@ -143,8 +143,8 @@ DIMENSION_SPECS: dict[str, dict] = {
 
 DIMENSION_KEYS: tuple[str, ...] = tuple(DIMENSION_SPECS)
 
-# 档位 → 维度取用。恋爱 / 职场另用各自措辞更贴题的专用题集（见下方两个函数），
-# 其余档位一律走通用题面。
+# 档位 → 维度取用。档位跟随场景：内置场景只有恋爱 / 职场两个，
+# 各用措辞更贴题的专用题集（见下方两个函数）；其余一律视为自定义档走通用题面。
 CONTEXT_PRESETS: dict[str, tuple[str, ...]] = {
     "romance": (
         "openness",
@@ -166,34 +166,17 @@ CONTEXT_PRESETS: dict[str, tuple[str, ...]] = {
         "disc",
         "conflict_style",
     ),
-    "family": (
-        "openness",
-        "conscientiousness",
-        "extraversion",
-        "agreeableness",
-        "emotional_stability",
-        "sensitivity",
-        "attachment",
-        "conflict_style",
-    ),
-    "friends": (
-        "openness",
-        "conscientiousness",
-        "extraversion",
-        "agreeableness",
-        "emotional_stability",
-        "sensitivity",
-        "conflict_style",
-    ),
-    "general": (
-        "openness",
-        "conscientiousness",
-        "extraversion",
-        "agreeableness",
-        "emotional_stability",
-        "conflict_style",
-    ),
 }
+
+# 自定义档位缺省取用的维度（大五 + 冲突风格），不预设关系类型
+GENERAL_DIMENSIONS: tuple[str, ...] = (
+    "openness",
+    "conscientiousness",
+    "extraversion",
+    "agreeableness",
+    "emotional_stability",
+    "conflict_style",
+)
 
 
 def romance_persona_questions(subject: str = "other") -> dict:
@@ -356,11 +339,11 @@ def _sufficient_question(who: str, where: str) -> dict:
 
 
 def general_persona_questions(subject: str = "other") -> dict:
-    """通用档位：大五 + 冲突风格。不预设关系类型，任何场景都成立。"""
+    """通用题面：大五 + 冲突风格。不预设关系类型，任何场景都成立。"""
     who = "the user" if subject == "me" else "the other person"
     questions = {
         key: question
-        for key in CONTEXT_PRESETS["general"]
+        for key in GENERAL_DIMENSIONS
         if (question := dimension_question(key, subject)) is not None
     }
     questions["evidence_sufficient"] = _sufficient_question(who, "record")
@@ -390,15 +373,13 @@ def questions_for(
 ) -> dict:
     """档位 → 人设题集。
 
-    恋爱 / 职场用各自的专用措辞；其余内置档位走通用题面；
-    档位不在内置表里（自定义）时按调用方给的维度拼装。
+    恋爱 / 职场（内置场景对应的两个档位）用各自的专用措辞；
+    其余 slug（自定义档位，含历史遗留档位）按调用方给的维度拼装。
     """
     if context == "romance":
         return romance_persona_questions(subject)
     if context == "workplace":
         return workplace_persona_questions(subject)
-    if context in CONTEXT_PRESETS:
-        return custom_persona_questions(list(CONTEXT_PRESETS[context]), subject)
     return custom_persona_questions(list(dimension_keys or []), subject)
 
 

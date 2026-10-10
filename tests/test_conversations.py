@@ -343,6 +343,56 @@ def test_attachments_limits(client: TestClient, db: Session) -> None:
     assert ok.json()["attachments"] == [{"kind": "image", "n": 1}]
 
 
+def test_conversation_derives_scenario_and_relationship_from_profile(
+    client: TestClient, db: Session
+) -> None:
+    """选人即建会话：场景与关系按人设档位自动推导，前端不用再选。"""
+    token = _make_user(client, db, "deriveuser")
+    headers = _auth(token)
+    owner = user_id_by_name(db, "deriveuser")
+    rom = seed_profile(db, owner, "小恋", context="romance")
+    work = seed_profile(db, owner, "小职", context="workplace")
+
+    solo = client.post(
+        "/api/conversations",
+        json={"title": "和小恋的聊天", "profile_id": rom},
+        headers=headers,
+    )
+    assert solo.status_code == 201, solo.text
+    body = solo.json()
+    # 恋爱档自动挂恋爱场景，关系给中性称谓
+    assert body["scenario_id"] is not None
+    assert body["scenario_kind"] == "romance"
+    assert body["relationship"] == "恋人"
+
+    workplace = client.post(
+        "/api/conversations",
+        json={"title": "和小职的聊天", "profile_id": work},
+        headers=headers,
+    )
+    assert workplace.status_code == 201, workplace.text
+    assert workplace.json()["scenario_kind"] == "workplace"
+    assert workplace.json()["relationship"] == "同事"
+
+    # 显式传入的关系仍然优先
+    kept = client.post(
+        "/api/conversations",
+        json={"title": "和她的聊天", "profile_id": rom, "relationship": "笔友"},
+        headers=headers,
+    )
+    assert kept.status_code == 201, kept.text
+    assert kept.json()["relationship"] == "笔友"
+
+    # 群聊：场景按第一位成员的档位推导
+    group = client.post(
+        "/api/conversations",
+        json={"title": "饭局", "member_profile_ids": [work, rom]},
+        headers=headers,
+    )
+    assert group.status_code == 201, group.text
+    assert group.json()["scenario_kind"] == "workplace"
+
+
 # ------------------------------------------------------------------ 群聊
 def test_group_conversation_and_speaker(client: TestClient, db: Session) -> None:
     """群聊：成员来自人设库、发言人必须认、单人会话不带 speaker。"""

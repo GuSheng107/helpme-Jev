@@ -185,7 +185,10 @@ export interface ContextPreset {
   dimensions: string[]
 }
 
-/** 内置档位：键名固定，与后端 CONTEXT_PRESETS 一一对应。 */
+/**
+ * 内置档位：键名固定，与后端 CONTEXT_PRESETS 一一对应。
+ * 档位跟随场景：内置场景只有恋爱 / 职场，其余关系用自定义档位。
+ */
 export const CONTEXT_PRESETS: ContextPreset[] = [
   {
     key: 'romance',
@@ -217,54 +220,19 @@ export const CONTEXT_PRESETS: ContextPreset[] = [
       'conflict_style',
     ],
   },
-  {
-    key: 'family',
-    label: '家人',
-    hint: '亲属关系',
-    dimensions: [
-      'openness',
-      'conscientiousness',
-      'extraversion',
-      'agreeableness',
-      'emotional_stability',
-      'sensitivity',
-      'attachment',
-      'conflict_style',
-    ],
-  },
-  {
-    key: 'friends',
-    label: '朋友',
-    hint: '朋友与同学',
-    dimensions: [
-      'openness',
-      'conscientiousness',
-      'extraversion',
-      'agreeableness',
-      'emotional_stability',
-      'sensitivity',
-      'conflict_style',
-    ],
-  },
-  {
-    key: 'general',
-    label: '通用',
-    hint: '不限关系',
-    dimensions: [
-      'openness',
-      'conscientiousness',
-      'extraversion',
-      'agreeableness',
-      'emotional_stability',
-      'conflict_style',
-    ],
-  },
 ]
 
 /** 自定义档位的标识：走这个 slug 落库，档位名另存 context_label。 */
 export const CUSTOM_CONTEXT = 'custom'
-/** 自定义档位默认取用的维度（与「通用」一致）。 */
-export const CUSTOM_CONTEXT_DEFAULT_DIMENSIONS = CONTEXT_PRESETS[4].dimensions
+/** 自定义档位默认取用的维度（大五 + 冲突风格，与后端 GENERAL_DIMENSIONS 一致）。 */
+export const CUSTOM_CONTEXT_DEFAULT_DIMENSIONS = [
+  'openness',
+  'conscientiousness',
+  'extraversion',
+  'agreeableness',
+  'emotional_stability',
+  'conflict_style',
+]
 
 export const DEFAULT_CONTEXT = 'romance'
 
@@ -300,7 +268,7 @@ export function resolveDimensions(keys: string[]): Dimension[] {
  * 某个档位取用的维度。
  *
  * 内置档位按预设取；自定义档位用调用方给的 keys，
- * 没给就回落到「通用」那套。
+ * 没给就回落到默认那套（大五 + 冲突风格）。
  */
 export function dimensionsOf(context: string, keys?: string[]): Dimension[] {
   const preset = presetOf(context)
