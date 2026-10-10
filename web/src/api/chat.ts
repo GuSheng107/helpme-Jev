@@ -200,15 +200,6 @@ export function analyze(conversationId: number) {
   return api.post<AnalyzeResult>('/api/chat/analyze', { conversation_id: conversationId })
 }
 
-export function draftReplies(conversationId: number, decision: AnalyzeResult) {
-  const picked = Object.fromEntries(
-    [...decision.panel, ...decision.more].map((item) => [item.key, { text: item.text, value: item.value }]),
-  )
-  return api.post<{ candidates: Candidate[] }>('/api/chat/reply', {
-    conversation_id: conversationId,
-    decision: picked,
-  })
-}
 
 /** 自动回复卡片的评分项：面板上的一维判定（标题 + 中文结论） */
 export interface ReplyScoreItem {
@@ -264,16 +255,7 @@ export function replyStream(
   })
 }
 
-export function evaluateReply(conversationId: number, text: string) {
-  return api.post<{ percent: number; verdict: string }>('/api/chat/evaluate', {
-    conversation_id: conversationId,
-    text,
-  })
-}
 
-export function clarify(conversationId: number) {
-  return api.post<{ questions: string[] }>('/api/chat/clarify', { conversation_id: conversationId })
-}
 
 export function explainDecision(conversationId: number, decision: AnalyzeResult) {
   const picked = Object.fromEntries(

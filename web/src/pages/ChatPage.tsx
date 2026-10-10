@@ -3,11 +3,8 @@ import { ApiError } from '../api/client'
 import {
   analyze,
   appendMessage,
-  clarify,
   defaultLlmSupportsVision,
-  draftReplies,
   explainDecision,
-  evaluateReply,
   fetchMaterialFile,
   polish,
   createConversation,
@@ -17,18 +14,16 @@ import {
   replyStream,
   revertReflection,
   uploadImage,
-  type AnalyzeResult,
-  type Candidate,
   type ChatMessage,
   type Conversation,
   type Reflection,
 } from '../api/chat'
 import Button from '../components/Button'
-import DecisionPanel from '../components/DecisionPanel'
+import MessageReport, { type ReportEntry } from '../components/MessageReport'
 import { controlClass } from '../components/Field'
 import { EmptyState, Notice } from '../components/layout'
 import Modal from '../components/Modal'
-import ReplyCards, { type ReplyCard } from '../components/ReplyCards'
+import ReplyFloat, { type ReplyCard } from '../components/ReplyFloat'
 import Segmented from '../components/Segmented'
 import { listProfiles, type PersonaProfileView } from '../api/personas'
 import {
@@ -68,10 +63,16 @@ interface PendingImage {
 /** 一条消息最多带的图片数 */
 const MAX_IMAGES = 9
 
-/** 行内文字按钮：用于「为什么这么判」「跳过」这类次要动作，不抢主按钮的注意力。 */
+/** 行内文字按钮：用于「为什么这么判」这类次要动作，不抢主按钮的注意力。 */
 const LINK_CHIP =
   'inline-flex items-center gap-1 rounded-[6px] px-1.5 py-0.5 text-[13px] font-medium ' +
   'text-primary transition-colors duration-150 hover:bg-primary-soft'
+
+/**
+ * 分析报告的登录会话级缓存：按来话消息 id 存。
+ * 聊天页切走再切回仍在，刷新页面才清空。
+ */
+const reportCache = new Map<number, ReportEntry>()
 
 export default function ChatPage({ currentId, setCurrentId, onOpenSettings, autoTranslate }: Props) {
   const [conversations, setConversations] = useState<Conversation[]>([])
@@ -84,14 +85,9 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
   const [profiles, setProfiles] = useState<PersonaProfileView[]>([])
   const [soloProfileId, setSoloProfileId] = useState<number | null>(null)
   const [memberProfileIds, setMemberProfileIds] = useState<number[]>([])
-  const [result, setResult] = useState<AnalyzeResult | null>(null)
   const [reflection, setReflection] = useState<Reflection | null>(null)
-  const [step, setStep] = useState('')
-  const [candidates, setCandidates] = useState<Candidate[]>([])
-  const [questions, setQuestions] = useState<string[]>([])
   const [previousDraft, setPreviousDraft] = useState<string | null>(null)
   const [pickedText, setPickedText] = useState<string | null>(null)
-  const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [listOpen, setListOpen] = useState(false)
@@ -101,9 +97,12 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
   const [lightbox, setLightbox] = useState<string | null>(null)
   /** 群聊时手动「帮我回复」选的对象成员 key（自动触发走消息里的发言成员） */
   const [replyTarget, setReplyTarget] = useState('')
-  /** 回复建议卡片，按会话 id 存：切走再切回还在（内存级，刷新页面即清） */
-  const [replyCardsByConv, setReplyCardsByConv] = useState<Record<number, ReplyCard[]>>({})
-  const replyCardSeq = useRef(0)
+  /** 帮我回复管线：每个会话只留最新一份，浮在回复框上方（内存级，刷新页面即清） */
+  const [replyByConv, setReplyByConv] = useState<Record<number, ReplyCard | null>>({})
+  /** 分析报告：按来话消息 id 存，登录会话内可见（写入 reportCache） */
+  const [reports, setReports] = useState<Record<number, ReportEntry>>({})
+  /** 报告展开状态的用户覆盖：不设时「最新一条来话的报告」默认展开 */
+  const [reportOpenOverrides, setReportOpenOverrides] = useState<Record<number, boolean>>({})
   const streamRef = useRef<HTMLDivElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   // 聊天页内嵌人设速览：默认折叠，点头部「人设」切换
@@ -111,6 +110,13 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
 
   const current = conversations.find((item) => item.id === currentId) ?? null
   const chosenSoloProfile = profiles.find((item) => item.id === soloProfileId) ?? null
+  /** 当前会话的帮我回复浮层 */
+  const replyWork = currentId !== null ? replyByConv[currentId] ?? null : null
+  /** 最近一条带报告的来话：它的报告默认展开 */
+  let latestReportId: number | null = null
+  for (const message of messages) {
+    if (message.role === 'other' && reports[message.id]) latestReportId = message.id
+  }
 
   // 当前会话的人设速览条目：单聊取对方档案，群聊取每位成员档案
   const personaPeek = current
@@ -136,6 +142,27 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
       setSoloProfileId(profiles[0].id)
     }
   }, [profiles, soloProfileId])
+
+  // 挂载时把登录会话内的历史报告从模块缓存接回来
+  useEffect(() => {
+    const seeded: Record<number, ReportEntry> = {}
+    reportCache.forEach((entry, id) => {
+      seeded[id] = entry
+    })
+    setReports(seeded)
+  }, [])
+
+  /** 写报告：组件状态与模块缓存同步，切走页面再回来不丢 */
+  function setReport(id: number, entry: ReportEntry | null) {
+    setReports((prev) => {
+      const next = { ...prev }
+      if (entry) next[id] = entry
+      else delete next[id]
+      return next
+    })
+    if (entry) reportCache.set(id, entry)
+    else reportCache.delete(id)
+  }
 
   // 人设前置兜底：会话涉及的对象/成员在档案库缺席（如档案被删）时禁止新增记录
   const missingProfileNames = current
@@ -173,6 +200,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
     setSpeakerKey('')
     setReplyTarget('')
     setRole('other')
+    setReportOpenOverrides({})
     let cancelled = false
     void listMessages(currentId)
       .then((rows) => {
@@ -187,14 +215,11 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
     }
   }, [currentId])
 
-  /** 当前会话的卡片列表（渲染与切换用）：必须声明在下方 useEffect 之前，避免暂时性死区 */
-  const replyCards = currentId !== null ? (replyCardsByConv[currentId] ?? []) : []
-
-  // 消息/回复卡片更新时贴底：新内容出来不用手动翻
+  // 消息更新时贴底：新内容出来不用手动翻
   useEffect(() => {
     const el = streamRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [messages, replyCards])
+  }, [messages, reports])
 
   async function create() {
     // 人设前置：单聊必选档案；群聊成员全部来自档案（后端同规则兜底）。
@@ -234,7 +259,6 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
       setSoloProfileId(null)
       setMemberProfileIds([])
       setListOpen(false)
-      setResult(null)
       setReflection(null)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '创建失败')
@@ -291,7 +315,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
   }
 
   async function send() {
-    if (currentId === null || (!draft.trim() && images.length === 0)) return
+    if (busy || currentId === null || (!draft.trim() && images.length === 0)) return
     if (chatLocked) {
       setError('人设档案缺失，无法新增记录；请先在人设库重建同名档案')
       return
@@ -326,9 +350,10 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
         prev.forEach((item) => URL.revokeObjectURL(item.url))
         return []
       })
-      // 对方来话后自动出回复建议：五维评分 + 三条候选（按人设起草）
+      // 对方来话自动处理：分析报告挂在这条消息下方，同时起帮我回复管线
       if (role === 'other') {
         const target = wantsSpeaker ? speakerKey : ''
+        void runAnalysis(currentId, message.id)
         void runAutoReply(currentId, text, target, message.id)
       }
     } catch (err) {
@@ -338,16 +363,15 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
     }
   }
 
-  /** 新开一张回复卡片并跑管线：每张卡片独立更新，快速连发也不会串台。 */
+  /** 起一份帮我回复管线：浮层按阶段推进；新管线顶掉旧浮层。 */
   async function runAutoReply(
     conversationId: number,
     hint: string,
     targetMember: string,
     messageId: number | null,
   ) {
-    const id = ++replyCardSeq.current
     const fresh: ReplyCard = {
-      id,
+      id: messageId ?? 0,
       conversationId,
       targetMember,
       targetName: targetMember
@@ -367,27 +391,23 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
       blocked: null,
       ranked: true,
       error: null,
-      expanded: true,
     }
-    setReplyCardsByConv((prev) => ({
-      ...prev,
-      [conversationId]: [...(prev[conversationId] ?? []).map((card) => ({ ...card, expanded: false })), fresh],
-    }))
+    setReplyByConv((prev) => ({ ...prev, [conversationId]: fresh }))
     try {
       const result = await replyStream(
         { conversation_id: conversationId, target_member: targetMember },
         (event) => {
           if (event.stage === 'plan') {
-            updateCard(conversationId, id, { plan: event.steps ?? [], progress: 0 })
+            updateReply(conversationId, { plan: event.steps ?? [], progress: 0 })
           } else if (event.stage === 'score_done') {
-            updateCard(conversationId, id, { scores: event.scores ?? null })
-            bumpProgress(conversationId, id)
+            updateReply(conversationId, { scores: event.scores ?? null })
+            bumpProgress(conversationId)
           } else if (event.stage === 'translate_done' || event.stage === 'draft_done' || event.stage === 'done') {
-            bumpProgress(conversationId, id)
+            bumpProgress(conversationId)
           }
         },
       )
-      updateCard(conversationId, id, {
+      updateReply(conversationId, {
         scores: result.scores,
         candidates: result.candidates,
         blocked: result.blocked,
@@ -395,50 +415,54 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
         running: false,
       })
     } catch (err) {
-      updateCard(conversationId, id, { running: false, error: err instanceof ApiError ? err.message : '回复未生成' })
+      updateReply(conversationId, { running: false, error: err instanceof ApiError ? err.message : '回复未生成' })
     }
   }
 
-  function updateCard(conversationId: number, id: number, patch: Partial<ReplyCard>) {
-    setReplyCardsByConv((prev) => ({
-      ...prev,
-      [conversationId]: (prev[conversationId] ?? []).map((card) =>
-        card.id === id ? { ...card, ...patch } : card,
-      ),
-    }))
+  function updateReply(conversationId: number, patch: Partial<ReplyCard>) {
+    setReplyByConv((prev) => {
+      const card = prev[conversationId]
+      if (!card) return prev
+      return { ...prev, [conversationId]: { ...card, ...patch } }
+    })
   }
 
-  function bumpProgress(conversationId: number, id: number) {
-    setReplyCardsByConv((prev) => ({
-      ...prev,
-      [conversationId]: (prev[conversationId] ?? []).map((card) =>
-        card.id === id ? { ...card, progress: card.progress + 1 } : card,
-      ),
-    }))
+  function bumpProgress(conversationId: number) {
+    setReplyByConv((prev) => {
+      const card = prev[conversationId]
+      if (!card) return prev
+      return { ...prev, [conversationId]: { ...card, progress: card.progress + 1 } }
+    })
   }
 
-  function toggleCard(id: number, expanded: boolean) {
-    if (currentId === null) return
-    updateCard(currentId, id, { expanded })
-  }
-
-  /** 点选候选：切到「我」、填入草稿，按采用推荐记录 */
+  /** 点选候选：填入输入框（切到「我」），按采用推荐记录，并收起浮层 */
   function pickCandidate(text: string) {
     setRole('me')
     setDraft(text)
     setPickedText(text)
+    if (currentId !== null) {
+      setReplyByConv((prev) => ({ ...prev, [currentId]: null }))
+    }
   }
 
-  /** 失败重试：移除失败卡，按其记录的会话与目标成员重跑管线。 */
-  function retryCard(id: number) {
+  /** 浮层里的失败重试：按记录的会话与目标成员重跑管线 */
+  function retryReply() {
     if (currentId === null) return
-    const card = replyCards.find((item) => item.id === id)
+    const card = replyByConv[currentId]
     if (!card || card.running) return
-    setReplyCardsByConv((prev) => ({
-      ...prev,
-      [currentId]: (prev[currentId] ?? []).filter((item) => item.id !== id),
-    }))
     void runAutoReply(card.conversationId, card.hint, card.targetMember, card.messageId)
+  }
+
+  /** 重新生成候选：锚定最新一条来话 */
+  function regenerateReply() {
+    if (currentId === null) return
+    const last = [...messages].reverse().find((item) => item.role === 'other')
+    void runAutoReply(
+      currentId,
+      last?.content ?? '',
+      replyTarget || last?.speaker || '',
+      last?.id ?? null,
+    )
   }
 
   async function review(conversationId: number) {
@@ -464,75 +488,45 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
     }
   }
 
-  async function judge() {
+  /** 对方来话自动分析：报告按消息 id 缓存，本次登录内都可见 */
+  async function runAnalysis(conversationId: number, messageId: number) {
+    setReport(messageId, { result: null, loading: true, error: null, reason: null, explaining: false })
+    try {
+      const judged = await analyze(conversationId)
+      setReport(messageId, { result: judged, loading: false, error: null, reason: null, explaining: false })
+      void review(conversationId)
+    } catch (err) {
+      setReport(messageId, {
+        result: null,
+        loading: false,
+        error: err instanceof ApiError ? err.message : '分析失败',
+        reason: null,
+        explaining: false,
+      })
+    }
+  }
+
+  /** 为什么这么判：按消息就地取文，结果同样留在缓存里 */
+  async function explainFor(messageId: number) {
     if (currentId === null) return
-    setBusy(true)
-    setError(null)
-    setStep('正在分析')
-    setCandidates([])
+    const entry = reports[messageId]
+    if (!entry?.result || entry.explaining) return
+    setReport(messageId, { ...entry, explaining: true })
     try {
-      const judged = await analyze(currentId)
-      setResult(judged)
-      setStep('')
-      void review(currentId)
+      const explained = await explainDecision(currentId, entry.result)
+      setReport(messageId, { ...entry, explaining: false, reason: explained.reason })
     } catch (err) {
-      if (err instanceof ApiError && (err.code === 'JEV_NOT_CONFIGURED' || err.code === 'LLM_NOT_CONFIGURED')) {
-        setError(`${err.message}`)
-      } else {
-        setError(err instanceof ApiError ? err.message : '分析失败')
-      }
-    } finally {
-      setBusy(false)
-      setStep('')
-    }
-  }
-
-  async function explain() {
-    if (currentId === null || !result) return
-    setBusy(true)
-    setError(null)
-    try {
-      const explained = await explainDecision(currentId, result)
-      setReason(explained.reason)
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : '说明未生成')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function makeCandidates() {
-    if (currentId === null || !result || result.high_danger) return
-    setBusy(true)
-    setError(null)
-    setStep('正在生成候选')
-    try {
-      const drafted = await draftReplies(currentId, result)
-      setCandidates(drafted.candidates)
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : '候选未生成')
-    } finally {
-      setBusy(false)
-      setStep('')
-    }
-  }
-
-  async function askMore() {
-    if (currentId === null) return
-    setBusy(true)
-    setError(null)
-    try {
-      const asked = await clarify(currentId)
-      setQuestions(asked.questions)
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : '追问未生成')
-    } finally {
-      setBusy(false)
+      setReport(messageId, {
+        ...entry,
+        explaining: false,
+        reason: err instanceof ApiError ? err.message : '说明未生成',
+      })
     }
   }
 
   async function polishDraft() {
-    if (!draft.trim()) return
+    // 润色只对自己的回复开放：对方的话是原始记录，不该被改写
+    if (role !== 'me' || !draft.trim()) return
     setBusy(true)
     setError(null)
     try {
@@ -541,20 +535,6 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
       setDraft(polished.text)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '润色未完成')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function checkMine() {
-    if (currentId === null || !draft.trim()) return
-    setBusy(true)
-    setError(null)
-    try {
-      const verdict = await evaluateReply(currentId, draft.trim())
-      setCandidates([{ text: draft.trim(), percent: verdict.percent }])
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : '评估未完成')
     } finally {
       setBusy(false)
     }
@@ -598,7 +578,6 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
                       }`}
                       onClick={() => {
                         setCurrentId(item.id)
-                        setResult(null)
                         setReflection(null)
                         setPickedText(null)
                         setListOpen(false)
@@ -761,54 +740,6 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
             <EmptyState title="请选择聊天" description="在左侧新建或打开已有聊天。手机端点击右上角「+」新建。" />
           ) : (
             <>
-              {step && <p className="px-4 pt-3 text-[13px] text-ink-muted">{step}</p>}
-              {result && <DecisionPanel result={result} scenarioKind={current?.scenario_kind ?? 'romance'} />}
-              {result && (
-                <div className="mx-4 mt-3">
-                  <button type="button" className={LINK_CHIP} onClick={() => void explain()}>
-                    为什么这么判
-                  </button>
-                  {reason && (
-                    <p className="mt-1 text-[13px] leading-[22px] text-ink-secondary">
-                      {reason}
-                      <span className="text-ink-muted">（由语言模型解读，仅供参考）</span>
-                    </p>
-                  )}
-                </div>
-              )}
-              {questions.length > 0 && (
-                <div className="mx-4 mt-3 rounded-[8px] border border-border bg-surface px-3 py-2">
-                  <p className="text-[13px] text-ink-secondary">还想确认几件事，也可以跳过</p>
-                  <ul className="mt-1">
-                    {questions.map((item) => (
-                      <li key={item} className="text-[14px] leading-[22px] text-ink">{item}</li>
-                    ))}
-                  </ul>
-                  <button type="button" className={LINK_CHIP + ' mt-1.5'} onClick={() => setQuestions([])}>
-                    跳过，直接看结果
-                  </button>
-                </div>
-              )}
-              {candidates.length > 0 && (
-                <ul className="mx-4 mt-3 space-y-2">
-                  {candidates.map((item) => (
-                    <li key={item.text}>
-                      <button
-                        type="button"
-                        className="w-full rounded-[10px] border border-border bg-surface px-3 py-2 text-left transition-colors duration-150 hover:border-primary-border hover:bg-primary-soft/40"
-                        onClick={() => {
-                          setRole('me')
-                          setDraft(item.text)
-                          setPickedText(item.text)
-                        }}
-                      >
-                        <span className="text-[14px] leading-[22px] text-ink">{item.text}</span>
-                        <span className="mt-1 block text-[12px] text-ink-muted">匹配度 {item.percent}%</span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
               <div ref={streamRef} className="flex-1 space-y-3 overflow-y-auto px-4 py-4 sm:px-5">
                 {messages.length === 0 && (
                   <EmptyState title="暂无内容" description="在下方粘贴对方的话，发送者选「对方」，然后保存。" />
@@ -826,8 +757,8 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
                             message.speaker,
                         )
                       : null
-                  // 锚定在这条消息上的回复建议卡片：跟在消息后面，而不是堆在流底部
-                  const anchored = replyCards.filter((card) => card.messageId === message.id)
+                  // 挂在这条来话下的分析报告；最新一条来话默认展开，其余默认折叠
+                  const entry = message.role === 'other' ? reports[message.id] : undefined
                   return (
                     <div key={message.id} className="space-y-2">
                       <div
@@ -862,35 +793,34 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
                           <span className="mt-0.5 text-[11px] text-ink-muted">{badge}</span>
                         )}
                       </div>
-                      {anchored.map((card) => (
-                        <ReplyCards
-                          key={card.id}
-                          card={card}
-                          onToggle={toggleCard}
-                          onPick={pickCandidate}
-                          onRetry={retryCard}
+                      {entry && (
+                        <MessageReport
+                          entry={entry}
+                          scenarioKind={current?.scenario_kind ?? 'romance'}
+                          open={reportOpenOverrides[message.id] ?? message.id === latestReportId}
+                          onToggle={(open) =>
+                            setReportOpenOverrides((prev) => ({ ...prev, [message.id]: open }))
+                          }
+                          onExplain={() => void explainFor(message.id)}
                         />
-                      ))}
+                      )}
                     </div>
                   )
                 })}
-                {replyCards.some((card) => card.messageId === null) && (
-                  <div className="space-y-2">
-                    {replyCards
-                      .filter((card) => card.messageId === null)
-                      .map((card) => (
-                        <ReplyCards
-                          key={card.id}
-                          card={card}
-                          onToggle={toggleCard}
-                          onPick={pickCandidate}
-                          onRetry={retryCard}
-                        />
-                      ))}
-                  </div>
-                )}
               </div>
               <div className="sticky bottom-0 border-t border-border bg-surface px-4 py-3 pb-[max(12px,env(safe-area-inset-bottom))]">
+                {replyWork && (
+                  <ReplyFloat
+                    card={replyWork}
+                    onPick={pickCandidate}
+                    onRetry={() => void retryReply()}
+                    onClose={() => {
+                      if (currentId !== null) {
+                        setReplyByConv((prev) => ({ ...prev, [currentId]: null }))
+                      }
+                    }}
+                  />
+                )}
                 <div className="mb-2.5 flex flex-wrap items-center gap-2">
                   <Segmented
                     value={role}
@@ -988,6 +918,13 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
                 <textarea
                   value={draft}
                   onChange={(event) => setDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    // 回车直接保存，shift+回车换行；输入法组词的回车不算
+                    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                      event.preventDefault()
+                      void send()
+                    }
+                  }}
                   onPaste={onPaste}
                   rows={2}
                   disabled={chatLocked}
@@ -1042,61 +979,34 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
                       <IconUpload className="h-4 w-4" />
                       图片
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      loading={busy}
-                      disabled={!draft.trim()}
-                      disabledReason="请先输入内容"
-                      onClick={() => void polishDraft()}
-                    >
-                      润色
-                    </Button>
                     {role === 'me' && (
                       <Button
                         size="sm"
                         variant="ghost"
                         loading={busy}
                         disabled={!draft.trim()}
-                        disabledReason="请先写回复"
-                        onClick={() => void checkMine()}
+                        disabledReason="请先输入内容"
+                        onClick={() => void polishDraft()}
                       >
-                        评估这句
+                        润色
                       </Button>
                     )}
                   </div>
 
                   <div className="flex flex-wrap items-center gap-1.5">
-                    {result && !result.context_sufficient && (
-                      <Button size="sm" loading={busy} onClick={() => void askMore()}>
-                        继续问
-                      </Button>
-                    )}
-                    {result && !result.high_danger && (
-                      <Button size="sm" loading={busy} onClick={() => void makeCandidates()}>
-                        生成候选
-                      </Button>
-                    )}
                     <Button
                       size="sm"
                       className="text-primary"
+                      loading={replyWork?.running ?? false}
                       disabled={messages.length === 0}
                       disabledReason="请先保存至少一条内容"
-                      onClick={() => {
-                        if (currentId === null) return
-                        const last = [...messages].reverse().find((item) => item.role === 'other')
-                        void runAutoReply(
-                          currentId,
-                          last?.content ?? '',
-                          replyTarget || last?.speaker || '',
-                          last?.id ?? null,
-                        )
-                      }}
+                      onClick={() => regenerateReply()}
                     >
                       <IconSparkle className="h-4 w-4" />
                       帮我回复
                     </Button>
                     <Button
+                      variant="primary"
                       size="sm"
                       loading={busy}
                       disabled={chatLocked || (!draft.trim() && images.length === 0)}
@@ -1104,16 +1014,6 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
                       onClick={() => void send()}
                     >
                       保存
-                    </Button>
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      loading={busy}
-                      disabled={messages.length === 0}
-                      disabledReason="请先保存至少一条内容"
-                      onClick={() => void judge()}
-                    >
-                      分析
                     </Button>
                   </div>
                 </div>

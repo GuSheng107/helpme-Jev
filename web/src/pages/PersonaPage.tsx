@@ -2,29 +2,21 @@ import { useEffect, useState } from 'react'
 import { ApiError } from '../api/client'
 import { listConversations, type Conversation } from '../api/chat'
 import {
-  buildPersona,
   commitChat,
   createProfile,
   deleteProfile,
-  fetchPersonaBatch,
-  getPersona,
   importQa,
   listProfiles,
-  personaUsage,
   previewChat,
   updateProfile,
   type ChatPreview,
-  type PersonaBatch,
-  type PersonaContext,
   type PersonaProfileView,
-  type PersonaView,
 } from '../api/personas'
 import Button from '../components/Button'
 import { confirmAction } from '../components/confirm'
 import ContextPicker from '../components/ContextPicker'
 import { DataCard, EmptyState, Notice, PageBody, PageHeader, PageShell, StatusTag } from '../components/layout'
 import Modal from '../components/Modal'
-import Segmented from '../components/Segmented'
 import {
   contextLabelOf,
   CUSTOM_CONTEXT_DEFAULT_DIMENSIONS,
@@ -36,55 +28,22 @@ import {
   type Dimension,
 } from '../data/personaCatalog'
 
-type Tab = 'library' | 'archive' | 'import'
+type Tab = 'library' | 'import'
 const TABS: { key: Tab; label: string }[] = [
   { key: 'library', label: '人设库' },
-  { key: 'archive', label: '会话档案' },
   { key: 'import', label: '导入数据' },
 ]
 
-/** 上游瞬断自动重试：最多 2 次、间隔 10 秒，进度经 onHint 提示；非 retryable 直接抛。 */
-const RETRY_MAX = 2
-const RETRY_DELAY_MS = 10_000
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-async function withAutoRetry<T>(run: () => Promise<T>, onHint: (text: string) => void): Promise<T> {
-  let attempt = 0
-  for (;;) {
-    try {
-      return await run()
-    } catch (err) {
-      if (!(err instanceof ApiError) || !err.retryable || attempt >= RETRY_MAX) throw err
-      attempt += 1
-      onHint(`上游模型抖动，自动重试中（${attempt}/${RETRY_MAX}），约 10 秒后再次尝试…`)
-      await sleep(RETRY_DELAY_MS)
-    }
-  }
-}
-
 export default function PersonaPage() {
   const [tab, setTab] = useState<Tab>('library')
+  // 导入数据挂在会话上：会话带了场景与对象，导入内容跟着场景走
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [currentId, setCurrentId] = useState<number | null>(null)
-  const [subject, setSubject] = useState<'me' | 'other'>('other')
-  const [context, setContext] = useState<string>(DEFAULT_CONTEXT)
-  // 自定义档位的档位名与勾选的维度（内置档位不用这两个）
-  const [customLabel, setCustomLabel] = useState('')
-  const [customKeys, setCustomKeys] = useState<string[]>(CUSTOM_CONTEXT_DEFAULT_DIMENSIONS)
-  const [persona, setPersona] = useState<PersonaView | null>(null)
-  const [usage, setUsage] = useState({ adopted: 0, rewritten: 0 })
   const [text, setText] = useState('')
   const [preview, setPreview] = useState<ChatPreview | null>(null)
   const [otherLabels, setOtherLabels] = useState('')
   const [qa, setQa] = useState('')
-  const [selfAnswers, setSelfAnswers] = useState<Record<string, string | number>>({})
-  const [memberKey, setMemberKey] = useState('me')
-  const [batch, setBatch] = useState<PersonaBatch | null>(null)
   const [notice, setNotice] = useState('')
-  const [retryHint, setRetryHint] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   // 人设库
@@ -95,126 +54,50 @@ export default function PersonaPage() {
 
   const current = conversations.find((item) => item.id === currentId) ?? null
 
-  // 群聊：选中的是我还是哪位成员；单聊不用这个状态
-  const groupSel = current?.is_group
-    ? memberKey === 'me'
-      ? { key: current.counterpart_key, subject: 'me' as const }
-      : { key: memberKey, subject: 'other' as const }
-    : { key: current?.counterpart_key ?? '', subject }
-  const effectiveSubject = groupSel.subject
-  // 人设库档案优先展示（与判断链路同源）：key 命中档案时，推断档案不再显示
-  const linkedProfile =
-    current && effectiveSubject === 'other'
-      ? profiles.find((item) => item.key === groupSel.key)
-      : undefined
-  const linkedIsPlaceholder = Boolean(linkedProfile) && (linkedProfile?.traits.length ?? 0) === 0
-
   useEffect(() => {
     listConversations()
       .then((rows) => {
         setConversations(rows)
         setCurrentId(rows[0]?.id ?? null)
-        const kind = rows[0]?.scenario_kind
-        if (kind === 'workplace') setContext('workplace')
       })
       .catch(() => setError('会话未能载入'))
-    personaUsage()
-      .then(setUsage)
-      .catch(() => undefined)
     listProfiles()
       .then(setProfiles)
       .catch(() => undefined)
   }, [])
 
-  useEffect(() => {
-    if (!current) return
-    const kind = current.scenario_kind
-    if (kind === 'romance' || kind === 'workplace') setContext(kind)
-    setMemberKey('me')
-    setPersona(null)
-    setBatch(null)
-  }, [current])
-
-  useEffect(() => {
-    if (!current?.is_group) return
-    let cancelled = false
-    fetchPersonaBatch(current.id, context)
-      .then((result) => {
-        if (!cancelled) setBatch(result)
-      })
-      .catch(() => {
-        if (!cancelled) setError('群成员档案未能载入')
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [current, context])
-
-  useEffect(() => {
-    if (!current) return
-    let cancelled = false
-    getPersona(groupSel.key, groupSel.subject, context)
-      .then((view) => {
-        if (!cancelled) setPersona(view)
-      })
-      .catch(() => {
-        if (!cancelled) setPersona(null)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [current, groupSel.key, groupSel.subject, context])
-
-  function pickConversation(id: number) {
-    setCurrentId(id)
-    setPersona(null)
-  }
-
-  async function build() {
-    if (currentId === null) return
-    if (effectiveSubject === 'me' && Object.keys(selfAnswers).length === 0) {
-      setError('请先作答，至少选一项')
-      return
-    }
+  async function renameProfile(profile: PersonaProfileView) {
+    const nickname = eNickname.trim()
+    if (!nickname) return
     setBusy(true)
     setError(null)
-    setRetryHint('')
     try {
-      const built = await withAutoRetry(
-        () =>
-          buildPersona(
-            currentId,
-            effectiveSubject,
-            effectiveSubject === 'me' ? selfAnswers : {},
-            context,
-            current?.is_group && effectiveSubject === 'other' ? groupSel.key : '',
-            isPresetContext(context) ? '' : customLabel.trim(),
-            dimensionKeysOf(context, customKeys),
-          ),
-        setRetryHint,
-      )
-      setPersona(built)
-      setNotice(built.kept ? built.reason || '已保留原档案' : '档案已更新')
-      listProfiles()
-        .then(setProfiles)
-        .catch(() => undefined)
-      if (current?.is_group) {
-        fetchPersonaBatch(current.id, context).then(setBatch).catch(() => undefined)
-      }
+      const updated = await updateProfile(profile.id, { nickname })
+      setProfiles((prev) => prev.map((item) => (item.id === updated.id ? updated : item)))
+      setEditingId(null)
+      setNotice('昵称已更新')
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : '建模未完成')
+      setError(err instanceof ApiError ? err.message : '更新未完成')
     } finally {
-      setRetryHint('')
       setBusy(false)
     }
   }
 
-  function labels() {
-    const custom = otherLabels
-      .split(/[,，\s]+/)
-      .map((item) => item.trim())
-      .filter(Boolean)
-    return custom.length > 0 ? custom : undefined
+  async function removeProfile(profile: PersonaProfileView) {
+    const confirmed = await confirmAction({
+      title: '删除人设',
+      message: `删除「${profile.nickname}」后，已有聊天不受影响，但判断时不再带上这份人设。`,
+      confirmText: '删除',
+      tone: 'danger',
+    })
+    if (!confirmed) return
+    try {
+      await deleteProfile(profile.id)
+      setProfiles((prev) => prev.filter((item) => item.id !== profile.id))
+      setNotice('人设已删除')
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '删除未完成')
+    }
   }
 
   async function previewImport() {
@@ -259,48 +142,20 @@ export default function PersonaPage() {
     }
   }
 
-  async function renameProfile(profile: PersonaProfileView) {
-    const nickname = eNickname.trim()
-    if (!nickname) return
-    setBusy(true)
-    setError(null)
-    try {
-      const updated = await updateProfile(profile.id, { nickname })
-      setProfiles((prev) => prev.map((item) => (item.id === updated.id ? updated : item)))
-      setEditingId(null)
-      setNotice('昵称已更新')
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : '更新未完成')
-    } finally {
-      setBusy(false)
-    }
+  function labels() {
+    const custom = otherLabels
+      .split(/[,，\s]+/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+    return custom.length > 0 ? custom : undefined
   }
-
-  async function removeProfile(profile: PersonaProfileView) {
-    const confirmed = await confirmAction({
-      title: '删除人设',
-      message: `删除「${profile.nickname}」后，已有聊天不受影响，但判断时不再带上这份人设。`,
-      confirmText: '删除',
-      tone: 'danger',
-    })
-    if (!confirmed) return
-    try {
-      await deleteProfile(profile.id)
-      setProfiles((prev) => prev.filter((item) => item.id !== profile.id))
-      setNotice('人设已删除')
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : '删除未完成')
-    }
-  }
-
-  const selfDimensions = dimensionsOf(context, customKeys)
 
   return (
     <PageShell>
       <PageBody>
         <PageHeader
           title="人设"
-          description="同一个人在不同档位各存一份，互不覆盖。不做临床诊断。"
+          description="人设按场景档位生成，同一个人在不同档各存一份，互不覆盖。"
           actions={
             tab === 'library' ? (
               <Button size="sm" variant="primary" onClick={() => setWizardOpen(true)}>
@@ -331,11 +186,6 @@ export default function PersonaPage() {
         {error && (
           <div className="mb-4">
             <Notice tone="danger">{error}</Notice>
-          </div>
-        )}
-        {retryHint && (
-          <div className="mb-4">
-            <Notice tone="warning">{retryHint}</Notice>
           </div>
         )}
         {notice && (
@@ -449,171 +299,34 @@ export default function PersonaPage() {
           </section>
         )}
 
-        {tab === 'archive' && (
-          <section className="space-y-4">
-            {conversations.length === 0 ? (
-              <DataCard>
-                <EmptyState title="还没有聊天对象" description="先在「聊天」页新建会话，再回来查看档案。" />
-              </DataCard>
-            ) : (
-              <>
-                <DataCard title="档案">
-                  <div className="mb-4 flex flex-wrap items-center gap-2">
-                    <select
-                      className="h-9 rounded-[8px] border border-border bg-surface px-2.5 text-[14px] text-ink focus:border-primary focus:outline-none"
-                      value={currentId ?? ''}
-                      onChange={(event) => pickConversation(Number(event.target.value))}
-                    >
-                      {conversations.map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {item.counterpart_name || item.title}
-                        </option>
-                      ))}
-                    </select>
-                    {current?.is_group ? (
-                      <select
-                        className="h-9 rounded-[8px] border border-border bg-surface px-2.5 text-[14px] text-ink focus:border-primary focus:outline-none"
-                        value={memberKey}
-                        onChange={(event) => setMemberKey(event.target.value)}
-                      >
-                        <option value="me">我（自评）</option>
-                        {current.members.map((member) => (
-                          <option key={member.key} value={member.key}>
-                            {member.name}（从对话推断）
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <Segmented
-                        value={subject}
-                        options={[
-                          { value: 'other', label: '对方' },
-                          { value: 'me', label: '我' },
-                        ]}
-                        onChange={setSubject}
-                      />
-                    )}
-                    <Button
-                      size="sm"
-                      variant="primary"
-                      className="ml-auto"
-                      loading={busy}
-                      disabled={Boolean(linkedProfile) && !linkedIsPlaceholder}
-                      disabledReason="已有人设库档案，判断以档案为准；自评请切到「我」，或到人设库用同名昵称补全"
-                      onClick={() => void build()}
-                    >
-                      {effectiveSubject === 'me' ? '提交自评' : linkedIsPlaceholder ? '补全占位档案' : '从对话推断'}
-                    </Button>
-                  </div>
-
-                  <div className="mb-4">
-                    <p className="text-[13px] font-medium text-ink-secondary">人设档</p>
-                    <div className="mt-2">
-                      <ContextPicker
-                        value={context}
-                        label={customLabel}
-                        keys={customKeys}
-                        disabled={busy}
-                        onChange={(value) => {
-                          setContext(value)
-                          setSelfAnswers({})
-                        }}
-                        onLabel={setCustomLabel}
-                        onKeys={(keys) => {
-                          setCustomKeys(keys)
-                          setSelfAnswers({})
-                        }}
-                      />
-                    </div>
-                  </div>
-
-                  {effectiveSubject === 'me' && (
-                    <div className="mb-4 space-y-3">
-                      {selfDimensions.map((dim) => (
-                        <DimensionRow
-                          key={dim.key}
-                          dimension={dim}
-                          value={selfAnswers[dim.key]}
-                          onChange={(value) =>
-                            setSelfAnswers((prev) => ({ ...prev, [dim.key]: value }))
-                          }
-                        />
-                      ))}
-                    </div>
-                  )}
-
-                  <div className="flex flex-wrap items-center gap-2 border-t border-border-subtle pt-3 text-[13px] text-ink-muted">
-                    <span>
-                      {current?.is_group
-                        ? `${memberKey === 'me' ? '我' : (current.members.find((member) => member.key === memberKey)?.name ?? memberKey)}　`
-                        : ''}
-                      {contextLabelOf(
-                        linkedProfile?.context ?? persona?.context ?? context,
-                        linkedProfile?.context_label,
-                      )}
-                      档
-                    </span>
-                    <span className="tabular-nums">
-                      置信度 {linkedProfile?.confidence ?? persona?.confidence ?? 0}% · 版本{' '}
-                      {linkedProfile?.version ?? persona?.version ?? 0}
-                    </span>
-                    {linkedProfile && <StatusTag tone="primary">人设库档案</StatusTag>}
-                  </div>
-
-                  {linkedIsPlaceholder && (
-                    <p className="mt-2 text-[13px] leading-5 text-ink-secondary">
-                      这是待补全的占位档案：点上方「补全占位档案」用这段对话补全，或到人设库用同名昵称补全。
-                    </p>
-                  )}
-
-                  {(linkedProfile?.traits ?? persona?.traits ?? []).length > 0 ? (
-                    <ul className="mt-3 divide-y divide-border-subtle">
-                      {(linkedProfile?.traits ?? persona?.traits ?? []).map((trait) => (
-                        <li key={trait.key} className="flex items-baseline justify-between gap-3 py-2">
-                          <span className="text-[13px] text-ink-secondary">{trait.title}</span>
-                          <span className="text-right text-[14px] text-ink">{trait.text}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="mt-3 text-[13px] text-ink-muted">还没有档案内容。</p>
-                  )}
-
-                  <p className="mt-4 text-[12px] text-ink-faint">
-                    候选直接采用 {usage.adopted} 次，手动改写 {usage.rewritten} 次
-                  </p>
-                </DataCard>
-
-                {current?.is_group && batch && (
-                  <DataCard title={`群成员档案`} description={`共 ${batch.participants.length} 人`}>
-                    <ul className="space-y-2">
-                      {batch.participants.map((participant) => (
-                        <li key={participant.key} className="rounded-[10px] bg-surface-muted px-3.5 py-2.5">
-                          <p className="flex flex-wrap items-center gap-2 text-[14px] text-ink">
-                            {participant.name}
-                            <span className="text-[12px] tabular-nums text-ink-faint">
-                              置信度 {participant.persona.confidence}% · 版本 {participant.persona.version}
-                            </span>
-                          </p>
-                          <p className="mt-1 text-[13px] leading-5 text-ink-secondary">
-                            {participant.persona.traits.length > 0
-                              ? participant.persona.traits.map((trait) => `${trait.title} ${trait.text}`).join('　')
-                              : '还没有档案，可在上方选中后「从对话推断」'}
-                          </p>
-                        </li>
-                      ))}
-                    </ul>
-                    <p className="mt-3 text-[12px] text-ink-faint">共享上下文（记忆）{batch.memories.length} 条</p>
-                  </DataCard>
-                )}
-              </>
-            )}
-          </section>
-        )}
-
         {tab === 'import' && (
           <section className="space-y-4">
             <DataCard title="导入聊天记录" description="粘贴过往对话，按说话人分开保存，判断时会参考。">
+              <label className="mb-3 block">
+                <span className="mb-1.5 block text-[13px] font-medium text-ink-secondary">
+                  导入到哪个会话
+                </span>
+                <select
+                  className="h-9 w-full cursor-pointer rounded-[8px] border border-border bg-surface px-2.5 text-[14px] text-ink shadow-xs transition-colors duration-150 hover:border-border-strong focus:border-primary focus:outline-none focus:ring-[3px] focus:ring-primary/15"
+                  value={currentId ?? ''}
+                  onChange={(event) => {
+                    setCurrentId(event.target.value === '' ? null : Number(event.target.value))
+                    setPreview(null)
+                  }}
+                >
+                  {conversations.length === 0 && <option value="">还没有会话</option>}
+                  {conversations.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.counterpart_name || item.title}
+                      {item.is_group ? '（群聊）' : ''}
+                    </option>
+                  ))}
+                </select>
+                <span className="mt-1.5 block text-[12px] leading-5 text-ink-muted">
+                  导入内容跟随会话的场景与对象；还没有会话就先到「聊天」页新建。
+                </span>
+              </label>
+
               <textarea
                 className="min-h-32 w-full rounded-[10px] border border-border bg-surface p-3 text-[14px] leading-6 text-ink focus:border-primary focus:outline-none focus:ring-[3px] focus:ring-primary/15"
                 placeholder={'我: 在吗\nTA: 没怎么'}
@@ -631,7 +344,7 @@ export default function PersonaPage() {
                 />
               )}
               <div className="mt-3 flex flex-wrap items-center gap-2">
-                <Button size="sm" loading={busy} onClick={() => void previewImport()}>
+                <Button size="sm" loading={busy} disabled={currentId === null} disabledReason="请先选择会话" onClick={() => void previewImport()}>
                   预览
                 </Button>
                 <Button
