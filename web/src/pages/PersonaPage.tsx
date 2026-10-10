@@ -482,6 +482,10 @@ function ProfileWizard({ onClose, onSaved }: { onClose: () => void; onSaved: () 
       setError(mode === 'self' ? '请先填写称呼' : '请先填写昵称')
       return
     }
+    if (!gender) {
+      setError('请先选择性别')
+      return
+    }
     if (answered === 0) {
       setError('请至少回答一道题')
       return
@@ -609,7 +613,7 @@ function ProfileWizard({ onClose, onSaved }: { onClose: () => void; onSaved: () 
               )
             })}
           </div>
-          <p className="mt-2 text-[12px] leading-5 text-ink-muted">影响候选回复里的措辞与称呼，可以不选。</p>
+          <p className="mt-2 text-[12px] leading-5 text-ink-muted">影响候选回复里的措辞与称呼。</p>
         </div>
 
         {mode === 'other' && (

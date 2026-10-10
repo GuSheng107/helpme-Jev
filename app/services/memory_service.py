@@ -203,6 +203,30 @@ class MemoryService:
             db, owner_user_id=owner_user_id, counterpart_key=counterpart_key
         )
 
+    def update(
+        self,
+        db: Session,
+        *,
+        owner_user_id: int,
+        memory_id: int,
+        content: str,
+        category: str,
+    ) -> Memory:
+        # 用户在设置里直接改一条记忆：只动内容与分类，不碰历史版本
+        row = _memories.get(db, owner_user_id=owner_user_id, memory_id=memory_id)
+        if row is None or row.valid_to is not None:
+            raise DomainError(DomainErrorCode.NOT_FOUND, "记录不存在", status_code=404)
+        cleaned = content.strip()
+        if not cleaned:
+            raise DomainError(
+                DomainErrorCode.VALIDATION_FAILED, "内容不能为空", status_code=422
+            )
+        row.content = cleaned
+        row.category = (category or "其他").strip()[:32] or "其他"
+        db.commit()
+        db.refresh(row)
+        return row
+
     def forget(self, db: Session, *, owner_user_id: int, memory_id: int) -> None:
         row = _memories.get(db, owner_user_id=owner_user_id, memory_id=memory_id)
         if row is None or row.valid_to is not None:

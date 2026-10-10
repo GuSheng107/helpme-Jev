@@ -15,6 +15,7 @@ from ..domain.schemas.analyze import (
     AnalyzeView,
     ConversationRef,
     ExplainRequest,
+    MemoryUpdateRequest,
     PolishRequest,
     ReplyStreamRequest,
 )
@@ -70,6 +71,33 @@ def list_reflections(
     user: User = Depends(require_active_user),
 ) -> list[dict]:
     return [_reflection_view(row) for row in _memory.list_reflections(db, owner_user_id=user.id)]
+
+
+@router.patch("/memories/{memory_id}")
+def edit_memory(
+    memory_id: int,
+    payload: MemoryUpdateRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_active_user),
+) -> dict:
+    """编辑一条记忆的内容与分类（设置页的记忆管理）。"""
+    from ..core.time import iso_utc
+
+    row = _memory.update(
+        db,
+        owner_user_id=user.id,
+        memory_id=memory_id,
+        content=payload.content,
+        category=payload.category,
+    )
+    return {
+        "id": row.id,
+        "subject": _SUBJECT_LABEL.get(row.subject, row.subject),
+        "category": row.category,
+        "content": row.content,
+        "counterpart_key": row.counterpart_key,
+        "created_at": iso_utc(row.created_at) or "",
+    }
 
 
 @router.delete("/memories/{memory_id}", status_code=204)

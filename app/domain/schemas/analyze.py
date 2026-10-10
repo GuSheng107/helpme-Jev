@@ -11,6 +11,11 @@ class ConversationRef(StrictModel):
     conversation_id: int = Field(ge=1)
 
 
+class MemoryUpdateRequest(StrictModel):
+    content: str = Field(min_length=1, max_length=2000)
+    category: str = Field(default="其他", min_length=1, max_length=32)
+
+
 class ReplyStreamRequest(StrictModel):
     conversation_id: int = Field(ge=1)
     target_member: str = Field(default="", max_length=64)

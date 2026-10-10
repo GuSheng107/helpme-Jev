@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { ApiError } from '../api/client'
 import { avatarDataUrl, changePassword, updateAutoTranslate, updateAvatar, updateProfile, type UserSummary } from '../api/auth'
 import { deleteAccount, exportAccountData } from '../api/logs'
+import { forgetMemory, listMemories, updateMemory, type MemoryItem } from '../api/chat'
 import {
   createProvider,
   deleteProvider,
@@ -20,7 +21,7 @@ import Switch from '../components/Switch'
 import { toast, toastError } from '../components/toast'
 import { DataCard, EmptyState, PageBody, PageHeader, PageShell, StatusTag } from '../components/layout'
 import { IconDecide, IconSparkle } from '../components/icons'
-import { formatLocalDate } from '../utils/datetime'
+import { formatLocalDate, formatLocalTime } from '../utils/datetime'
 
 interface Props {
   user: UserSummary
@@ -275,6 +276,8 @@ export default function SettingsPage({ user, onUserChange, onLogout }: Props) {
 
           <TranslationCard user={user} onUserChange={onUserChange} />
 
+          <MemoryCard />
+
           <DataCard title="数据与账号" description="导出留档，或彻底注销账号。">
             <div className="divide-y divide-border-subtle">
               <div className="flex flex-wrap items-center justify-between gap-3 pb-4">
@@ -369,6 +372,182 @@ function TranslationCard({
         </label>
       </div>
     </DataCard>
+  )
+}
+
+const MEMORY_CATEGORIES = ["偏好", "雷区", "事件", "情绪模式", "其他"]
+
+/** 记忆管理：平台为你记下的长期记忆，在这里可见、可改、可删。 */
+function MemoryCard() {
+  const [rows, setRows] = useState<MemoryItem[]>([])
+  const [total, setTotal] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [deleting, setDeleting] = useState<number | null>(null)
+  const [editing, setEditing] = useState<MemoryItem | null>(null)
+
+  const reload = useCallback(async () => {
+    try {
+      const data = await listMemories()
+      setRows(data.items)
+      setTotal(data.total)
+    } catch (err) {
+      toastError(err, "记忆未能载入")
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void reload()
+  }, [reload])
+
+  async function remove(row: MemoryItem) {
+    if (!await confirmAction({
+      title: "删除记忆",
+      message: `删除「${row.content.slice(0, 24)}…」？判断与起草将不再参考这条内容。`,
+      confirmText: "删除",
+      tone: "danger",
+    })) return
+    setDeleting(row.id)
+    try {
+      await forgetMemory(row.id)
+      await reload()
+      toast("记忆已删除")
+    } catch (err) {
+      toastError(err, "删除失败")
+    } finally {
+      setDeleting(null)
+    }
+  }
+
+  return (
+    <DataCard
+      title="记忆"
+      description={loading ? "正在载入…" : `平台为你记下了 ${total} 条长期记忆，判断和候选回复都会参考。`}
+    >
+      {!loading && rows.length === 0 ? (
+        <p className="py-4 text-center text-[13px] text-ink-muted">
+          还没有记忆。聊天里的复盘会自动把值得记住的事写进这里。
+        </p>
+      ) : (
+        <ul className="max-h-80 divide-y divide-border-subtle overflow-y-auto">
+          {rows.map((row) => (
+            <li key={row.id} className="flex items-start gap-3 py-3 first:pt-0 last:pb-0">
+              <div className="min-w-0 flex-1">
+                <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-ink-muted">
+                  <StatusTag tone="info">{row.category}</StatusTag>
+                  <span>{row.subject}</span>
+                  <time className="tnum">{formatLocalTime(row.created_at)}</time>
+                </p>
+                <p className="mt-1 whitespace-pre-wrap break-words text-[13px] leading-5 text-ink">
+                  {row.content}
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-0.5">
+                <Button size="sm" variant="ghost" onClick={() => setEditing(row)}>编辑</Button>
+                <Button size="sm" variant="ghost-danger" loading={deleting === row.id} onClick={() => void remove(row)}>
+                  删除
+                </Button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {editing && (
+        <MemoryEditModal
+          row={editing}
+          onClose={() => setEditing(null)}
+          onSaved={async () => {
+            setEditing(null)
+            await reload()
+            toast("记忆已更新")
+          }}
+        />
+      )}
+    </DataCard>
+  )
+}
+
+function MemoryEditModal({
+  row,
+  onClose,
+  onSaved,
+}: {
+  row: MemoryItem
+  onClose: () => void
+  onSaved: () => Promise<void>
+}) {
+  const titleId = useId()
+  const [content, setContent] = useState(row.content)
+  const [category, setCategory] = useState(row.category)
+  const [busy, setBusy] = useState(false)
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault()
+    if (busy || !content.trim()) return
+    setBusy(true)
+    try {
+      await updateMemory(row.id, { content: content.trim(), category })
+      await onSaved()
+    } catch (err) {
+      toastError(err, "保存失败")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal size="sm" scroll="hidden" onClose={onClose} busy={busy} labelledBy={titleId} className="flex flex-col">
+      <form onSubmit={submit} className="flex min-h-0 flex-col">
+        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border-subtle px-5 py-4">
+          <h3 id={titleId} className="text-[16px] font-semibold tracking-tight text-ink">编辑记忆</h3>
+          <Button size="sm" variant="ghost" type="button" disabled={busy} onClick={onClose} aria-label="关闭编辑记忆">关闭</Button>
+        </header>
+        <div className="space-y-3.5 px-5 py-5">
+          <div>
+            <span className="mb-1.5 block text-[13px] font-medium text-ink-secondary">分类</span>
+            <div className="flex flex-wrap gap-1.5" role="group" aria-label="记忆分类">
+              {MEMORY_CATEGORIES.map((item) => {
+                const active = category === item
+                return (
+                  <button
+                    key={item}
+                    type="button"
+                    disabled={busy}
+                    aria-pressed={active}
+                    onClick={() => setCategory(item)}
+                    className={`rounded-[8px] border px-3 py-1.5 text-[13px] transition-all duration-150 ${
+                      active
+                        ? "border-primary bg-primary-soft font-medium text-primary"
+                        : "border-border bg-surface text-ink-secondary hover:border-border-strong hover:bg-surface-muted hover:text-ink"
+                    } ${busy ? "cursor-not-allowed opacity-60" : ""}`}
+                  >
+                    {item}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+          <div>
+            <span className="mb-1.5 block text-[13px] font-medium text-ink-secondary">内容</span>
+            <textarea
+              className="min-h-28 w-full resize-none rounded-[10px] border border-border bg-surface p-3 text-[14px] leading-6 text-ink shadow-xs transition-colors duration-150 placeholder:text-ink-faint focus:border-primary focus:outline-none focus:ring-[3px] focus:ring-primary/15 disabled:bg-surface-muted"
+              value={content}
+              maxLength={2000}
+              disabled={busy}
+              onChange={(event) => setContent(event.target.value)}
+              autoFocus
+            />
+            <p className="mt-1 text-[12px] text-ink-faint">改成你认可的说法，判断与起草会按这里的内容参考。</p>
+          </div>
+        </div>
+        <footer className="flex shrink-0 justify-end gap-2 border-t border-border-subtle px-5 py-3">
+          <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>取消</Button>
+          <Button type="submit" variant="primary" loading={busy} disabled={!content.trim()} disabledReason="内容不能为空">保存</Button>
+        </footer>
+      </form>
+    </Modal>
   )
 }
 
