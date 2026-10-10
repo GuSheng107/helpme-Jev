@@ -99,12 +99,24 @@ class PersonaProfileService:
             raise DomainError(DomainErrorCode.NOT_FOUND, "人设不存在", status_code=404)
         return row
 
+    def get_self(self, db: Session, *, owner_user_id: int) -> PersonaProfile | None:
+        """「我」的人设：全局一份，key 固定 'me'。"""
+        return db.scalars(
+            select(PersonaProfile).where(
+                PersonaProfile.owner_user_id == owner_user_id,
+                PersonaProfile.key == "me",
+                PersonaProfile.subject == "me",
+            )
+        ).first()
+
     def _view(self, row: PersonaProfile) -> dict:
         return {
             "id": row.id,
             "key": row.key,
             "nickname": row.nickname,
             "avatar_base64": row.avatar_base64 or "",
+            "subject": row.subject or "other",
+            "gender": row.gender or "",
             "context": row.context,
             "context_label": row.context_label or "",
             "traits": trait_items(row.traits),
@@ -124,7 +136,13 @@ class PersonaProfileService:
         trace_id: str = "",
     ) -> dict:
         nickname = payload.nickname.strip()
-        key = "".join(nickname.split()).lower()
+        if payload.subject == "me":
+            # 「我」的人设全局一份：key 固定、context 固定 self，不挂场景档位
+            key = "me"
+            context = "self"
+        else:
+            context = payload.context
+            key = "".join(nickname.split()).lower()
         if not key:
             raise DomainError(
                 DomainErrorCode.VALIDATION_FAILED, "昵称不能全是空白", status_code=422
@@ -136,10 +154,13 @@ class PersonaProfileService:
         ).first()
         if existing is not None and not _is_placeholder(existing):
             raise DomainError(
-                DomainErrorCode.CONFLICT, "已有同名人设，请换一个昵称", status_code=409
+                DomainErrorCode.CONFLICT,
+                "已建过自己的人设，删掉后可重建" if payload.subject == "me"
+                else "已有同名人设，请换一个昵称",
+                status_code=409,
             )
 
-        questions = questions_for(payload.context, payload.dimension_keys, "other")
+        questions = questions_for(context, payload.dimension_keys, payload.subject)
         values = _normalize_answers(payload.answers, questions)
         # 与推断档案同格式存储（带展示 meta），判断链路可直接复用
         traits = _stored_traits(values, questions)
@@ -155,7 +176,9 @@ class PersonaProfileService:
             row = existing
             row.nickname = nickname
             row.avatar_base64 = payload.avatar_base64 or row.avatar_base64
-            row.context = payload.context
+            row.subject = payload.subject
+            row.gender = payload.gender
+            row.context = context
             row.context_label = payload.context_label
             row.answers = json.dumps(values, ensure_ascii=False)
             row.traits = json.dumps(traits, ensure_ascii=False)
@@ -168,7 +191,9 @@ class PersonaProfileService:
                 key=key,
                 nickname=nickname,
                 avatar_base64=payload.avatar_base64 or "",
-                context=payload.context,
+                subject=payload.subject,
+                gender=payload.gender,
+                context=context,
                 context_label=payload.context_label,
                 # 存清洗后的作答（score 为档位整数、choice 为枚举值），
                 # 不存原始 payload —— 将来校验放宽也不会把未消毒值写进库
@@ -185,7 +210,10 @@ class PersonaProfileService:
             # 与前面的查重之间存在并发窗口，撞唯一约束时按 409 处理而非 500
             db.rollback()
             raise DomainError(
-                DomainErrorCode.CONFLICT, "已有同名人设，请换一个昵称", status_code=409
+                DomainErrorCode.CONFLICT,
+                "已建过自己的人设，删掉后可重建" if payload.subject == "me"
+                else "已有同名人设，请换一个昵称",
+                status_code=409,
             ) from exc
         db.refresh(row)
         return self._view(row)
@@ -212,6 +240,8 @@ class PersonaProfileService:
             # 速写生成时带着旧昵称，改名后纯文本替换同步，不为改名再调一次 LLM
             if old and old != nickname and row.summary and old in row.summary:
                 row.summary = row.summary.replace(old, nickname)
+        if payload.gender is not None:
+            row.gender = payload.gender
         if payload.avatar_base64 is not None:
             row.avatar_base64 = payload.avatar_base64
         db.commit()

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ApiError } from '../api/client'
-import { listConversations, type Conversation } from '../api/chat'
+import { listConversations, listScenarios, type Conversation, type Scenario } from '../api/chat'
 import {
   commitChat,
   createProfile,
@@ -14,17 +14,21 @@ import {
 } from '../api/personas'
 import Button from '../components/Button'
 import { confirmAction } from '../components/confirm'
-import ContextPicker from '../components/ContextPicker'
 import { DataCard, EmptyState, Notice, PageBody, PageHeader, PageShell, StatusTag } from '../components/layout'
 import Modal from '../components/Modal'
+import Segmented from '../components/Segmented'
 import {
   contextLabelOf,
-  CUSTOM_CONTEXT_DEFAULT_DIMENSIONS,
   DEFAULT_CONTEXT,
   dimensionKeysOf,
   dimensionsOf,
+  genderLabelOf,
   isPresetContext,
+  personaKeysOf,
+  resolveDimensions,
   SCORE_LEVELS,
+  SELF_DIMENSIONS,
+  GENDER_OPTIONS,
   type Dimension,
 } from '../data/personaCatalog'
 
@@ -239,9 +243,16 @@ export default function PersonaPage() {
                         ) : (
                           <div className="flex flex-wrap items-center gap-2">
                             <h3 className="truncate text-[14px] font-semibold text-ink">{profile.nickname}</h3>
-                            <StatusTag tone={profile.context === 'workplace' ? 'primary' : 'info'}>
-                              {contextLabelOf(profile.context, profile.context_label)}
-                            </StatusTag>
+                            {profile.subject === 'me' ? (
+                              <StatusTag tone="primary">我</StatusTag>
+                            ) : (
+                              <StatusTag tone={profile.context === 'workplace' ? 'primary' : 'info'}>
+                                {contextLabelOf(profile.context, profile.context_label)}
+                              </StatusTag>
+                            )}
+                            {profile.subject === 'me' && genderLabelOf(profile.gender) && (
+                              <StatusTag tone="info">{genderLabelOf(profile.gender)}</StatusTag>
+                            )}
                           </div>
                         )}
                         <p className="mt-1 text-[12px] tabular-nums text-ink-faint">
@@ -405,16 +416,36 @@ export default function PersonaPage() {
 /* ------------------------------------------------------------------ 建档向导 */
 
 function ProfileWizard({ onClose, onSaved }: { onClose: () => void; onSaved: () => Promise<void> }) {
+  const [mode, setMode] = useState<'other' | 'self'>('other')
   const [nickname, setNickname] = useState('')
   const [avatar, setAvatar] = useState('')
+  const [gender, setGender] = useState('')
   const [context, setContext] = useState<string>(DEFAULT_CONTEXT)
-  const [contextLabel, setContextLabel] = useState('')
-  const [dimensionKeys, setDimensionKeys] = useState<string[]>(CUSTOM_CONTEXT_DEFAULT_DIMENSIONS)
   const [answers, setAnswers] = useState<Record<string, string | number>>({})
+  const [scenarios, setScenarios] = useState<Scenario[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
-  const dimensions = dimensionsOf(context, dimensionKeys)
+  // 档位跟随场景：内置恋爱 / 职场 + 用户自建场景
+  useEffect(() => {
+    listScenarios()
+      .then((rows) => setScenarios(rows.filter((item) => item.kind === 'custom')))
+      .catch(() => undefined)
+  }, [])
+
+  const contextOptions = [
+    { key: 'romance', label: '恋爱', hint: '亲密关系' },
+    { key: 'workplace', label: '职场', hint: '同事与上下级' },
+    ...scenarios.map((item) => ({ key: item.slug, label: item.name, hint: `自定义场景 · ${item.name}` })),
+  ]
+  const selectedScenario = scenarios.find((item) => item.slug === context)
+
+  // 档位 → 维度：内置按预设；场景档用场景自带的人设题集（只取维度库内的题）
+  const dimensions: Dimension[] = mode === 'self'
+    ? SELF_DIMENSIONS
+    : selectedScenario
+      ? resolveDimensions(personaKeysOf(selectedScenario.persona_questions))
+      : dimensionsOf(context)
   const answered = Object.keys(answers).length
 
   function onAvatarFile(file: File) {
@@ -448,11 +479,15 @@ function ProfileWizard({ onClose, onSaved }: { onClose: () => void; onSaved: () 
 
   async function save() {
     if (!nickname.trim()) {
-      setError('请先填写昵称')
+      setError(mode === 'self' ? '请先填写称呼' : '请先填写昵称')
       return
     }
     if (answered === 0) {
       setError('请至少回答一道题')
+      return
+    }
+    if (mode !== 'self' && !isPresetContext(context) && dimensions.length === 0) {
+      setError('这个场景还没有可用的人设题，先到场景里补人设题集')
       return
     }
     setBusy(true)
@@ -461,9 +496,16 @@ function ProfileWizard({ onClose, onSaved }: { onClose: () => void; onSaved: () 
       await createProfile({
         nickname: nickname.trim(),
         avatar_base64: avatar,
-        context,
-        context_label: isPresetContext(context) ? '' : contextLabel.trim(),
-        dimension_keys: dimensionKeysOf(context, dimensionKeys),
+        subject: mode === 'self' ? 'me' : 'other',
+        gender,
+        context: mode === 'self' ? 'self' : context,
+        context_label: '',
+        dimension_keys:
+          mode === 'self'
+            ? []
+            : selectedScenario
+              ? personaKeysOf(selectedScenario.persona_questions)
+              : dimensionKeysOf(context),
         answers,
       })
       await onSaved()
@@ -481,7 +523,11 @@ function ProfileWizard({ onClose, onSaved }: { onClose: () => void; onSaved: () 
           <h2 id="profile-wizard-title" className="text-[16px] font-semibold tracking-tight text-ink">
             新建人设
           </h2>
-          <p className="mt-1 text-[13px] text-ink-muted">按你了解的 TA 作答，至少一题；不确定的留空即可。</p>
+          <p className="mt-1 text-[13px] text-ink-muted">
+            {mode === 'self'
+              ? '「我」的人设全场景通用一份，候选回复会按你的口吻起草。'
+              : '按你了解的 TA 作答，至少一题；不确定的留空即可。'}
+          </p>
         </div>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>
           关闭
@@ -490,6 +536,20 @@ function ProfileWizard({ onClose, onSaved }: { onClose: () => void; onSaved: () 
 
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-5">
         {error && <Notice tone="danger">{error}</Notice>}
+
+        <Segmented
+          value={mode}
+          ariaLabel="给谁建档"
+          options={[
+            { value: 'other', label: '对方' },
+            { value: 'self', label: '我自己' },
+          ]}
+          onChange={(next) => {
+            setMode(next as 'other' | 'self')
+            setAnswers({})
+            setError('')
+          }}
+        />
 
         <div className="flex items-center gap-4">
           {avatar ? (
@@ -500,12 +560,14 @@ function ProfileWizard({ onClose, onSaved }: { onClose: () => void; onSaved: () 
             </span>
           )}
           <div className="min-w-0 flex-1">
-            <label className="mb-1.5 block text-[13px] font-medium text-ink-secondary">昵称</label>
+            <label className="mb-1.5 block text-[13px] font-medium text-ink-secondary">
+              {mode === 'self' ? '称呼' : '昵称'}
+            </label>
             <input
               className="h-9 w-full rounded-[8px] border border-border bg-surface px-3 text-[14px] text-ink focus:border-primary focus:outline-none focus:ring-[3px] focus:ring-primary/15"
               value={nickname}
               onChange={(event) => setNickname(event.target.value)}
-              placeholder="给这个人设起个名字"
+              placeholder={mode === 'self' ? '平时对方怎么叫你' : '给这个人设起个名字'}
               autoFocus
             />
           </div>
@@ -525,27 +587,70 @@ function ProfileWizard({ onClose, onSaved }: { onClose: () => void; onSaved: () 
         </div>
 
         <div>
-          <p className="mb-1.5 text-[13px] font-medium text-ink-secondary">人设档</p>
-          <ContextPicker
-            value={context}
-            label={contextLabel}
-            keys={dimensionKeys}
-            disabled={busy}
-            onChange={(value) => {
-              setContext(value)
-              setAnswers({})
-            }}
-            onLabel={setContextLabel}
-            onKeys={(keys) => {
-              setDimensionKeys(keys)
-              setAnswers({})
-            }}
-          />
+          <p className="mb-1.5 text-[13px] font-medium text-ink-secondary">性别</p>
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="性别">
+            {GENDER_OPTIONS.map((option) => {
+              const active = gender === option.value
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  disabled={busy}
+                  aria-pressed={active}
+                  onClick={() => setGender(option.value)}
+                  className={`rounded-[8px] border px-3 py-1.5 text-[13px] transition-all duration-150 ${
+                    active
+                      ? 'border-primary bg-primary-soft font-medium text-primary'
+                      : 'border-border bg-surface text-ink-secondary hover:border-border-strong hover:bg-surface-muted hover:text-ink'
+                  } ${busy ? 'cursor-not-allowed opacity-60' : ''}`}
+                >
+                  {option.label}
+                </button>
+              )
+            })}
+          </div>
+          <p className="mt-2 text-[12px] leading-5 text-ink-muted">影响候选回复里的措辞与称呼，可以不选。</p>
         </div>
+
+        {mode === 'other' && (
+          <div>
+            <p className="mb-1.5 text-[13px] font-medium text-ink-secondary">人设档</p>
+            <div className="flex flex-wrap gap-1.5" role="group" aria-label="人设档">
+              {contextOptions.map((option) => {
+                const active = context === option.key
+                return (
+                  <button
+                    key={option.key}
+                    type="button"
+                    disabled={busy}
+                    aria-pressed={active}
+                    title={option.hint}
+                    onClick={() => {
+                      setContext(option.key)
+                      setAnswers({})
+                    }}
+                    className={`rounded-[8px] border px-3 py-1.5 text-[13px] transition-all duration-150 ${
+                      active
+                        ? 'border-primary bg-primary-soft font-medium text-primary'
+                        : 'border-border bg-surface text-ink-secondary hover:border-border-strong hover:bg-surface-muted hover:text-ink'
+                    } ${busy ? 'cursor-not-allowed opacity-60' : ''}`}
+                  >
+                    {option.label}
+                  </button>
+                )
+              })}
+            </div>
+            <p className="mt-2 text-[12px] leading-5 text-ink-muted">
+              {contextOptions.find((item) => item.key === context)?.hint}
+            </p>
+          </div>
+        )}
 
         <div className="space-y-1">
           <div className="flex items-center justify-between">
-            <p className="text-[13px] font-medium text-ink-secondary">按你了解的 TA 作答</p>
+            <p className="text-[13px] font-medium text-ink-secondary">
+              {mode === 'self' ? '按你自己的情况作答' : '按你了解的 TA 作答'}
+            </p>
             <p className="text-[12px] tabular-nums text-ink-muted">
               已答 {answered}/{dimensions.length}
             </p>
@@ -563,7 +668,9 @@ function ProfileWizard({ onClose, onSaved }: { onClose: () => void; onSaved: () 
         </div>
 
         <p className="text-[12px] leading-5 text-ink-muted">
-          维度取自公开的人格框架，不做临床诊断。保存后按作答生成一句速写。
+          {mode === 'self'
+            ? '维度取自沟通风格，不做临床诊断。保存后按作答生成一句速写，起草时全场景生效。'
+            : '维度取自公开的人格框架，不做临床诊断。保存后按作答生成一句速写。'}
         </p>
       </div>
 

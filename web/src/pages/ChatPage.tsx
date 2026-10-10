@@ -113,7 +113,9 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
   const [personaOpen, setPersonaOpen] = useState(false)
 
   const current = conversations.find((item) => item.id === currentId) ?? null
-  const chosenSoloProfile = profiles.find((item) => item.id === soloProfileId) ?? null
+  // 「我」的人设全场景通用，不作为聊天对象 / 群成员
+  const counterpartProfiles = profiles.filter((item) => item.subject !== 'me')
+  const chosenSoloProfile = counterpartProfiles.find((item) => item.id === soloProfileId) ?? null
   /** 当前会话的帮我回复浮层 */
   const replyWork = currentId !== null ? replyByConv[currentId] ?? null : null
   /** 最近一条带报告的来话：它的报告默认展开 */
@@ -140,12 +142,12 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
 
   // 档案必选：新建弹窗里默认选中第一个档案；选中项被删时回落
   useEffect(() => {
-    if (soloProfileId !== null && !profiles.some((item) => item.id === soloProfileId)) {
-      setSoloProfileId(profiles[0]?.id ?? null)
-    } else if (soloProfileId === null && profiles.length > 0) {
-      setSoloProfileId(profiles[0].id)
+    if (soloProfileId !== null && !counterpartProfiles.some((item) => item.id === soloProfileId)) {
+      setSoloProfileId(counterpartProfiles[0]?.id ?? null)
+    } else if (soloProfileId === null && counterpartProfiles.length > 0) {
+      setSoloProfileId(counterpartProfiles[0].id)
     }
-  }, [profiles, soloProfileId])
+  }, [counterpartProfiles, soloProfileId])
 
   // 挂载时把登录会话内的历史报告从模块缓存接回来
   useEffect(() => {
@@ -229,7 +231,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
     // 人设前置：单聊必选档案；群聊成员全部来自档案（后端同规则兜底）。
     // 场景与关系不在这里选：后端按人设档位自动推导。
     if (groupMode) {
-      const picked = profiles.filter((item) => memberProfileIds.includes(item.id))
+      const picked = counterpartProfiles.filter((item) => memberProfileIds.includes(item.id))
       if (picked.length === 0) {
         setError('群聊至少要一位成员（从人设库选择）')
         return
@@ -1065,13 +1067,13 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
                 ]}
                 onChange={(next) => setGroupMode(next === 'group')}
               />
-              {profiles.length === 0 ? (
+              {counterpartProfiles.length === 0 ? (
                 <p className="rounded-[8px] bg-warning-soft px-3 py-2 text-[13px] leading-5 text-warning">
                   人设库还是空的——先到「人设」页建好人设，再回来开始聊天。
                 </p>
               ) : (
                 <div className="space-y-1.5" role="group" aria-label={groupMode ? '选择群成员' : '选择人设'}>
-                  {profiles.map((profile) => {
+                  {counterpartProfiles.map((profile) => {
                     const picked = groupMode
                       ? memberProfileIds.includes(profile.id)
                       : soloProfileId === profile.id
@@ -1095,7 +1097,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
                   })}
                 </div>
               )}
-              {groupMode && profiles.length > 0 && (
+              {groupMode && counterpartProfiles.length > 0 && (
                 <p className="text-[12px] text-ink-muted">群聊可多选；群名按成员昵称自动生成。</p>
               )}
             </div>

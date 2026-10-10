@@ -1301,6 +1301,74 @@ def test_build_keeps_custom_context_instead_of_falling_back(
     assert profile["context_label"] == "室友"
 
 
+def test_self_persona_questions_shape() -> None:
+    """「我」的人设题集：全场景通用，围绕回复口吻出题。"""
+    from app.scenarios.persona_questions import persona_questions_for
+
+    questions = persona_questions_for("self", "me")
+    assert set(questions) == {
+        "expression_style", "length_preference", "emoji_style",
+        "humor", "emotional_openness", "taboos",
+    }
+    assert questions["expression_style"]["labels"]["direct"] == "直接坦率"
+    assert questions["humor"]["level_labels"][-1] == "很高"
+
+
+def test_profile_self_create_and_conversation_guard(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """自建档：key 固定 me、context=self，重复 409，不能当聊天对象。"""
+    headers = _user(client, db, "selfperson")
+    _ready(client, db, "selfperson", headers)
+    router = _SummaryRouter()
+    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: router)
+
+    answers = {
+        "expression_style": "direct",
+        "length_preference": "short",
+        "emoji_style": "rarely",
+        "humor": 6,
+        "emotional_openness": 3,
+        "taboos": "past",
+    }
+    created = client.post(
+        "/api/personas/profiles",
+        headers=headers,
+        json={
+            "nickname": "我", "subject": "me", "gender": "female",
+            "context": "self", "answers": answers,
+        },
+    )
+    assert created.status_code == 201, created.text
+    body = created.json()
+    assert body["key"] == "me"
+    assert body["subject"] == "me"
+    assert body["context"] == "self"
+    assert body["gender"] == "female"
+    traits = {item["key"]: item for item in body["traits"]}
+    assert traits["expression_style"]["text"] == "直接坦率"
+    assert traits["humor"]["text"] == "略高"
+
+    duplicate = client.post(
+        "/api/personas/profiles",
+        headers=headers,
+        json={"nickname": "我", "subject": "me", "context": "self", "answers": answers},
+    )
+    assert duplicate.status_code == 409
+
+    # 「我」的人设不能当聊天对象 / 群成员
+    solo = client.post(
+        "/api/conversations", headers=headers,
+        json={"title": "和我的聊天", "profile_id": body["id"]},
+    )
+    assert solo.status_code == 422
+    group = client.post(
+        "/api/conversations", headers=headers,
+        json={"title": "饭局", "member_profile_ids": [body["id"]]},
+    )
+    assert group.status_code == 422
+
+
 def test_context_presets_follow_builtin_scenarios() -> None:
     """档位跟随场景：内置只有恋爱 / 职场两档。
 

@@ -83,6 +83,10 @@ class PersonaProfile(Base, TimestampMixin):
     key: Mapped[str] = mapped_column(String(64), nullable=False)
     nickname: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     avatar_base64: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # me = 「我」的人设（全场景通用一份，key 固定 'me'）；other = 聊天对象档案
+    subject: Mapped[str] = mapped_column(String(8), nullable=False, default="other")
+    # female / male / unspecified；起草与展示会带上，留空表示未填
+    gender: Mapped[str] = mapped_column(String(16), nullable=False, default="")
     context: Mapped[str] = mapped_column(String(32), nullable=False, default="romance")
     context_label: Mapped[str] = mapped_column(String(32), nullable=False, default="")
     answers: Mapped[str] = mapped_column(Text, nullable=False, default="{}")

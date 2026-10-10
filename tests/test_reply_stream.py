@@ -243,6 +243,66 @@ def test_reply_stream_runs_full_pipeline(
     assert "人设" in draft_bodies[0]
 
 
+def test_reply_stream_includes_self_persona_and_gender(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """「我」的人设与性别进起草请求：候选才知道像谁说话。"""
+    headers = _user(client, db, "replyself")
+    _configure(client, headers)
+    conversation_id = _conversation(client, db, "replyself", headers)
+    _save_other(client, headers, conversation_id, "也没什么。")
+
+    import json as _json
+
+    from app.repositories.models import PersonaProfile
+    from tests.profile_seed import user_id_by_name as _uid
+
+    db.add(
+        PersonaProfile(
+            owner_user_id=_uid(db, "replyself"),
+            key="me",
+            nickname="我",
+            subject="me",
+            gender="female",
+            context="self",
+            traits=_json.dumps(
+                {
+                    "_schema": "custom_v1",
+                    "values": {"expression_style": "direct"},
+                    "meta": {
+                        "expression_style": {
+                            "title": "表达风格",
+                            "labels": {"direct": "直接坦率"},
+                        }
+                    },
+                },
+                ensure_ascii=False,
+            ),
+        )
+    )
+    db.commit()
+
+    router = _Router()
+    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: router)
+    streamed = client.post(
+        "/api/chat/reply/stream",
+        headers=headers,
+        json={"conversation_id": conversation_id},
+    )
+    assert streamed.status_code == 200, streamed.text
+    draft_bodies = [
+        json.loads(call["json"]["messages"][1]["content"])
+        for call in router.calls
+        if isinstance(call["json"], dict)
+        and call["json"].get("messages")
+        and "judgments" in call["json"]["messages"][1]["content"]
+    ]
+    assert draft_bodies, "起草请求应存在"
+    self_persona = draft_bodies[0].get("self_persona")
+    assert self_persona["gender"] == "女"
+    assert "直接坦率" in self_persona["traits"]
+
+
 def test_reply_stream_skips_translate_when_auto_translate_off(
     client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:

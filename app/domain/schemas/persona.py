@@ -61,9 +61,16 @@ AvatarData = Annotated[
 ]
 
 
+# 性别：起草措辞与展示会用到；留空表示未填
+GENDER_PATTERN = r"^(female|male|unspecified)$"
+
+
 class PersonaProfileCreate(StrictModel):
     nickname: str = Field(min_length=1, max_length=64)
     avatar_base64: AvatarData = ""
+    # me = 给自己建档（全场景通用一份）；other = 聊天对象
+    subject: str = Field(default="other", pattern="^(me|other)$")
+    gender: str = Field(default="", pattern=f"^$|{GENDER_PATTERN}")
     context: str = Field(pattern=CONTEXT_PATTERN)
     context_label: str = Field(default="", max_length=CONTEXT_LABEL_MAX)
     # 自定义档位勾选的维度 key；内置档位留空即按预设取
@@ -77,6 +84,7 @@ class PersonaProfileCreate(StrictModel):
 class PersonaProfileUpdate(StrictModel):
     nickname: str | None = Field(default=None, min_length=1, max_length=64)
     avatar_base64: AvatarData | None = None
+    gender: str | None = Field(default=None, pattern=f"^$|{GENDER_PATTERN}")
 
 
 class PersonaProfileView(BaseModel):
@@ -84,6 +92,8 @@ class PersonaProfileView(BaseModel):
     key: str
     nickname: str
     avatar_base64: str
+    subject: str = "other"
+    gender: str = ""
     context: str
     context_label: str = ""
     traits: list

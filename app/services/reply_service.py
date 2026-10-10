@@ -223,6 +223,9 @@ class ReplyService:
             conversation=conversation, scenario=scenario, pack=pack,
             decision=decision, rows=rows,
         )
+        self_persona = _self_persona_line(db, owner_user_id=owner_user_id)
+        if self_persona:
+            payload["self_persona"] = self_persona
         persona_lines = _persona_lines(db, owner_user_id=owner_user_id, conversation=conversation)
         if persona_lines:
             payload["personas"] = persona_lines
@@ -538,6 +541,25 @@ def _draft_payload(
         },
         "messages": [{"from": _from_of(row, conversation), "text": row.content} for row in rows],
     }
+
+
+def _self_persona_line(db: Session, *, owner_user_id: int) -> dict | None:
+    """「我」的人设进起草请求：知道自己是谁、什么口吻，候选才像自己写的。"""
+    from .persona_profile_service import PersonaProfileService
+
+    profile = PersonaProfileService().get_self(db, owner_user_id=owner_user_id)
+    if profile is None:
+        return None
+    from .persona_service import trait_items
+
+    traits = "、".join(
+        f"{item['title']} {item['text']}" for item in trait_items(profile.traits)[:6]
+    )
+    gender = GENDER_LABELS.get(profile.gender, "")
+    return {"gender": gender, "traits": traits, "summary": profile.summary or ""}
+
+
+GENDER_LABELS = {"female": "女", "male": "男", "unspecified": "保密"}
 
 
 def _persona_lines(db: Session, *, owner_user_id: int, conversation: Conversation) -> list[str]:
