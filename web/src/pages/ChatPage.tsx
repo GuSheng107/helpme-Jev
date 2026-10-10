@@ -26,11 +26,13 @@ import Modal from '../components/Modal'
 import ReplyFloat, { type ReplyCard } from '../components/ReplyFloat'
 import Segmented from '../components/Segmented'
 import { listProfiles, type PersonaProfileView } from '../api/personas'
+import QuickDecide from '../components/QuickDecide'
 import {
   IconChat,
   IconCheck,
   IconChevronDown,
   IconClose,
+  IconDecide,
   IconPlus,
   IconRefresh,
   IconSparkle,
@@ -103,6 +105,8 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
   const [reports, setReports] = useState<Record<number, ReportEntry>>({})
   /** 报告展开状态的用户覆盖：不设时「最新一条来话的报告」默认展开 */
   const [reportOpenOverrides, setReportOpenOverrides] = useState<Record<number, boolean>>({})
+  /** 辅助决策浮球展开的弹窗 */
+  const [decideOpen, setDecideOpen] = useState(false)
   const streamRef = useRef<HTMLDivElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   // 聊天页内嵌人设速览：默认折叠，点头部「人设」切换
@@ -350,11 +354,9 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
         prev.forEach((item) => URL.revokeObjectURL(item.url))
         return []
       })
-      // 对方来话自动处理：分析报告挂在这条消息下方，同时起帮我回复管线
+      // 对方来话只自动做分析；「帮我回复」由用户手动触发
       if (role === 'other') {
-        const target = wantsSpeaker ? speakerKey : ''
         void runAnalysis(currentId, message.id)
-        void runAutoReply(currentId, text, target, message.id)
       }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '保存失败')
@@ -488,13 +490,25 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
     }
   }
 
-  /** 对方来话自动分析：报告按消息 id 缓存，本次登录内都可见 */
+  /** 对方来话自动分析：报告按消息 id 缓存，本次登录内都可见；解读自动跟上 */
   async function runAnalysis(conversationId: number, messageId: number) {
     setReport(messageId, { result: null, loading: true, error: null, reason: null, explaining: false })
     try {
       const judged = await analyze(conversationId)
-      setReport(messageId, { result: judged, loading: false, error: null, reason: null, explaining: false })
+      setReport(messageId, { result: judged, loading: false, error: null, reason: null, explaining: true })
       void review(conversationId)
+      try {
+        const explained = await explainDecision(conversationId, judged)
+        setReport(messageId, { result: judged, loading: false, error: null, reason: explained.reason, explaining: false })
+      } catch (err) {
+        setReport(messageId, {
+          result: judged,
+          loading: false,
+          error: null,
+          reason: err instanceof ApiError ? err.message : '说明未生成',
+          explaining: false,
+        })
+      }
     } catch (err) {
       setReport(messageId, {
         result: null,
@@ -502,24 +516,6 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
         error: err instanceof ApiError ? err.message : '分析失败',
         reason: null,
         explaining: false,
-      })
-    }
-  }
-
-  /** 为什么这么判：按消息就地取文，结果同样留在缓存里 */
-  async function explainFor(messageId: number) {
-    if (currentId === null) return
-    const entry = reports[messageId]
-    if (!entry?.result || entry.explaining) return
-    setReport(messageId, { ...entry, explaining: true })
-    try {
-      const explained = await explainDecision(currentId, entry.result)
-      setReport(messageId, { ...entry, explaining: false, reason: explained.reason })
-    } catch (err) {
-      setReport(messageId, {
-        ...entry,
-        explaining: false,
-        reason: err instanceof ApiError ? err.message : '说明未生成',
       })
     }
   }
@@ -618,7 +614,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
           )}
         </aside>
 
-        <section className="flex min-h-0 flex-1 flex-col">
+        <section className="relative flex min-h-0 flex-1 flex-col">
           <header className="flex h-14 items-center justify-between gap-3 border-b border-border bg-surface px-4 sm:px-5">
             <div className="flex min-w-0 items-center gap-2.5">
               <button
@@ -801,7 +797,6 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
                           onToggle={(open) =>
                             setReportOpenOverrides((prev) => ({ ...prev, [message.id]: open }))
                           }
-                          onExplain={() => void explainFor(message.id)}
                         />
                       )}
                     </div>
@@ -1020,8 +1015,27 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
               </div>
             </>
           )}
+          {current !== null && (
+            <button
+              type="button"
+              aria-label="辅助决策"
+              title="辅助决策：结合聊天上下文帮你拿主意"
+              className="group absolute bottom-28 right-5 z-20 flex h-12 w-12 items-center justify-center rounded-full bg-primary text-white shadow-lg transition-all duration-200 hover:scale-105 hover:bg-primary-hover hover:shadow-xl active:scale-95 sm:bottom-24"
+              onClick={() => setDecideOpen(true)}
+            >
+              <IconDecide className="h-5 w-5 transition-transform duration-200 group-hover:rotate-12" />
+            </button>
+          )}
         </section>
       </div>
+      {decideOpen && current !== null && (
+        <QuickDecide
+          conversation={current}
+          messages={messages}
+          autoTranslate={autoTranslate}
+          onClose={() => setDecideOpen(false)}
+        />
+      )}
       {lightbox !== null && <Lightbox url={lightbox} onClose={() => setLightbox(null)} />}
 
       {creating && (
