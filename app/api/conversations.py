@@ -201,11 +201,21 @@ def create_conversation(
     first_member_context = ""
     if payload.profile_id is not None:
         solo_profile = _profile_or_404(db, owner_user_id=user.id, profile_id=payload.profile_id)
+        if solo_profile.subject == "me":
+            raise DomainError(
+                DomainErrorCode.VALIDATION_FAILED,
+                "「我」的人设不作为聊天对象，请选对方的人设", status_code=422
+            )
         members = []
     elif payload.member_profile_ids:
         picked: dict[str, GroupMember] = {}
         for profile_id in payload.member_profile_ids:
             profile = _profile_or_404(db, owner_user_id=user.id, profile_id=profile_id)
+            if profile.subject == "me":
+                raise DomainError(
+                    DomainErrorCode.VALIDATION_FAILED,
+                    "「我」的人设不作为群成员，请选对方的人设", status_code=422
+                )
             if not picked:
                 first_member_context = profile.context
             picked.setdefault(profile.key, GroupMember(key=profile.key, name=profile.nickname))

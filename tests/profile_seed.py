@@ -23,6 +23,7 @@ def seed_profile(
     *,
     nickname: str | None = None,
     context: str = "romance",
+    gender: str = "",
 ) -> int:
     """按 key 播种一行占位档案，返回 id；同 key 重复播种返回已有行。"""
     existing = db.scalars(
@@ -37,6 +38,7 @@ def seed_profile(
         owner_user_id=owner_user_id,
         key=key,
         nickname=nickname or key,
+        gender=gender,
         context=context,
         answers="{}",
         traits="{}",

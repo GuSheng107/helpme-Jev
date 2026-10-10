@@ -47,7 +47,7 @@ export interface Dimension {
   group: DimensionGroup
 }
 
-export type DimensionGroup = 'core' | 'relation' | 'interaction' | 'work'
+export type DimensionGroup = 'core' | 'relation' | 'interaction' | 'work' | 'self'
 
 export const DIMENSION_GROUPS: { key: DimensionGroup; label: string; hint: string }[] = [
   { key: 'core', label: '核心特质', hint: '性格底色' },
@@ -174,6 +174,102 @@ export const DIMENSIONS: Dimension[] = [
     ],
   },
 ]
+
+/* ---------------------------------------------- 「我」的人设（全场景通用） */
+
+/**
+ * 自建档题目：全部围绕「这些特质会怎么影响我打字回复」，
+ * 起草时按这份作答把候选写成用户自己的口吻。key 与后端 self 题集一一对应。
+ */
+export const SELF_DIMENSIONS: Dimension[] = [
+  {
+    key: 'expression_style',
+    title: '表达风格',
+    question: '你打字通常是什么风格？',
+    hint: '起草照这个口吻来',
+    type: 'choice',
+    instruction: '',
+    group: 'self',
+    options: [
+      { value: 'direct', label: '直接坦率', note: '有话直说，不绕弯子' },
+      { value: 'warm', label: '温和体贴', note: '先顾对方情绪，再谈事情' },
+      { value: 'playful', label: '爱开玩笑', note: '正经事也带点玩笑' },
+      { value: 'concise', label: '简洁利落', note: '能一个词说清就不用一句' },
+    ],
+  },
+  {
+    key: 'length_preference',
+    title: '回复长度',
+    question: '你的回复一般多长？',
+    hint: '决定候选的篇幅',
+    type: 'choice',
+    instruction: '',
+    group: 'self',
+    options: [
+      { value: 'short', label: '能短则短', note: '一个词能说清就不用一句' },
+      { value: 'medium', label: '一两句刚好', note: '不啰嗦也不生硬' },
+      { value: 'long', label: '愿意展开', note: '把话说透' },
+    ],
+  },
+  {
+    key: 'emoji_style',
+    title: '表情语气',
+    question: '表情和「哈哈」这类语气词的使用频率？',
+    hint: '影响候选的语气质感',
+    type: 'choice',
+    instruction: '',
+    group: 'self',
+    options: [
+      { value: 'often', label: '常用', note: '表情和「哈哈」常驻' },
+      { value: 'sometimes', label: '偶尔用', note: '偶尔点缀一下' },
+      { value: 'rarely', label: '几乎不用', note: '多半是纯文字' },
+    ],
+  },
+  {
+    key: 'humor',
+    title: '幽默感',
+    question: '玩笑密度：一本正经 ↔ 段子手附体',
+    hint: '分数越高候选越放得开',
+    type: 'score',
+    instruction: '',
+    group: 'self',
+  },
+  {
+    key: 'emotional_openness',
+    title: '情绪外露',
+    question: '开心烦恼是全写在脸上，还是轻描淡写？',
+    hint: '分数越高候选越直抒胸臆',
+    type: 'score',
+    instruction: '',
+    group: 'self',
+  },
+  {
+    key: 'taboos',
+    title: '聊天雷区',
+    question: '哪类话题不希望候选往上面推？',
+    hint: '起草会主动避开',
+    type: 'choice',
+    instruction: '',
+    group: 'self',
+    options: [
+      { value: 'none', label: '没什么雷区', note: '都可以聊' },
+      { value: 'past', label: '感情过去', note: '别主动提' },
+      { value: 'money', label: '收入花销', note: '免谈' },
+      { value: 'family', label: '家庭事务', note: '不外提' },
+    ],
+  },
+]
+
+/** 性别：起草措辞与展示用；unspecified 展示为「保密」。 */
+export const GENDER_OPTIONS: { value: string; label: string }[] = [
+  { value: 'female', label: '女' },
+  { value: 'male', label: '男' },
+  { value: 'unspecified', label: '保密' },
+]
+
+export function genderLabelOf(gender: string): string {
+  return GENDER_OPTIONS.find((item) => item.value === gender)?.label ?? ''
+}
 
 /* ------------------------------------------------------------------ 档位 */
 

@@ -45,6 +45,8 @@ export interface Scenario {
   description: string
   is_builtin: boolean
   is_system: boolean
+  /** 场景自带的人设题集：人设档位跟随场景时按它取维度 */
+  persona_questions?: string
 }
 
 export interface ProbBar {

@@ -23,6 +23,10 @@ export interface PersonaProfileView {
   key: string
   nickname: string
   avatar_base64: string
+  /** me = 「我」的人设（全场景通用一份）；other = 聊天对象档案 */
+  subject: 'me' | 'other'
+  /** female / male / unspecified；空 = 未填 */
+  gender: string
   context: PersonaContext
   context_label?: string
   traits: Trait[]
@@ -38,6 +42,9 @@ export function listProfiles() {
 export function createProfile(body: {
   nickname: string
   avatar_base64?: string
+  /** me = 给自己建档（全场景通用一份） */
+  subject?: 'me' | 'other'
+  gender?: string
   context: PersonaContext
   context_label?: string
   dimension_keys?: string[]
@@ -48,7 +55,7 @@ export function createProfile(body: {
 
 export function updateProfile(
   id: number,
-  body: { nickname?: string; avatar_base64?: string },
+  body: { nickname?: string; avatar_base64?: string; gender?: string },
 ) {
   return api.patch<PersonaProfileView>(`/api/personas/profiles/${id}`, body)
 }

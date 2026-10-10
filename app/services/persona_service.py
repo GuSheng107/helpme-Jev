@@ -39,6 +39,9 @@ SELF_REPORT_CONFIDENCE = 0.9
 # 群聊背景里成员人设摘要的字符预算（JEV 背景总预算 5000，摘要只占一小块）
 PERSONA_LINES_BUDGET_CHARS = 1000
 
+# 档案性别 → 展示（secret 不标注）
+GENDER_LABELS = {"female": "女", "male": "男", "unspecified": ""}
+
 
 def _load(raw: str, fallback):
     try:
@@ -409,10 +412,11 @@ class PersonaService:
             )
         }
 
-        def _line(name: str, traits: list[dict]) -> str:
-            # 带上特质名：裸分数（3/8）JEV 读不出含义
+        def _line(name: str, traits: list[dict], gender: str = "") -> str:
+            # 带上特质名：裸分数（3/8）JEV 读不出含义；性别帮措辞拿准 TA / 她 / 他
+            tag = f"（{gender}）" if gender else ""
             return (
-                f"{name}的人设："
+                f"{name}{tag}的人设："
                 + "、".join(f"{trait['title']}{trait['text']}" for trait in traits)
             )
 
@@ -420,9 +424,11 @@ class PersonaService:
         used = 0
         for key, name in ordered:
             profile = profiles.get(key)
+            gender = ""
             if profile is not None:
                 traits = trait_items(profile.traits)[:6]
                 display = profile.nickname or name
+                gender = GENDER_LABELS.get(profile.gender, "") if profile.gender else ""
             else:
                 row = self._find_any(
                     db, owner_user_id=owner_user_id,
@@ -434,7 +440,7 @@ class PersonaService:
                 display = name
             if not traits:
                 continue
-            line = _line(display, traits)
+            line = _line(display, traits, gender)
             if used + len(line) > PERSONA_LINES_BUDGET_CHARS:
                 break
             used += len(line) + 1

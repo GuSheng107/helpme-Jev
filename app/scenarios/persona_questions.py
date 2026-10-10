@@ -179,6 +179,96 @@ GENERAL_DIMENSIONS: tuple[str, ...] = (
 )
 
 
+# ------------------------------------------------------------------ 「我」的人设
+# 全场景通用一份，服务于一件事：起草时「像我自己」。题目全部围绕
+# 「这些特质会怎么影响我打字回复」，与推断对方的维度刻意分开。
+
+SELF_EXPRESSION_OPTIONS = {
+    "direct": "有话直说，不绕弯子",
+    "warm": "先顾对方情绪，再谈事情",
+    "playful": "正经事也带点玩笑",
+    "concise": "能一个词说清就不用一句",
+}
+SELF_EXPRESSION_LABELS = {
+    "direct": "直接坦率",
+    "warm": "温和体贴",
+    "playful": "爱开玩笑",
+    "concise": "简洁利落",
+}
+SELF_LENGTH_OPTIONS = {
+    "short": "能一个词说清就不用一句",
+    "medium": "一两句话刚好",
+    "long": "愿意展开说",
+}
+SELF_LENGTH_LABELS = {"short": "能短则短", "medium": "一两句刚好", "long": "愿意展开"}
+SELF_EMOJI_OPTIONS = {
+    "often": "表情和「哈哈」常驻",
+    "sometimes": "偶尔点缀",
+    "rarely": "几乎不用",
+}
+SELF_EMOJI_LABELS = {"often": "常用", "sometimes": "偶尔用", "rarely": "几乎不用"}
+SELF_TABOO_OPTIONS = {
+    "none": "没什么不能聊",
+    "past": "感情过去别提",
+    "money": "收入花销免谈",
+    "family": "家事不外提",
+}
+SELF_TABOO_LABELS = {
+    "none": "没什么雷区",
+    "past": "感情过去",
+    "money": "收入花销",
+    "family": "家庭事务",
+}
+
+
+def self_persona_questions() -> dict:
+    """「我」的人设题集：全场景通用，按「我」的口吻作答。"""
+    questions = {
+        "expression_style": choice(
+            "How do you usually phrase messages?",
+            SELF_EXPRESSION_OPTIONS,
+        ),
+        "length_preference": choice(
+            "How long do your replies usually run?",
+            SELF_LENGTH_OPTIONS,
+        ),
+        "emoji_style": choice(
+            "How do you use emoji and softening particles like 哈哈?",
+            SELF_EMOJI_OPTIONS,
+        ),
+        "humor": score("一本正经 ↔ 段子手附体：你的玩笑密度", OCEAN_LEVELS),
+        "emotional_openness": score(
+            "轻描淡写 ↔ 全写在脸上：情绪外露程度", OCEAN_LEVELS
+        ),
+        "taboos": choice(
+            "Which topics should a drafted reply avoid pushing on?",
+            SELF_TABOO_OPTIONS,
+        ),
+    }
+    titles = {
+        "expression_style": "表达风格",
+        "length_preference": "回复长度",
+        "emoji_style": "表情语气",
+        "humor": "幽默感",
+        "emotional_openness": "情绪外露",
+        "taboos": "聊天雷区",
+    }
+    labels = {
+        "expression_style": SELF_EXPRESSION_LABELS,
+        "length_preference": SELF_LENGTH_LABELS,
+        "emoji_style": SELF_EMOJI_LABELS,
+        "taboos": SELF_TABOO_LABELS,
+    }
+    for key, question in questions.items():
+        question["title"] = titles[key]
+        # score 题带中文档位文案（与 trait 展示 meta 同一套）
+        if question["type"] == "score":
+            question["level_labels"] = list(SCORE_LABELS)
+        if labels.get(key):
+            question["labels"] = labels[key]
+    return questions
+
+
 def romance_persona_questions(subject: str = "other") -> dict:
     """subject 为 other 时从对话推断；为 me 时按自评答题。"""
     who = "the user" if subject == "me" else "the other person"
@@ -374,8 +464,11 @@ def questions_for(
     """档位 → 人设题集。
 
     恋爱 / 职场（内置场景对应的两个档位）用各自的专用措辞；
-    其余 slug（自定义档位，含历史遗留档位）按调用方给的维度拼装。
+    「我」的人设走自评题集；其余 slug（自定义场景档位，含历史遗留档位）
+    按调用方给的维度拼装。
     """
+    if context == "self":
+        return self_persona_questions()
     if context == "romance":
         return romance_persona_questions(subject)
     if context == "workplace":
