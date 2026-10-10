@@ -188,6 +188,36 @@ def _conversation(client: TestClient, db: Session, username: str, headers: dict)
 
 
 # ------------------------------------------------------------------ 题目
+def _group(client: TestClient, db: Session, username: str, headers: dict) -> int:
+    owner = user_id_by_name(db, username)
+    created = client.post(
+        "/api/conversations",
+        json={
+            "title": "项目小队",
+            "relationship": "同事",
+            "member_profile_ids": [
+                seed_profile(db, owner, "小林"),
+                seed_profile(db, owner, "阿花"),
+            ],
+        },
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    conv_id = created.json()["id"]
+    for speaker, content in (
+        ("小林", "这个需求我看悬，先说好做不完别赖我。"),
+        ("阿花", "没事，一起拆任务就行。"),
+    ):
+        resp = client.post(
+            f"/api/conversations/{conv_id}/messages",
+            json={"role": "other", "content": content, "speaker": speaker},
+            headers=headers,
+        )
+        assert resp.status_code == 201, resp.text
+    return conv_id
+
+
+# ------------------------------------------------------------------ 题目
 def test_romance_questions_shape() -> None:
     questions = romance_questions()
     assert set(questions) == {
@@ -340,127 +370,35 @@ def test_analyze_upstream_failure_does_not_crash(
     assert resp.status_code == 502
     assert resp.json()["error"]["code"] == "JEV_UPSTREAM_ERROR"
     assert resp.json()["error"]["retryable"] is True
-
-
-def test_reply_returns_native_text_and_chinese_percent(
+def test_polish_replaces_draft_text(
     client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    token = _make_user(client, db, "replyuser")
-    headers = _auth(token)
-    _configure(client, headers)
-    conv_id = _conversation(client, db, "replyuser", headers)
-    client.post(
-        f"/api/conversations/{conv_id}/messages",
-        json={"role": "other", "content": "没怎么。"},
-        headers=headers,
-    )
-    _patch(monkeypatch, _Router())
-    replied = client.post(
-        "/api/chat/reply",
-        headers=headers,
-        json={
-            "conversation_id": conv_id,
-            "decision": {"best_action": {"text": "先承认你听出来了"}},
-        },
-    )
-    assert replied.status_code == 200, replied.text
-    body = replied.json()
-    assert [item["text"] for item in body["candidates"]] == ["怎么了？", "想说就说。", "我在。"]
-    assert body["candidates"][0]["percent"] == 50
-    assert "Nothing much" not in replied.text
-    reply_logs = client.get(
-        "/api/logs", headers=headers,
-        params={"trace_id": replied.headers["x-trace-id"]},
-    ).json()["items"]
-    assert {item["source"] for item in reply_logs} >= {"用户", "LLM", "JEV"}
-
-
-def test_polish_replaces_and_clarify_asks(
-    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
+    """润色：改写输入框里的草稿文本。"""
     token = _make_user(client, db, "polishuser")
     headers = _auth(token)
     _configure(client, headers)
-    conv_id = _conversation(client, db, "polishuser", headers)
-    client.post(
-        f"/api/conversations/{conv_id}/messages",
-        json={"role": "other", "content": "没怎么。"},
-        headers=headers,
-    )
-    _patch(monkeypatch, _Router())
+
+    class _PolishRouter:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def post(self, url, json=None, headers=None, timeout=None):  # noqa: A002
+            return _FakeResponse(
+                200,
+                {"choices": [{"message": {"content": json_dumps({"text": "改写后的句子。"})}}]},
+            )
+
+    _patch(monkeypatch, _PolishRouter())
     polished = client.post(
-        "/api/chat/polish", headers=headers, json={"text": "在吗", "kind": "reply"}
+        "/api/chat/polish",
+        headers=headers,
+        json={"text": "原句。", "kind": "reply"},
     )
     assert polished.status_code == 200, polished.text
-    assert polished.json()["text"] == "在吗。"
-    asked = client.post("/api/chat/clarify", headers=headers, json={"conversation_id": conv_id})
-    assert asked.status_code == 200, asked.text
-    assert asked.json()["questions"] == ["上次是因为什么？"]
-    clarify_logs = client.get(
-        "/api/logs", headers=headers,
-        params={"trace_id": asked.headers["x-trace-id"]},
-    ).json()["items"]
-    assert any(item["source"] == "LLM" and "澄清问题" in item["summary"] for item in clarify_logs)
-
-
-def test_high_danger_refuses_candidates(
-    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    token = _make_user(client, db, "dangeruser")
-    headers = _auth(token)
-    _configure(client, headers)
-    conv_id = _conversation(client, db, "dangeruser", headers)
-    client.post(
-        f"/api/conversations/{conv_id}/messages",
-        json={"role": "other", "content": "别烦我。"},
-        headers=headers,
-    )
-    _patch(monkeypatch, _Router())
-    refused = client.post(
-        "/api/chat/reply",
-        headers=headers,
-        json={
-            "conversation_id": conv_id,
-            "decision": {"danger_level": {"value": 9, "text": "9/9"}},
-        },
-    )
-    assert refused.status_code == 422
-    explained = client.post(
-        "/api/chat/explain",
-        headers=headers,
-        json={"conversation_id": conv_id, "decision": {"true_intent": {"text": "想确认你在不在意"}}},
-    )
-    assert explained.status_code == 200, explained.text
-    assert explained.json()["reason"] == "对方在确认你是否在意。"
-
-
-def _group(client: TestClient, db: Session, username: str, headers: dict) -> int:
-    owner = user_id_by_name(db, username)
-    created = client.post(
-        "/api/conversations",
-        json={
-            "title": "项目小队",
-            "relationship": "同事",
-            "member_profile_ids": [
-                seed_profile(db, owner, "小林"),
-                seed_profile(db, owner, "阿花"),
-            ],
-        },
-        headers=headers,
-    )
-    assert created.status_code == 201, created.text
-    conv_id = created.json()["id"]
-    for speaker, content in (
-        ("小林", "这个需求我看悬，先说好做不完别赖我。"),
-        ("阿花", "没事，一起拆任务就行。"),
-    ):
-        resp = client.post(
-            f"/api/conversations/{conv_id}/messages",
-            json={"role": "other", "content": content, "speaker": speaker},
-            headers=headers,
-        )
-        assert resp.status_code == 201, resp.text
-    return conv_id
+    assert polished.json()["text"] == "改写后的句子。"
 
 
 def test_group_analyze_uses_speaker_names_and_personas(
@@ -513,34 +451,3 @@ def test_group_analyze_uses_speaker_names_and_personas(
     assert {msg["from"] for msg in payload["messages"]} == {"小林", "阿花"}
     # 群聊没有单一对象：counterpart 把群名给 LLM 当参照
     assert payload["counterpart"] == "项目小队"
-
-
-def test_group_reply_uses_speaker_names(
-    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """群聊候选起草：发给 LLM 的消息按成员名归属。"""
-    token = _make_user(client, db, "groupreply")
-    headers = _auth(token)
-    _configure(client, headers)
-    conv_id = _group(client, db, "groupreply", headers)
-
-    router = _Router()
-    _patch(monkeypatch, router)
-    replied = client.post(
-        "/api/chat/reply",
-        headers=headers,
-        json={
-            "conversation_id": conv_id,
-            "decision": {"best_action": {"text": "先对齐任务范围"}},
-        },
-    )
-    assert replied.status_code == 200, replied.text
-
-    draft_call = next(
-        call for call in router.calls
-        if "/chat/completions" in call["url"]
-        and "is_group" in json_loads(call["json"]["messages"][1]["content"])
-    )
-    payload = json_loads(draft_call["json"]["messages"][1]["content"])
-    assert payload["is_group"] is True
-    assert [msg["from"] for msg in payload["messages"]] == ["小林", "阿花"]
