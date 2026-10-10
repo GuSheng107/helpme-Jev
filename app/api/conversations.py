@@ -137,6 +137,28 @@ def _require_bound_profiles(
         )
 
 
+def _builtin_scenario_id(db: Session, context: str) -> int | None:
+    """人设档位 → 内置场景 id。
+
+    场景跟随人设：恋爱档挂恋爱场景、职场档挂职场场景；自定义档位
+    （含历史遗留档位）不挂场景，判断走默认题包。
+    """
+    if context not in {"romance", "workplace"}:
+        return None
+    scenario = db.scalars(
+        select(Scenario).where(
+            Scenario.kind == context,
+            Scenario.is_builtin.is_(True),
+            Scenario.owner_user_id.is_(None),
+        )
+    ).first()
+    return scenario.id if scenario else None
+
+
+# 单聊关系兜底：按档位给一个中性称谓，自定义档位用档位名
+_RELATIONSHIP_OF_CONTEXT = {"romance": "恋人", "workplace": "同事"}
+
+
 # ------------------------------------------------------------------ 会话
 @router.get("", response_model=list[ConversationView])
 def list_conversations(
@@ -176,6 +198,7 @@ def create_conversation(
             "单聊人设和群聊成员不能同时选择", status_code=422
         )
     solo_profile = None
+    first_member_context = ""
     if payload.profile_id is not None:
         solo_profile = _profile_or_404(db, owner_user_id=user.id, profile_id=payload.profile_id)
         members = []
@@ -183,6 +206,8 @@ def create_conversation(
         picked: dict[str, GroupMember] = {}
         for profile_id in payload.member_profile_ids:
             profile = _profile_or_404(db, owner_user_id=user.id, profile_id=profile_id)
+            if not picked:
+                first_member_context = profile.context
             picked.setdefault(profile.key, GroupMember(key=profile.key, name=profile.nickname))
         if len(picked) > MAX_GROUP_MEMBERS:
             # 超过上限：明确拒绝，不静默砍人
@@ -208,12 +233,28 @@ def create_conversation(
     else:
         counterpart_name, counterpart_key = solo_profile.nickname, solo_profile.key
 
+    # 场景与关系从人设档案推导，前端只负责选人：
+    # 场景取档位对应的内置场景（群聊按第一位成员的档位），
+    # 关系在单聊未填时按档位给中性称谓，自定义档位用档位名。
+    primary_context = (
+        solo_profile.context if solo_profile is not None else first_member_context
+    )
+    scenario_id = payload.scenario_id
+    if scenario_id is None:
+        scenario_id = _builtin_scenario_id(db, primary_context)
+    relationship = payload.relationship.strip()
+    if not relationship and solo_profile is not None:
+        relationship = (
+            _RELATIONSHIP_OF_CONTEXT.get(primary_context)
+            or solo_profile.context_label.strip()
+        )
+
     row = Conversation(
         owner_user_id=user.id,
-        scenario_id=payload.scenario_id,
+        scenario_id=scenario_id,
         title=payload.title.strip(),
         counterpart_name=counterpart_name,
-        relationship=payload.relationship.strip(),
+        relationship=relationship,
         counterpart_key=counterpart_key,
         is_group=is_group,
         members=json.dumps(

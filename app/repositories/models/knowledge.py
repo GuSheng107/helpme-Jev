@@ -78,7 +78,7 @@ class Persona(Base, TimestampMixin):
     subject: Mapped[str] = mapped_column(String(8), nullable=False, default="other")  # me | other
     context: Mapped[str] = mapped_column(
         String(32), nullable=False, default="romance", index=True
-    )  # 档位 slug：内置 romance / workplace / family / friends / general，或自定义档位
+    )  # 档位 slug：内置 romance / workplace（跟随场景），或自定义档位
     context_label: Mapped[str] = mapped_column(
         String(32), nullable=False, default=""
     )  # 自定义档位的显示名；内置档位留空，由前端按 slug 取名

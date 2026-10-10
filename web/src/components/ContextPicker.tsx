@@ -141,7 +141,7 @@ export default function ContextPicker({
               })}
             </div>
             {selected.size === 0 && (
-              <p className="mt-2 text-[12px] text-warning">至少勾选一个维度，否则会按「通用」取用。</p>
+              <p className="mt-2 text-[12px] text-warning">至少勾选一个维度，否则按默认维度取用。</p>
             )}
           </div>
         </div>
