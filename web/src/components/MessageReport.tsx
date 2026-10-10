@@ -107,13 +107,11 @@ export default function MessageReport({
   scenarioKind = 'romance',
   open,
   onToggle,
-  onExplain,
 }: {
   entry: ReportEntry
   scenarioKind?: string
   open: boolean
   onToggle: (open: boolean) => void
-  onExplain: () => void
 }) {
   const result = entry.result
   if (entry.loading || result === null) {
@@ -212,26 +210,25 @@ export default function MessageReport({
             </details>
           )}
 
-          <div className="flex items-center justify-between gap-3 border-t border-border-subtle pt-2">
-            <button type="button" className={LINK} onClick={onExplain} disabled={entry.explaining}>
-              {entry.explaining ? '正在解读…' : '为什么这么判'}
-            </button>
-            <span className="shrink-0 text-[11px] text-ink-faint">判断可能不准，重要的事请自己核实</span>
+          <div className="space-y-1.5 border-t border-border-subtle pt-2">
+            <p className="text-[11px] font-semibold tracking-[0.12em] text-ink-faint">为什么这么判</p>
+            {entry.explaining ? (
+              <p className="animate-pulse text-[12.5px] leading-5 text-ink-muted">正在解读…</p>
+            ) : entry.reason ? (
+              <p className="animate-fade-in text-[12.5px] leading-5 text-ink-secondary">
+                {entry.reason}
+                <span className="text-ink-faint">（由语言模型解读，仅供参考）</span>
+              </p>
+            ) : (
+              <p className="text-[12.5px] leading-5 text-ink-faint">解读没能生成，可稍后重试本条分析。</p>
+            )}
+            <p className="text-[11px] leading-4 text-ink-faint">判断可能不准，重要的事请自己核实</p>
           </div>
-          {entry.reason && (
-            <p className="animate-fade-in text-[12.5px] leading-5 text-ink-secondary">
-              {entry.reason}
-              <span className="text-ink-faint">（由语言模型解读，仅供参考）</span>
-            </p>
-          )}
         </div>
       )}
     </section>
   )
 }
-
-const LINK =
-  'inline-flex items-center rounded-[6px] px-0 text-[12px] font-medium text-primary transition-colors duration-150 hover:text-primary/80 disabled:cursor-not-allowed disabled:opacity-60'
 
 const RISK_KEYS = new Set(['danger_level', 'stakes_level'])
 const RISK_WORDS: Record<string, string> = { danger_level: '风险', stakes_level: '利害' }
