@@ -183,6 +183,55 @@ def test_forget_hides_one_memory(client: TestClient, db: Session) -> None:
     assert listed.json()["total"] == 0
 
 
+def test_edit_memory_updates_content_and_category(client: TestClient, db: Session) -> None:
+    """设置页记忆管理：内容与分类可改；空内容 422；他人不可改。"""
+    token, user_id = _make_user(client, db, "edituser")
+    headers = _auth(token)
+    row = Memory(
+        owner_user_id=user_id,
+        subject="relation",
+        category="雷区",
+        content="不要提前任",
+        source="reflection",
+    )
+    db.add(row)
+    db.commit()
+
+    edited = client.patch(
+        f"/api/chat/memories/{row.id}",
+        headers=headers,
+        json={"content": "别主动提前任，她不想聊。", "category": "偏好"},
+    )
+    assert edited.status_code == 200, edited.text
+    body = edited.json()
+    assert body["content"] == "别主动提前任，她不想聊。"
+    assert body["category"] == "偏好"
+    assert body["subject"] == "关系"
+
+    listed = client.get("/api/chat/memories", headers=headers)
+    assert listed.json()["items"][0]["content"] == "别主动提前任，她不想聊。"
+
+    blank = client.patch(
+        f"/api/chat/memories/{row.id}", headers=headers, json={"content": "   ", "category": "偏好"}
+    )
+    assert blank.status_code == 422
+
+    stranger_token, _ = _make_user(client, db, "editstranger")
+    forbidden = client.patch(
+        f"/api/chat/memories/{row.id}",
+        headers=_auth(stranger_token),
+        json={"content": "偷改", "category": "偏好"},
+    )
+    assert forbidden.status_code == 404
+
+    # 已删除（valid_to 置位）的记忆不能再编辑
+    client.delete(f"/api/chat/memories/{row.id}", headers=headers)
+    gone = client.patch(
+        f"/api/chat/memories/{row.id}", headers=headers, json={"content": "复活", "category": "偏好"}
+    )
+    assert gone.status_code == 404
+
+
 def test_sensitive_memory_is_packed_first() -> None:
     from app.services.context_service import render_background
 

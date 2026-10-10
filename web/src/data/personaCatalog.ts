@@ -260,11 +260,10 @@ export const SELF_DIMENSIONS: Dimension[] = [
   },
 ]
 
-/** 性别：起草措辞与展示用；unspecified 展示为「保密」。 */
+/** 性别：起草措辞与展示用；历史数据里的 unknown 值展示为空。 */
 export const GENDER_OPTIONS: { value: string; label: string }[] = [
   { value: 'female', label: '女' },
   { value: 'male', label: '男' },
-  { value: 'unspecified', label: '保密' },
 ]
 
 export function genderLabelOf(gender: string): string {

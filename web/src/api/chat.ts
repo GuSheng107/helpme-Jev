@@ -114,6 +114,10 @@ export function forgetMemory(id: number) {
   return api.delete<void>(`/api/chat/memories/${id}`)
 }
 
+export function updateMemory(id: number, body: { content: string; category: string }) {
+  return api.patch<MemoryItem>(`/api/chat/memories/${id}`, body)
+}
+
 export function listReflections() {
   return api.get<Reflection[]>('/api/chat/reflections')
 }
