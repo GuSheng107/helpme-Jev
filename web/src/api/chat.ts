@@ -4,6 +4,8 @@ export interface ImageAttachment {
   type: 'image'
   id: number
   mime: string
+  /** 图片相对正文的位置：before=图前文后；缺省 after=文前图后 */
+  pos?: 'before' | 'after'
 }
 
 export interface ChatMessage {
@@ -150,6 +152,11 @@ export function listMessages(conversationId: number) {
   return api.get<ChatMessage[]>(`/api/conversations/${conversationId}/messages`)
 }
 
+/** 删除会话（后端级联删除消息与摘要） */
+export function deleteConversation(conversationId: number) {
+  return api.delete<void>(`/api/conversations/${conversationId}`)
+}
+
 export function appendMessage(
   conversationId: number,
   role: 'me' | 'other',
@@ -157,6 +164,7 @@ export function appendMessage(
   source: 'manual' | 'candidate' | 'rewrite' | 'import' = 'manual',
   attachmentIds: number[] = [],
   speaker = '',
+  imagePos: 'before' | 'after' = 'after',
 ) {
   return api.post<ChatMessage>(`/api/conversations/${conversationId}/messages`, {
     role,
@@ -164,7 +172,34 @@ export function appendMessage(
     source,
     attachment_ids: attachmentIds,
     speaker,
+    image_pos: imagePos,
   })
+}
+
+/** 识别聊天记录的一条预览：role/speaker/label（截图里的落款） */
+export interface ExtractedRow {
+  role: 'me' | 'other'
+  content: string
+  speaker: string
+  label: string
+}
+
+/** 截图 → 多模态模型转写成聊天记录（预览，不落库；需默认 LLM 支持看图） */
+export function extractChatImages(conversationId: number, files: File[]) {
+  const form = new FormData()
+  for (const file of files) form.append('files', file, file.name || 'shot')
+  return postForm<{ count: number; skipped: number; messages: ExtractedRow[] }>(
+    `/api/conversations/${conversationId}/import/image`,
+    form,
+  )
+}
+
+/** 确认导入识别出的消息 */
+export function commitChatRows(conversationId: number, rows: ExtractedRow[]) {
+  return api.post<{ imported: number; skipped: number }>(
+    `/api/conversations/${conversationId}/import/rows`,
+    { rows },
+  )
 }
 
 export interface UploadedImage {

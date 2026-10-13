@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from ..clients.llm_client import chat_json
 from ..core.constants import JEV_STATE_BUDGET_CHARS
+from ..domain.schemas.conversation import speaker_label
 from ..repositories.conversations_repo import MessageRepository, SummaryRepository
 from ..repositories.models import Memory, SessionSummary
 
@@ -100,7 +101,7 @@ def ensure_summary(
         "messages": [
             {
                 "seq": row.seq,
-                "from": (row.speaker or row.role) if conversation.is_group else row.role,
+                "from": speaker_label(conversation, row.speaker, row.role),
                 "text": row.content,
             }
             for row in pending

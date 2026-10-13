@@ -13,6 +13,7 @@ from ..clients import jev_client
 from ..clients.translation import annotate
 from ..core.logging import dump_body, pick_level
 from ..domain.errors import DomainError, DomainErrorCode
+from ..domain.schemas.conversation import speaker_label
 from ..repositories.conversations_repo import MessageRepository
 from ..repositories.models import CallLog, Conversation
 from ..scenarios.packs import ROMANCE_PACK, JudgePack
@@ -271,7 +272,7 @@ class AnalyzeService:
 
         jev_messages = [
             {
-                "from": (row.speaker or row.role) if conversation.is_group else row.role,
+                "from": speaker_label(conversation, row.speaker, row.role),
                 "text": annotated[str(row.seq)],
             }
             for row in rows

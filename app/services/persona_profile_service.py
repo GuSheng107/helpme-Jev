@@ -15,8 +15,9 @@ from sqlalchemy.orm import Session
 
 from ..core.time import iso_utc
 from ..domain.errors import DomainError, DomainErrorCode
+from ..domain.schemas.conversation import parse_members
 from ..domain.schemas.persona import PersonaProfileCreate, PersonaProfileUpdate
-from ..repositories.models import PersonaProfile
+from ..repositories.models import Conversation, PersonaProfile, SessionSummary
 from ..scenarios.persona_questions import questions_for
 from .analyze_service import AnalyzeService
 from .model_log import record_model_call
@@ -237,9 +238,15 @@ class PersonaProfileService:
                 )
             old = row.nickname
             row.nickname = nickname
-            # 速写生成时带着旧昵称，改名后纯文本替换同步，不为改名再调一次 LLM
-            if old and old != nickname and row.summary and old in row.summary:
-                row.summary = row.summary.replace(old, nickname)
+            if old and old != nickname:
+                # 速写生成时带着旧昵称，改名后纯文本替换同步，不为改名再调一次 LLM；
+                # 会话侧（对象名 / 成员表 / 滚动摘要）一并联动，提示词里的
+                # 发言人名按成员表当前值渲染（speaker_label），新昵称即时生效
+                self._sync_display_names(
+                    db, owner_user_id=owner_user_id, key=row.key, old=old, nickname=nickname
+                )
+                if row.summary and old in row.summary:
+                    row.summary = row.summary.replace(old, nickname)
         if payload.gender is not None:
             row.gender = payload.gender
         if payload.avatar_base64 is not None:
@@ -252,6 +259,59 @@ class PersonaProfileService:
         row = self.get_or_404(db, owner_user_id=owner_user_id, profile_id=profile_id)
         db.delete(row)
         db.commit()
+
+    def _sync_display_names(
+        self, db: Session, *, owner_user_id: int, key: str, old: str, nickname: str
+    ) -> None:
+        """改名联动会话侧展示字段：单聊对象名、群聊成员表、滚动摘要文本。
+
+        key 冻结不动（会话与档案靠它绑定）；群聊的 counterpart_key 是群名，
+        成员档在 members JSON 里，按 key 命中改显示名。
+        """
+        conversations = {
+            row.id: row
+            for row in [
+                *db.scalars(
+                    select(Conversation).where(
+                        Conversation.owner_user_id == owner_user_id,
+                        Conversation.counterpart_key == key,
+                    )
+                ),
+                *db.scalars(
+                    select(Conversation).where(
+                        Conversation.owner_user_id == owner_user_id,
+                        Conversation.is_group.is_(True),
+                    )
+                ),
+            ]
+        }
+        for conversation in conversations.values():
+            involved = False
+            if conversation.is_group:
+                members = parse_members(conversation.members)
+                if any(member.key == key for member in members):
+                    involved = True
+                    renamed = False
+                    for member in members:
+                        if member.key == key and member.name != nickname:
+                            member.name = nickname
+                            renamed = True
+                    if renamed:
+                        conversation.members = json.dumps(
+                            [member.model_dump() for member in members], ensure_ascii=False
+                        )
+            elif conversation.counterpart_key == key and conversation.counterpart_name != nickname:
+                involved = True
+                conversation.counterpart_name = nickname
+            if not (involved and old):
+                continue
+            for row in db.scalars(
+                select(SessionSummary).where(
+                    SessionSummary.conversation_id == conversation.id
+                )
+            ):
+                if row.summary and old in row.summary:
+                    row.summary = row.summary.replace(old, nickname)
 
     # ------------------------------------------------------------ LLM
     def _summarize(

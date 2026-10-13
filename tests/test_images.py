@@ -229,3 +229,114 @@ def test_attachment_must_belong_to_conversation(client: TestClient, db: Session)
     )
     assert rejected.status_code == 422
     assert "不属于" in rejected.json()["error"]["message"]
+
+
+def test_message_images_carry_position(client: TestClient, db: Session) -> None:
+    """图片相对正文的位置随消息保存：before=图前文后，默认 after=文前图后。"""
+    headers = _user(client, db, "imgpos")
+    _configure(client, headers, vision=True)
+    conv_id = _conversation(client, db, "imgpos", headers)
+    material_id = _upload(client, headers, conv_id).json()["id"]
+
+    saved = client.post(
+        f"/api/conversations/{conv_id}/messages",
+        headers=headers,
+        json={
+            "role": "other",
+            "content": "看这个",
+            "attachment_ids": [material_id],
+            "image_pos": "before",
+        },
+    )
+    assert saved.status_code == 201, saved.text
+    assert saved.json()["attachments"][0]["pos"] == "before"
+
+    default = client.post(
+        f"/api/conversations/{conv_id}/messages",
+        headers=headers,
+        json={"role": "me", "content": "好", "attachment_ids": [material_id]},
+    )
+    assert default.json()["attachments"][0]["pos"] == "after"
+
+
+def test_extract_chat_image_previews_then_commits(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """识别聊天记录：截图交给多模态模型转写成消息预览，确认后按导入入库。"""
+    headers = _user(client, db, "imgocr")
+    _configure(client, headers, vision=True)
+    conv_id = _conversation(client, db, "imgocr", headers)
+
+    class _ExtractRouter:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def post(self, url, json=None, headers=None, timeout=None):  # noqa: A002
+            self.calls.append({"url": url, "json": json})
+            content = json["messages"][1]["content"]
+            assert isinstance(content, list)
+            assert any(part.get("type") == "image_url" for part in content)
+            return _Response(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json_dumps(
+                                    {
+                                        "messages": [
+                                            {"from": "我", "text": "在吗"},
+                                            {"from": "小林", "text": "没怎么"},
+                                        ],
+                                        "skipped_media": 1,
+                                    }
+                                )
+                            }
+                        }
+                    ]
+                }
+            )
+
+    router = _ExtractRouter()
+    monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: router)
+    preview = client.post(
+        f"/api/conversations/{conv_id}/import/image",
+        headers=headers,
+        files=[("files", ("shot.png", PNG_BYTES, "image/png"))],
+    )
+    assert preview.status_code == 200, preview.text
+    body = preview.json()
+    assert body["count"] == 2
+    assert body["skipped"] == 1
+    assert body["messages"][0] == {"role": "me", "content": "在吗", "speaker": "", "label": "我"}
+    assert body["messages"][1]["role"] == "other"
+
+    committed = client.post(
+        f"/api/conversations/{conv_id}/import/rows",
+        headers=headers,
+        json={"rows": body["messages"]},
+    )
+    assert committed.status_code == 200, committed.text
+    assert committed.json()["imported"] == 2
+    rows = client.get(f"/api/conversations/{conv_id}/messages", headers=headers).json()
+    assert [row["role"] for row in rows] == ["me", "other"]
+    assert all(row["source"] == "import" for row in rows)
+
+
+def test_extract_requires_vision(client: TestClient, db: Session) -> None:
+    """识别聊天记录与贴图同一门控：默认 LLM 不支持看图时拒绝。"""
+    headers = _user(client, db, "imgocrblind")
+    _configure(client, headers, vision=False)
+    conv_id = _conversation(client, db, "imgocrblind", headers)
+    refused = client.post(
+        f"/api/conversations/{conv_id}/import/image",
+        headers=headers,
+        files=[("files", ("shot.png", PNG_BYTES, "image/png"))],
+    )
+    assert refused.status_code == 422
+    assert "看图" in refused.json()["error"]["message"]

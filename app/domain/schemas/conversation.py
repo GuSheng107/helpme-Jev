@@ -65,6 +65,21 @@ def parse_members(raw: str) -> list[GroupMember]:
     return members
 
 
+def speaker_label(conversation, speaker: str, role: str) -> str:
+    """消息进提示词时的发言方标识。
+
+    群聊 ``speaker`` 存的是成员 key（冻结），显示名按成员表**当前值**取
+    ——人设改名会同步成员表，判断 / 起草 / 摘要里的名字即时跟随；
+    查不到（成员已移除）回落 key 本身，空 speaker 与单聊恒为 me / other。
+    """
+    if not getattr(conversation, "is_group", False) or not speaker:
+        return role
+    for member in parse_members(getattr(conversation, "members", "[]")):
+        if member.key == speaker:
+            return member.name
+    return speaker
+
+
 class ConversationCreate(StrictModel):
     title: str = Field(min_length=1, max_length=128)
     counterpart_name: str = Field(default="", max_length=64)
@@ -109,6 +124,9 @@ class MessageCreate(StrictModel):
     # 图片素材 id：后端解析成 attachments JSON（type=image），
     # 上限 9 张（用户 2026-09-23 定）
     attachment_ids: list[int] = Field(default_factory=list, max_length=9)
+    # 图片相对正文的位置：after=文前图后（默认），before=图前文后；
+    # 存进 attachments JSON 的 pos 字段，渲染与回显按它排序
+    image_pos: Literal["before", "after"] = "after"
     source: str = Field(default="manual", pattern="^(manual|candidate|rewrite|import)$")
     # 群聊里 role=other 时必填：发言成员 key；单人会话忽略
     speaker: str = Field(default="", max_length=64)
@@ -134,3 +152,9 @@ class MessageView(BaseModel):
     source: str
     speaker: str = ""
     created_at: str
+
+
+class ImportRowsRequest(StrictModel):
+    """识别聊天记录的确认导入：rows 与预览返回的结构一致。"""
+
+    rows: list[dict] = Field(default_factory=list, max_length=100)
