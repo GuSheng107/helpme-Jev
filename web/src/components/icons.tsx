@@ -222,6 +222,19 @@ export function IconUpload(props: IconProps) {
   )
 }
 
+/** 识别聊天记录：截图扫描成文字记录 */
+export function IconScan(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M4 8V6a2 2 0 0 1 2-2h2" />
+      <path d="M16 4h2a2 2 0 0 1 2 2v2" />
+      <path d="M20 16v2a2 2 0 0 1-2 2h-2" />
+      <path d="M8 20H6a2 2 0 0 1-2-2v-2" />
+      <path d="M7.5 12h9" />
+    </Svg>
+  )
+}
+
 export function IconSend(props: IconProps) {
   return (
     <Svg {...props}>

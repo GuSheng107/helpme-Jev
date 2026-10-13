@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, File, Query, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Query, Request, Response, UploadFile
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -25,6 +25,7 @@ from ..domain.schemas.conversation import (
     ConversationUpdate,
     ConversationView,
     GroupMember,
+    ImportRowsRequest,
     MessageCreate,
     MessageView,
     normalize_member_names,
@@ -32,12 +33,14 @@ from ..domain.schemas.conversation import (
 )
 from ..repositories.conversations_repo import ConversationRepository, MessageRepository
 from ..repositories.models import Conversation, Message, Scenario, User
+from ..services.import_service import ImportService
 from .deps import require_active_user
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
 _conversations = ConversationRepository()
 _messages = MessageRepository()
+_imports = ImportService()
 
 
 def _counterpart_key(name: str, fallback: str) -> str:
@@ -339,6 +342,55 @@ def delete_conversation(
     return Response(status_code=204)
 
 
+# ------------------------------------------------------------------ 识别聊天记录
+@router.post("/{conversation_id}/import/image")
+async def import_chat_image(
+    conversation_id: int,
+    request: Request,
+    files: list[UploadFile] = File(),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_active_user),
+) -> dict:
+    """截图 → 多模态模型转写成消息（预览）：只有这个入口把图片当
+    「要读出文字的聊天记录」，普通贴图仍按表情包/语境理解。"""
+    conversation = _require_conversation(
+        db, owner_user_id=user.id, conversation_id=conversation_id
+    )
+    blobs = [
+        (await file.read(), (file.content_type or "").split(";")[0].strip()) for file in files
+    ]
+    return _imports.extract_chat_images(
+        db,
+        owner_user_id=user.id,
+        conversation=conversation,
+        blobs=blobs,
+        trace_id=getattr(request.state, "trace_id", ""),
+    )
+
+
+@router.post("/{conversation_id}/import/rows")
+def import_rows(
+    conversation_id: int,
+    payload: ImportRowsRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_active_user),
+) -> dict:
+    """确认导入识别出的消息（与手写消息同一套校验）。"""
+    conversation = _require_conversation(
+        db, owner_user_id=user.id, conversation_id=conversation_id
+    )
+    _require_bound_profiles(
+        db,
+        owner_user_id=user.id,
+        keys=[member.key for member in parse_members(conversation.members)]
+        if conversation.is_group
+        else [conversation.counterpart_key],
+    )
+    return _imports.commit_rows(
+        db, owner_user_id=user.id, conversation=conversation, rows=payload.rows
+    )
+
+
 # ------------------------------------------------------------------ 消息
 @router.get("/{conversation_id}/messages", response_model=list[MessageView])
 def list_messages(
@@ -444,7 +496,11 @@ def append_message(
 def _resolve_attachments(
     db: Session, *, payload: MessageCreate, conversation: Conversation, user: User
 ) -> list[dict]:
-    """attachment_ids（图片素材）→ attachments JSON；校验归属与总数上限。"""
+    """attachment_ids（图片素材）→ attachments JSON；校验归属与总数上限。
+
+    图片带 pos（before/after）：渲染时决定图在正文前还是正文后，
+    与用户贴图时的真实顺序一致。
+    """
     from ..repositories.models import Material
 
     attachments = [dict(item) for item in payload.attachments if isinstance(item, dict)]
@@ -467,7 +523,12 @@ def _resolve_attachments(
                     status_code=422,
                 )
             attachments.append(
-                {"type": "image", "id": material.id, "mime": material.mime or ""}
+                {
+                    "type": "image",
+                    "id": material.id,
+                    "mime": material.mime or "",
+                    "pos": payload.image_pos,
+                }
             )
     if len(attachments) > 9:
         raise DomainError(

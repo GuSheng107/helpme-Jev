@@ -987,3 +987,94 @@ def test_profile_rename_replaces_nickname_in_summary(
     assert body["nickname"] == "小真"
     assert body["summary"] == "小真做事有计划，容易焦虑。"
     assert router.calls == []
+
+
+def test_profile_rename_syncs_conversation_display_names(
+    client: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """改名联动会话侧：单聊对象名 / 群聊成员表跟随新昵称，滚动摘要里的
+    旧称呼一并替换；消息 speaker 存的 key 冻结不动。"""
+    headers = _user(client, db, "renamesync")
+    _ready(client, db, "renamesync", headers)
+
+    with _SummaryRouter() as router:
+        monkeypatch.setattr(httpx, "Client", lambda *args, **kwargs: router)
+        first = client.post(
+            "/api/personas/profiles",
+            headers=headers,
+            json={"nickname": "小测", "context": "romance", "answers": _PROFILE_ANSWERS},
+        )
+        second = client.post(
+            "/api/personas/profiles",
+            headers=headers,
+            json={"nickname": "小伴", "context": "romance", "answers": _PROFILE_ANSWERS},
+        )
+    assert first.status_code == 201 and second.status_code == 201
+    profile_id, mate_id = first.json()["id"], second.json()["id"]
+
+    solo = client.post(
+        "/api/conversations",
+        headers=headers,
+        json={"title": "和小测的聊天", "profile_id": profile_id},
+    )
+    group = client.post(
+        "/api/conversations",
+        headers=headers,
+        json={"title": "小测小伴的群聊", "member_profile_ids": [profile_id, mate_id]},
+    )
+    assert solo.status_code == 201 and group.status_code == 201, (solo.text, group.text)
+    solo_id, group_id = solo.json()["id"], group.json()["id"]
+
+    appended = client.post(
+        f"/api/conversations/{group_id}/messages",
+        headers=headers,
+        json={"role": "other", "content": "在吗", "speaker": "小测"},
+    )
+    assert appended.status_code == 201, appended.text
+
+    from sqlalchemy import select
+
+    from app.repositories.models import SessionSummary
+
+    db.add(SessionSummary(conversation_id=solo_id, upto_seq=1, summary="小测之前提过要加班。"))
+    db.commit()
+
+    renamed = client.patch(
+        f"/api/personas/profiles/{profile_id}",
+        headers=headers,
+        json={"nickname": "小真"},
+    )
+    assert renamed.status_code == 200, renamed.text
+
+    solo_view = client.get(f"/api/conversations/{solo_id}", headers=headers).json()
+    assert solo_view["counterpart_name"] == "小真"
+    group_view = client.get(f"/api/conversations/{group_id}", headers=headers).json()
+    member_names = {member["name"] for member in group_view["members"]}
+    assert "小真" in member_names and "小测" not in member_names
+    # key 冻结：消息 speaker 仍是旧 key，提示词侧按成员表当前名渲染
+    messages = client.get(
+        f"/api/conversations/{group_id}/messages", headers=headers
+    ).json()
+    assert messages[0]["speaker"] == "小测"
+    summary_rows = list(
+        db.scalars(select(SessionSummary).where(SessionSummary.conversation_id == solo_id))
+    )
+    assert summary_rows[0].summary == "小真之前提过要加班。"
+
+
+def test_speaker_label_maps_member_key_to_current_name() -> None:
+    """提示词发言人标识：群聊按成员表当前名，查不到回落 key，单聊恒为角色。"""
+    from app.domain.schemas.conversation import speaker_label
+
+    class _Group:
+        is_group = True
+        members = _json.dumps([{"key": "小林", "name": "大林"}], ensure_ascii=False)
+
+    class _Solo:
+        is_group = False
+        members = "[]"
+
+    assert speaker_label(_Group(), "小林", "other") == "大林"
+    assert speaker_label(_Group(), "路人甲", "other") == "路人甲"
+    assert speaker_label(_Group(), "", "other") == "other"
+    assert speaker_label(_Solo(), "小林", "other") == "other"

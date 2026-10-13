@@ -16,7 +16,6 @@ import Button from '../components/Button'
 import { confirmAction } from '../components/confirm'
 import { DataCard, EmptyState, Notice, PageBody, PageHeader, PageShell, StatusTag } from '../components/layout'
 import Modal from '../components/Modal'
-import Segmented from '../components/Segmented'
 import {
   contextLabelOf,
   DEFAULT_CONTEXT,
@@ -52,11 +51,14 @@ export default function PersonaPage() {
   const [busy, setBusy] = useState(false)
   // 人设库
   const [profiles, setProfiles] = useState<PersonaProfileView[]>([])
+  // 建档向导：other = 给聊天对象建档；self = 自我画像
+  const [wizardMode, setWizardMode] = useState<'other' | 'self'>('other')
   const [wizardOpen, setWizardOpen] = useState(false)
-  const [editingId, setEditingId] = useState<number | null>(null)
-  const [eNickname, setENickname] = useState('')
 
   const current = conversations.find((item) => item.id === currentId) ?? null
+  // 自我画像全局一份：单独区块承接；人设库只列聊天对象
+  const selfProfile = profiles.find((item) => item.subject === 'me') ?? null
+  const otherProfiles = profiles.filter((item) => item.subject !== 'me')
 
   useEffect(() => {
     listConversations()
@@ -70,18 +72,19 @@ export default function PersonaPage() {
       .catch(() => undefined)
   }, [])
 
-  async function renameProfile(profile: PersonaProfileView) {
-    const nickname = eNickname.trim()
-    if (!nickname) return
+  async function renameProfile(profile: PersonaProfileView, nickname: string): Promise<boolean> {
+    const trimmed = nickname.trim()
+    if (!trimmed) return false
     setBusy(true)
     setError(null)
     try {
-      const updated = await updateProfile(profile.id, { nickname })
+      const updated = await updateProfile(profile.id, { nickname: trimmed })
       setProfiles((prev) => prev.map((item) => (item.id === updated.id ? updated : item)))
-      setEditingId(null)
       setNotice('昵称已更新')
+      return true
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '更新未完成')
+      return false
     } finally {
       setBusy(false)
     }
@@ -162,7 +165,14 @@ export default function PersonaPage() {
           description="人设按场景档位生成，同一个人在不同档各存一份，互不覆盖。"
           actions={
             tab === 'library' ? (
-              <Button size="sm" variant="primary" onClick={() => setWizardOpen(true)}>
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={() => {
+                  setWizardMode('other')
+                  setWizardOpen(true)
+                }}
+              >
                 新建人设
               </Button>
             ) : undefined
@@ -199,114 +209,80 @@ export default function PersonaPage() {
         )}
 
         {tab === 'library' && (
-          <section className="space-y-4">
-            <p className="text-[13px] leading-5 text-ink-muted">
-              选好档位、按维度作答，保存后在新建聊天时可直接选用。
-            </p>
-            {profiles.length === 0 ? (
-              <DataCard>
-                <EmptyState
-                  title="还没有人设"
-                  description="先给聊天对象建一份，判断时会带上 TA 的性格特点。"
-                  action={
-                    <Button size="sm" variant="primary" onClick={() => setWizardOpen(true)}>
-                      新建人设
-                    </Button>
-                  }
-                />
-              </DataCard>
-            ) : (
-              <div className="grid gap-3.5 md:grid-cols-2">
-                {profiles.map((profile) => (
-                  <article
-                    key={profile.id}
-                    className="group rounded-[14px] border border-border bg-surface p-4 shadow-card transition-[box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:shadow-md"
-                  >
-                    <div className="flex items-start gap-3">
-                      <Avatar src={profile.avatar_base64} name={profile.nickname} size={44} />
-                      <div className="min-w-0 flex-1">
-                        {editingId === profile.id ? (
-                          <div className="flex items-center gap-2">
-                            <input
-                              className="h-8 w-36 rounded-[8px] border border-border px-2.5 text-[13px] focus:border-primary focus:outline-none"
-                              value={eNickname}
-                              onChange={(event) => setENickname(event.target.value)}
-                              autoFocus
-                            />
-                            <Button size="sm" variant="primary" loading={busy} onClick={() => void renameProfile(profile)}>
-                              保存
-                            </Button>
-                            <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>
-                              取消
-                            </Button>
-                          </div>
-                        ) : (
-                          <div className="flex flex-wrap items-center gap-2">
-                            <h3 className="truncate text-[14px] font-semibold text-ink">{profile.nickname}</h3>
-                            {profile.subject === 'me' ? (
-                              <StatusTag tone="primary">我</StatusTag>
-                            ) : (
-                              <StatusTag tone={profile.context === 'workplace' ? 'primary' : 'info'}>
-                                {contextLabelOf(profile.context, profile.context_label)}
-                              </StatusTag>
-                            )}
-                            {profile.subject === 'me' && genderLabelOf(profile.gender) && (
-                              <StatusTag tone="info">{genderLabelOf(profile.gender)}</StatusTag>
-                            )}
-                          </div>
-                        )}
-                        <p className="mt-1 text-[12px] tabular-nums text-ink-faint">
-                          置信度 {profile.confidence}% · 版本 {profile.version}
-                        </p>
-                      </div>
-                    </div>
-
-                    {profile.summary && (
-                      <p className="mt-3 rounded-[10px] bg-surface-muted px-3 py-2 text-[13px] leading-5 text-ink-secondary">
-                        {profile.summary}
-                      </p>
-                    )}
-
-                    {profile.traits.length > 0 && (
-                      <div className="mt-3 flex flex-wrap gap-1.5">
-                        {profile.traits.map((trait) => (
-                          <span
-                            key={trait.key}
-                            className="inline-flex items-center gap-1 rounded-[6px] border border-border-subtle px-2 py-0.5 text-[12px] text-ink-secondary"
-                          >
-                            <span className="text-ink-faint">{trait.title}</span>
-                            {trait.text}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-
-                    {editingId !== profile.id && (
-                      <div className="mt-4 flex justify-end gap-1.5 opacity-70 transition-opacity duration-150 group-hover:opacity-100">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => {
-                            setEditingId(profile.id)
-                            setENickname(profile.nickname)
-                          }}
-                        >
-                          改名
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="text-danger hover:bg-danger-soft"
-                          onClick={() => void removeProfile(profile)}
-                        >
-                          删除
-                        </Button>
-                      </div>
-                    )}
-                  </article>
-                ))}
+          <section className="space-y-5">
+            <div>
+              <div className="mb-2.5 flex items-baseline justify-between gap-3">
+                <h2 className="text-[14px] font-semibold tracking-tight text-ink">自我画像</h2>
+                <p className="text-[12px] text-ink-muted">全场景通用一份，候选回复按你的口吻起草</p>
               </div>
-            )}
+              {selfProfile ? (
+                <ProfileCard
+                  profile={selfProfile}
+                  self
+                  busy={busy}
+                  onRename={(profile, nickname) => renameProfile(profile, nickname)}
+                  onDelete={(profile) => void removeProfile(profile)}
+                />
+              ) : (
+                <DataCard>
+                  <EmptyState
+                    title="还没有自我画像"
+                    description="按自己的沟通风格答几道题，帮我回复时会以你的口吻起草。"
+                    action={
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        onClick={() => {
+                          setWizardMode('self')
+                          setWizardOpen(true)
+                        }}
+                      >
+                        建立自我画像
+                      </Button>
+                    }
+                  />
+                </DataCard>
+              )}
+            </div>
+
+            <div>
+              <div className="mb-2.5 flex items-baseline justify-between gap-3">
+                <h2 className="text-[14px] font-semibold tracking-tight text-ink">聊天对象</h2>
+                <p className="text-[12px] text-ink-muted">选好档位、按维度作答，新建聊天时直接选用</p>
+              </div>
+              {otherProfiles.length === 0 ? (
+                <DataCard>
+                  <EmptyState
+                    title="还没有人设"
+                    description="先给聊天对象建一份，判断时会带上 TA 的性格特点。"
+                    action={
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        onClick={() => {
+                          setWizardMode('other')
+                          setWizardOpen(true)
+                        }}
+                      >
+                        新建人设
+                      </Button>
+                    }
+                  />
+                </DataCard>
+              ) : (
+                <div className="grid gap-3.5 md:grid-cols-2">
+                  {otherProfiles.map((profile) => (
+                    <ProfileCard
+                      key={profile.id}
+                      profile={profile}
+                      busy={busy}
+                      onRename={(item, nickname) => renameProfile(item, nickname)}
+                      onDelete={(item) => void removeProfile(item)}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
           </section>
         )}
 
@@ -401,11 +377,14 @@ export default function PersonaPage() {
 
       {wizardOpen && (
         <ProfileWizard
+          mode={wizardMode}
           onClose={() => setWizardOpen(false)}
           onSaved={async () => {
             setWizardOpen(false)
             setProfiles(await listProfiles())
-            setNotice('人设已保存，聊天里可以直接选用')
+            setNotice(
+              wizardMode === 'self' ? '自我画像已保存，候选回复按你的口吻起草' : '人设已保存，聊天里可以直接选用',
+            )
           }}
         />
       )}
@@ -413,10 +392,134 @@ export default function PersonaPage() {
   )
 }
 
+/* ------------------------------------------------------------------ 档案卡 */
+
+function ProfileCard({
+  profile,
+  self = false,
+  busy,
+  onRename,
+  onDelete,
+}: {
+  profile: PersonaProfileView
+  /** 自我画像卡：不带场景档位标签，性别标签跟随昵称 */
+  self?: boolean
+  busy: boolean
+  onRename: (profile: PersonaProfileView, nickname: string) => Promise<boolean>
+  onDelete: (profile: PersonaProfileView) => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [nickname, setNickname] = useState('')
+
+  async function save() {
+    if (await onRename(profile, nickname)) setEditing(false)
+  }
+
+  return (
+    <article className="group rounded-[14px] border border-border bg-surface p-4 shadow-card transition-[box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:shadow-md">
+      <div className="flex items-start gap-3">
+        <Avatar src={profile.avatar_base64} name={profile.nickname} size={44} />
+        <div className="min-w-0 flex-1">
+          {editing ? (
+            <div className="flex items-center gap-2">
+              <input
+                className="h-8 w-36 rounded-[8px] border border-border px-2.5 text-[13px] focus:border-primary focus:outline-none"
+                value={nickname}
+                onChange={(event) => setNickname(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+                    event.preventDefault()
+                    void save()
+                  }
+                }}
+                autoFocus
+              />
+              <Button size="sm" variant="primary" loading={busy} onClick={() => void save()}>
+                保存
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
+                取消
+              </Button>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="truncate text-[14px] font-semibold text-ink">{profile.nickname}</h3>
+              {self ? (
+                <StatusTag tone="love">自我画像</StatusTag>
+              ) : (
+                <StatusTag tone={profile.context === 'romance' ? 'love' : 'primary'}>
+                  {contextLabelOf(profile.context, profile.context_label)}
+                </StatusTag>
+              )}
+              {genderLabelOf(profile.gender) && (
+                <StatusTag tone="info">{genderLabelOf(profile.gender)}</StatusTag>
+              )}
+            </div>
+          )}
+          <p className="mt-1 text-[12px] tabular-nums text-ink-faint">
+            置信度 {profile.confidence}% · 版本 {profile.version}
+          </p>
+        </div>
+      </div>
+
+      {profile.summary && (
+        <p className="mt-3 rounded-[10px] bg-surface-muted px-3 py-2 text-[13px] leading-5 text-ink-secondary">
+          {profile.summary}
+        </p>
+      )}
+
+      {profile.traits.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {profile.traits.map((trait) => (
+            <span
+              key={trait.key}
+              className="inline-flex items-center gap-1 rounded-[6px] border border-border-subtle px-2 py-0.5 text-[12px] text-ink-secondary"
+            >
+              <span className="text-ink-faint">{trait.title}</span>
+              {trait.text}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {!editing && (
+        <div className="mt-4 flex justify-end gap-1.5 opacity-70 transition-opacity duration-150 group-hover:opacity-100">
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setNickname(profile.nickname)
+              setEditing(true)
+            }}
+          >
+            改名
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="text-danger hover:bg-danger-soft"
+            onClick={() => onDelete(profile)}
+          >
+            删除
+          </Button>
+        </div>
+      )}
+    </article>
+  )
+}
+
 /* ------------------------------------------------------------------ 建档向导 */
 
-function ProfileWizard({ onClose, onSaved }: { onClose: () => void; onSaved: () => Promise<void> }) {
-  const [mode, setMode] = useState<'other' | 'self'>('other')
+function ProfileWizard({
+  mode,
+  onClose,
+  onSaved,
+}: {
+  /** other = 聊天对象人设；self = 自我画像（全场景一份） */
+  mode: 'other' | 'self'
+  onClose: () => void
+  onSaved: () => Promise<void>
+}) {
   const [nickname, setNickname] = useState('')
   const [avatar, setAvatar] = useState('')
   const [gender, setGender] = useState('')
@@ -525,7 +628,7 @@ function ProfileWizard({ onClose, onSaved }: { onClose: () => void; onSaved: () 
       <div className="flex shrink-0 items-start justify-between gap-3 border-b border-border-subtle px-5 py-4">
         <div>
           <h2 id="profile-wizard-title" className="text-[16px] font-semibold tracking-tight text-ink">
-            新建人设
+            {mode === 'self' ? '建立自我画像' : '新建人设'}
           </h2>
           <p className="mt-1 text-[13px] text-ink-muted">
             {mode === 'self'
@@ -540,20 +643,6 @@ function ProfileWizard({ onClose, onSaved }: { onClose: () => void; onSaved: () 
 
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-5">
         {error && <Notice tone="danger">{error}</Notice>}
-
-        <Segmented
-          value={mode}
-          ariaLabel="给谁建档"
-          options={[
-            { value: 'other', label: '对方' },
-            { value: 'self', label: '我自己' },
-          ]}
-          onChange={(next) => {
-            setMode(next as 'other' | 'self')
-            setAnswers({})
-            setError('')
-          }}
-        />
 
         <div className="flex items-center gap-4">
           {avatar ? (

@@ -3,8 +3,11 @@ import { ApiError } from '../api/client'
 import {
   analyze,
   appendMessage,
+  commitChatRows,
   defaultLlmSupportsVision,
+  deleteConversation,
   explainDecision,
+  extractChatImages,
   fetchMaterialFile,
   polish,
   createConversation,
@@ -16,6 +19,8 @@ import {
   uploadImage,
   type ChatMessage,
   type Conversation,
+  type ExtractedRow,
+  type ImageAttachment,
   type Reflection,
 } from '../api/chat'
 import Button from '../components/Button'
@@ -27,6 +32,7 @@ import ReplyFloat, { type ReplyCard } from '../components/ReplyFloat'
 import Segmented from '../components/Segmented'
 import { listProfiles, type PersonaProfileView } from '../api/personas'
 import QuickDecide from '../components/QuickDecide'
+import { confirmAction } from '../components/confirm'
 import {
   IconChat,
   IconCheck,
@@ -35,7 +41,9 @@ import {
   IconDecide,
   IconPlus,
   IconRefresh,
+  IconScan,
   IconSparkle,
+  IconTrash,
   IconUpload,
   IconWarning,
 } from '../components/icons'
@@ -93,9 +101,15 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [listOpen, setListOpen] = useState(false)
+  /** 正在删除的会话 id：逐项 loading，防止连点 */
+  const [deletingId, setDeletingId] = useState<number | null>(null)
   const [images, setImages] = useState<PendingImage[]>([])
+  /** 待发图片相对正文的顺序：false=文字在前（默认），true=图片在前 */
+  const [imageFirst, setImageFirst] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [visionReady, setVisionReady] = useState<boolean | null>(null)
+  /** 识别聊天记录弹窗（截图 → 转写成聊天记录） */
+  const [importOpen, setImportOpen] = useState(false)
   const [lightbox, setLightbox] = useState<string | null>(null)
   /** 群聊时手动「帮我回复」选的对象成员 key（自动触发走消息里的发言成员） */
   const [replyTarget, setReplyTarget] = useState('')
@@ -273,10 +287,50 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
     }
   }
 
+  /** 删除会话：二次确认后调 DELETE（后端级联删消息），删的是当前会话时清空工作区 */
+  async function removeConversation(item: Conversation) {
+    const label = item.is_group
+      ? item.title
+      : displayName(item.counterpart_key, item.counterpart_name || item.title)
+    const confirmed = await confirmAction({
+      title: '删除聊天',
+      message: `删除「${label}」后，聊天记录与判断报告一并删除，无法恢复。`,
+      confirmText: '删除',
+      tone: 'danger',
+    })
+    if (!confirmed) return
+    setDeletingId(item.id)
+    setError(null)
+    try {
+      await deleteConversation(item.id)
+      setConversations((prev) => prev.filter((row) => row.id !== item.id))
+      setReplyByConv((prev) => {
+        const next = { ...prev }
+        delete next[item.id]
+        return next
+      })
+      if (currentId === item.id) {
+        setCurrentId(null)
+        setReflection(null)
+        setPickedText(null)
+      }
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '删除未完成')
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   async function addImages(files: File[]) {
     if (currentId === null) return
     const images_ = files.filter((file) => file.type.startsWith('image/'))
-    if (images_.length === 0) return
+    const unsupported = files.length - images_.length
+    // 暂只支持图片：其他附件（视频 / 文件等）明确告知，不静默丢弃
+    const warn = unsupported > 0 ? `暂只支持图片，已忽略 ${unsupported} 个其他附件` : ''
+    if (images_.length === 0) {
+      if (warn) setError(warn)
+      return
+    }
     if (visionReady === false) {
       setError('当前默认语言模型不支持看图。可在设置里换用支持视觉的模型后再贴图。')
       return
@@ -295,6 +349,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
         const saved = await uploadImage(currentId, file)
         setImages((prev) => [...prev, { materialId: saved.id, url: URL.createObjectURL(file) }])
       }
+      if (warn) setError(warn)
     } catch (err) {
       setError(err instanceof ApiError ? err.message : '图片上传未完成')
     } finally {
@@ -348,10 +403,12 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
         source,
         images.map((item) => item.materialId),
         wantsSpeaker ? speakerKey : '',
+        imageFirst ? 'before' : 'after',
       )
       setPickedText(null)
       setMessages((prev) => [...prev, message])
       setDraft('')
+      setImageFirst(false)
       setImages((prev) => {
         prev.forEach((item) => URL.revokeObjectURL(item.url))
         return []
@@ -567,48 +624,66 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
                   ? item.title
                   : displayName(item.counterpart_key, item.counterpart_name || item.title)
                 return (
-                  <li key={item.id}>
-                    <button
-                      type="button"
-                      aria-current={active ? 'true' : undefined}
-                      className={`flex w-full items-center gap-2.5 rounded-[9px] px-2.5 py-2 text-left transition-colors duration-150 ${
+                  <li key={item.id} className="group/item">
+                    <div
+                      className={`flex w-full items-center gap-1 rounded-[9px] pr-1 transition-colors duration-150 ${
                         active ? 'bg-primary-soft' : 'hover:bg-surface-muted'
                       }`}
-                      onClick={() => {
-                        setCurrentId(item.id)
-                        setReflection(null)
-                        setPickedText(null)
-                        setListOpen(false)
-                      }}
                     >
-                      <span
-                        className={`grid h-8 w-8 shrink-0 place-items-center text-[13px] ${
-                          item.is_group ? 'rounded-[9px]' : 'rounded-full'
-                        } ${active ? 'bg-primary/10 text-primary' : 'bg-surface-muted text-ink-muted'}`}
+                      <button
+                        type="button"
+                        aria-current={active ? 'true' : undefined}
+                        className="flex min-w-0 flex-1 items-center gap-2.5 rounded-[9px] px-2.5 py-2 text-left"
+                        onClick={() => {
+                          setCurrentId(item.id)
+                          setReflection(null)
+                          setPickedText(null)
+                          setListOpen(false)
+                        }}
                       >
-                        {item.is_group ? '群' : label.slice(0, 1)}
-                      </span>
-                      <span className="min-w-0 flex-1">
                         <span
-                          className={`block truncate text-[14px] ${
-                            active ? 'font-medium text-primary' : 'text-ink'
-                          }`}
+                          className={`grid h-8 w-8 shrink-0 place-items-center text-[13px] ${
+                            item.is_group ? 'rounded-[9px]' : 'rounded-full'
+                          } ${active ? 'bg-primary/10 text-primary' : 'bg-surface-muted text-ink-muted'}`}
                         >
-                          {label}
+                          {item.is_group ? '群' : label.slice(0, 1)}
                         </span>
-                        <span className="mt-0.5 flex items-center gap-1.5 text-[12px] text-ink-muted">
-                          {item.relationship && <span className="truncate">{item.relationship}</span>}
-                          {item.is_group && <span className="shrink-0">群聊</span>}
-                          {item.scenario_kind === 'workplace' && <span className="shrink-0">职场</span>}
-                          {item.scenario_kind === 'custom' && <span className="shrink-0">自定义</span>}
+                        <span className="min-w-0 flex-1">
+                          <span
+                            className={`block truncate text-[14px] ${
+                              active ? 'font-medium text-primary' : 'text-ink'
+                            }`}
+                          >
+                            {label}
+                          </span>
+                          <span className="mt-0.5 flex items-center gap-1.5 text-[12px] text-ink-muted">
+                            {item.relationship && <span className="truncate">{item.relationship}</span>}
+                            {item.is_group && <span className="shrink-0">群聊</span>}
+                            {item.scenario_kind === 'workplace' && <span className="shrink-0">职场</span>}
+                            {item.scenario_kind === 'custom' && <span className="shrink-0">自定义</span>}
+                          </span>
                         </span>
-                      </span>
-                      {item.message_count > 0 && (
-                        <span className="shrink-0 text-[11px] tabular-nums text-ink-faint">
-                          {item.message_count}
-                        </span>
-                      )}
-                    </button>
+                        {item.message_count > 0 && (
+                          <span className="shrink-0 text-[11px] tabular-nums text-ink-faint">
+                            {item.message_count}
+                          </span>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`删除${label}的聊天`}
+                        title="删除聊天"
+                        disabled={deletingId === item.id}
+                        onClick={() => void removeConversation(item)}
+                        className={`grid h-7 w-7 shrink-0 place-items-center rounded-[7px] transition-all duration-150 hover:bg-danger-soft hover:text-danger focus-visible:opacity-100 ${
+                          deletingId === item.id
+                            ? 'animate-pulse text-ink-faint'
+                            : 'text-ink-faint opacity-60 lg:opacity-0 lg:group-hover/item:opacity-100'
+                        }`}
+                      >
+                        <IconTrash className="h-4 w-4" />
+                      </button>
+                    </div>
                   </li>
                 )
               })}
@@ -744,9 +819,12 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
                 )}
                 {messages.map((message) => {
                   const badge = message.role === 'me' ? SOURCE_BADGES[message.source] : undefined
+                  // 图与文的顺序跟着附件走：pos=before 渲染在正文上方，其余在下方
                   const imageAttachments = (message.attachments ?? []).filter(
                     (item) => item.type === 'image',
                   )
+                  const imagesBefore = imageAttachments.filter((item) => item.pos === 'before')
+                  const imagesAfter = imageAttachments.filter((item) => item.pos !== 'before')
                   const speakerName =
                     current?.is_group && message.role === 'other' && message.speaker
                       ? displayName(
@@ -765,6 +843,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
                         {speakerName && (
                           <span className="mb-1 text-[11px] text-ink-muted">{speakerName}</span>
                         )}
+                        <AttachmentStrip items={imagesBefore} onOpen={(url) => setLightbox(url)} />
                         {message.content && (
                           <p
                             className={`max-w-[min(82%,560px)] whitespace-pre-wrap break-words rounded-[14px] px-3.5 py-2.5 text-[14px] leading-[22px] ${
@@ -776,17 +855,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
                             {message.content}
                           </p>
                         )}
-                        {imageAttachments.length > 0 && (
-                          <div className="mt-1 flex flex-wrap gap-1.5">
-                            {imageAttachments.map((attachment) => (
-                              <AttachmentThumb
-                                key={attachment.id}
-                                materialId={attachment.id}
-                                onOpen={(url) => setLightbox(url)}
-                              />
-                            ))}
-                          </div>
-                        )}
+                        <AttachmentStrip items={imagesAfter} onOpen={(url) => setLightbox(url)} />
                         {badge && (
                           <span className="mt-0.5 text-[11px] text-ink-muted">{badge}</span>
                         )}
@@ -881,7 +950,7 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
                   </div>
                 )}
                 {images.length > 0 && (
-                  <div className="mb-2 flex flex-wrap gap-2">
+                  <div className="mb-2 flex flex-wrap items-center gap-2">
                     {images.map((item) => (
                       <div key={item.materialId} className="relative">
                         <button
@@ -905,6 +974,16 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
                     <span className="self-end text-[11px] text-ink-muted">
                       {images.length}/{MAX_IMAGES}
                     </span>
+                    <Segmented
+                      size="sm"
+                      value={imageFirst ? 'before' : 'after'}
+                      ariaLabel="图片与文字的顺序"
+                      options={[
+                        { value: 'after', label: '文字在前' },
+                        { value: 'before', label: '图片在前' },
+                      ]}
+                      onChange={(next) => setImageFirst(next === 'before')}
+                    />
                   </div>
                 )}
                 {chatLocked && (
@@ -976,6 +1055,16 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
                       <IconUpload className="h-4 w-4" />
                       图片
                     </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={visionReady === false}
+                      disabledReason="当前默认模型不支持看图"
+                      onClick={() => setImportOpen(true)}
+                    >
+                      <IconScan className="h-4 w-4" />
+                      识别聊天记录
+                    </Button>
                     {role === 'me' && (
                       <Button
                         size="sm"
@@ -1036,6 +1125,17 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
           messages={messages}
           autoTranslate={autoTranslate}
           onClose={() => setDecideOpen(false)}
+        />
+      )}
+      {importOpen && current !== null && (
+        <ChatImportModal
+          conversation={current}
+          onClose={() => setImportOpen(false)}
+          onDone={async () => {
+            setImportOpen(false)
+            setMessages(await listMessages(current.id))
+            void reloadList()
+          }}
         />
       )}
       {lightbox !== null && <Lightbox url={lightbox} onClose={() => setLightbox(null)} />}
@@ -1120,6 +1220,264 @@ export default function ChatPage({ currentId, setCurrentId, onOpenSettings, auto
         </Modal>
       )}
     </div>
+  )
+}
+
+/** 消息里的一排图片缩略图（按 pos 拆分后的 before / after 两组）。 */
+function AttachmentStrip({
+  items,
+  onOpen,
+}: {
+  items: ImageAttachment[]
+  onOpen: (url: string) => void
+}) {
+  if (items.length === 0) return null
+  return (
+    <div className="mt-1 flex flex-wrap gap-1.5">
+      {items.map((attachment) => (
+        <AttachmentThumb key={attachment.id} materialId={attachment.id} onOpen={onOpen} />
+      ))}
+    </div>
+  )
+}
+
+/** 识别聊天记录弹窗：粘贴/选择聊天截图 → 模型转写预览 → 确认导入。 */
+function ChatImportModal({
+  conversation,
+  onClose,
+  onDone,
+}: {
+  conversation: Conversation
+  onClose: () => void
+  onDone: () => void | Promise<void>
+}) {
+  const MAX_SHOTS = 4
+  const [shots, setShots] = useState<{ file: File; url: string }[]>([])
+  const [rows, setRows] = useState<ExtractedRow[] | null>(null)
+  const [skipped, setSkipped] = useState(0)
+  const [extracting, setExtracting] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [error, setError] = useState('')
+  const shotInput = useRef<HTMLInputElement>(null)
+  // 卸载时释放预览 objectURL；用 ref 拿最新列表，避免清理函数闭包过期
+  const shotsRef = useRef(shots)
+  shotsRef.current = shots
+
+  useEffect(
+    () => () => {
+      shotsRef.current.forEach((item) => URL.revokeObjectURL(item.url))
+    },
+    [],
+  )
+
+  function addFiles(list: File[]) {
+    const images = list.filter((file) => file.type.startsWith('image/'))
+    const unsupported = list.length - images.length
+    if (unsupported > 0) setError(`暂只支持图片，已忽略 ${unsupported} 个其他附件`)
+    else if (error) setError('')
+    if (images.length === 0) return
+    setRows(null)
+    setShots((prev) => {
+      const accepted = images.slice(0, Math.max(0, MAX_SHOTS - prev.length))
+      if (accepted.length < images.length) setError(`一次最多 ${MAX_SHOTS} 张截图，多余的已忽略`)
+      return [...prev, ...accepted.map((file) => ({ file, url: URL.createObjectURL(file) }))]
+    })
+  }
+
+  function removeShot(url: string) {
+    setShots((prev) => prev.filter((item) => item.url !== url))
+    URL.revokeObjectURL(url)
+    setRows(null)
+  }
+
+  async function extract() {
+    if (shots.length === 0) return
+    setExtracting(true)
+    setError('')
+    try {
+      const result = await extractChatImages(conversation.id, shots.map((item) => item.file))
+      setRows(result.messages)
+      setSkipped(result.skipped)
+      if (result.messages.length === 0) setError('没有认出任何一条对话，换张更清晰的截图试试')
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '识别未完成')
+    } finally {
+      setExtracting(false)
+    }
+  }
+
+  async function commit() {
+    if (!rows || rows.length === 0) return
+    setImporting(true)
+    setError('')
+    try {
+      await commitChatRows(conversation.id, rows)
+      await onDone()
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : '导入未完成')
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  function senderOf(row: ExtractedRow): string {
+    if (row.role === 'me') return '我'
+    if (!conversation.is_group) return '对方'
+    return (
+      conversation.members.find((item) => item.key === row.speaker)?.name || row.label || '成员'
+    )
+  }
+
+  return (
+    <Modal
+      size="md"
+      scroll="visible"
+      labelledBy="import-image-title"
+      busy={extracting || importing}
+      onClose={onClose}
+      className="flex flex-col"
+    >
+      <div className="flex min-h-0 flex-col">
+        <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border-subtle px-5 py-4">
+          <div>
+            <h2 id="import-image-title" className="text-[16px] font-semibold tracking-tight text-ink">
+              识别聊天记录
+            </h2>
+            <p className="mt-1 text-[13px] leading-5 text-ink-muted">
+              粘贴或选择聊天截图，按顺序转写成聊天记录；截图不会保存，表情包等无文字气泡会跳过。
+            </p>
+          </div>
+          <Button size="sm" variant="ghost" onClick={onClose} disabled={extracting || importing}>
+            关闭
+          </Button>
+        </header>
+
+        <div className="min-h-0 flex-1 space-y-3.5 overflow-y-auto px-5 py-4">
+          {error && <Notice tone="danger">{error}</Notice>}
+
+          <div
+            tabIndex={0}
+            role="button"
+            aria-label="粘贴或选择聊天截图"
+            onClick={() => shotInput.current?.click()}
+            onPaste={(event) => {
+              const files = Array.from(event.clipboardData.items)
+                .filter((item) => item.kind === 'file')
+                .map((item) => item.getAsFile())
+                .filter((file): file is File => file !== null)
+              if (files.length === 0) return
+              event.preventDefault()
+              addFiles(files)
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                shotInput.current?.click()
+              }
+            }}
+            className="flex cursor-pointer flex-wrap items-center gap-2 rounded-[10px] border border-dashed border-border-strong bg-surface-muted px-3 py-3 transition-colors duration-150 hover:border-primary focus:border-primary focus:outline-none"
+          >
+            {shots.length === 0 ? (
+              <span className="text-[13px] text-ink-muted">
+                点这里选择截图，或选中本区域后直接 Ctrl+V 粘贴（最多 {MAX_SHOTS} 张，按时间顺序）
+              </span>
+            ) : (
+              <>
+                {shots.map((item) => (
+                  <div key={item.url} className="relative">
+                    <img
+                      src={item.url}
+                      alt=""
+                      className="h-16 w-16 rounded-[8px] border border-border object-cover"
+                    />
+                    <button
+                      type="button"
+                      className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-ink text-[12px] leading-none text-white shadow-sm transition-transform duration-150 hover:scale-110 active:scale-95"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        removeShot(item.url)
+                      }}
+                      aria-label="移除这张截图"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+                <span className="text-[12px] text-ink-muted">
+                  {shots.length}/{MAX_SHOTS}，点击空白继续添加
+                </span>
+              </>
+            )}
+          </div>
+          <input
+            ref={shotInput}
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            multiple
+            className="hidden"
+            onChange={(event) => {
+              const files = Array.from(event.target.files ?? [])
+              event.target.value = ''
+              addFiles(files)
+            }}
+          />
+
+          <Button
+            size="sm"
+            loading={extracting}
+            disabled={shots.length === 0}
+            disabledReason="请先添加截图"
+            onClick={() => void extract()}
+          >
+            开始识别
+          </Button>
+
+          {rows && rows.length > 0 && (
+            <div className="space-y-1.5">
+              <p className="text-[13px] text-ink-secondary">
+                认出 {rows.length} 条
+                {skipped > 0 && `，跳过 ${skipped} 条无文字或认不出的内容`}
+                ，确认后才会入库。
+              </p>
+              <ul className="divide-y divide-border-subtle rounded-[10px] border border-border">
+                {rows.map((row, index) => (
+                  <li key={index} className="flex items-start gap-2.5 px-3 py-2">
+                    <span
+                      className={`mt-0.5 shrink-0 rounded-[6px] px-1.5 py-0.5 text-[12px] font-medium ${
+                        row.role === 'me'
+                          ? 'bg-primary-soft text-primary'
+                          : 'bg-surface-muted text-ink-secondary'
+                      }`}
+                    >
+                      {senderOf(row)}
+                    </span>
+                    <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[13px] leading-5 text-ink">
+                      {row.content}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+
+        <footer className="flex shrink-0 justify-end gap-2 border-t border-border-subtle px-5 py-3.5">
+          <Button size="sm" variant="ghost" onClick={onClose} disabled={extracting || importing}>
+            取消
+          </Button>
+          <Button
+            size="sm"
+            variant="primary"
+            loading={importing}
+            disabled={!rows || rows.length === 0}
+            disabledReason="请先识别并确认内容"
+            onClick={() => void commit()}
+          >
+            确认导入{rows && rows.length > 0 ? ` ${rows.length} 条` : ''}
+          </Button>
+        </footer>
+      </div>
+    </Modal>
   )
 }
 

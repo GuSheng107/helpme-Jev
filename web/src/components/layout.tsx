@@ -71,7 +71,7 @@ export function DataCard({
   )
 }
 
-type StatusTone = 'success' | 'primary' | 'warning' | 'danger' | 'info'
+type StatusTone = 'success' | 'primary' | 'warning' | 'danger' | 'info' | 'love'
 
 /**
  * 状态标签：**文字 + 颜色双表达**（禁止只靠颜色传递状态）。
@@ -83,6 +83,7 @@ export function StatusTag({ tone, children }: { tone: StatusTone; children: Reac
     warning: 'bg-warning-soft text-warning',
     danger: 'bg-danger-soft text-danger',
     info: 'bg-info-soft text-info',
+    love: 'bg-love-soft text-love',
   }
   return (
     <span
@@ -136,6 +137,7 @@ export function Notice({
     warning: 'bg-warning-soft text-warning',
     danger: 'bg-danger-soft text-danger',
     info: 'bg-info-soft text-ink-secondary',
+    love: 'bg-love-soft text-love',
   }
   return (
     <div className={`rounded-[10px] px-3.5 py-2.5 text-[13px] leading-5 ${tones[tone]}`}>{children}</div>

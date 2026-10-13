@@ -15,6 +15,7 @@ from ..clients.llm_client import chat_json
 from ..clients.translation import annotate
 from ..core.logging import dump_body, pick_level
 from ..domain.errors import DomainError, DomainErrorCode
+from ..domain.schemas.conversation import speaker_label
 from ..repositories.conversations_repo import MessageRepository
 from ..repositories.models import CallLog, Conversation, Scenario
 from ..scenarios.builders import choice
@@ -430,8 +431,8 @@ def _text(decision: dict, key: str) -> str:
 
 
 def _from_of(row, conversation: Conversation) -> str:
-    """消息归属：群聊显示发言人名，单人会话保持 me / other。"""
-    return (row.speaker or row.role) if conversation.is_group else row.role
+    """消息归属：群聊按成员表当前名显示发言人，单人会话保持 me / other。"""
+    return speaker_label(conversation, row.speaker, row.role)
 
 
 def _state(rows, relationship: str, conversation: Conversation) -> dict:
